@@ -60,7 +60,7 @@ static int interface_list_ioctl(int af)
 	size_t needed, lastneeded = 0;
 	char *buf = NULL;
 
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 		sock = socket(af, SOCK_DGRAM, 0);
 	}
 
@@ -72,7 +72,7 @@ static int interface_list_ioctl(int af)
 	}
 
 calculate_lifc_len:
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 		lifn.lifn_family = af;
 		lifn.lifn_flags = LIFC_NOXMIT;
 		/* we want NOXMIT interfaces too */
@@ -107,7 +107,7 @@ calculate_lifc_len:
 	lifconf.lifc_len = needed;
 	lifconf.lifc_buf = buf;
 
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 		ret = ioctl(sock, SIOCGLIFCONF, &lifconf);
 	}
 
@@ -247,7 +247,8 @@ static int if_get_addr(struct interface *ifp, struct sockaddr *addr,
 	 * We need to use the logical interface name / label, if we've been
 	 * given one, in order to get the right address
 	 */
-	strncpy(lifreq.lifr_name, (label ? label : ifp->name), IFNAMSIZ);
+	strlcpy(lifreq.lifr_name, (label ? label : ifp->name),
+		sizeof(lifreq.lifr_name));
 
 	/* Interface's address. */
 	memcpy(&lifreq.lifr_addr, addr, ADDRLEN(addr));

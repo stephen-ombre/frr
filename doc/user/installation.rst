@@ -144,10 +144,20 @@ options from the list below.
    Build watchfrr with systemd integration, this will allow FRR to communicate with
    systemd to tell systemd if FRR has come up properly.
 
+.. option:: --enable-werror
+
+   Build with all warnings converted to errors as a compile option.  This
+   is recommended for developers only.
+
 .. option:: --disable-pimd
 
    Turn off building of pimd.  On some BSD platforms pimd will not build properly due
    to lack of kernel support.
+
+.. option:: --disable-vrrpd
+
+   Turn off building of vrrpd. Linux is required for vrrpd support;
+   other platforms are not supported.
 
 .. option:: --disable-pbrd
 
@@ -176,6 +186,10 @@ options from the list below.
 
    Turn off bgpd's ability to use VNC.
 
+.. option:: --disable-bgp-bmp
+
+   Turn off BGP BMP support
+
 .. option:: --enable-datacenter
 
    Enable system defaults to work as if in a Data Center. See defaults.h
@@ -194,11 +208,6 @@ options from the list below.
 
    Disable building of the example OSPF-API client.
 
-.. option:: --disable-ospf-ri
-
-   Disable support for OSPF Router Information (RFC4970 & RFC5088) this
-   requires support for Opaque LSAs and Traffic Engineering.
-
 .. option:: --disable-isisd
 
    Do not build isisd.
@@ -211,15 +220,16 @@ options from the list below.
 
    Enable IS-IS topology generator.
 
-.. option:: --enable-isis-te
-
-   Enable Traffic Engineering Extension for ISIS (RFC5305)
-
 .. option:: --enable-realms
 
    Enable the support of Linux Realms. Convert tag values from 1-255 into a
    realm value when inserting into the Linux kernel. Then routing policy can be
    assigned to the realm. See the tc man page.
+
+.. option:: --disable-irdp
+
+   Disable IRDP server support.  This is enabled by default if we have
+   both `struct in_pktinfo` and `struct icmphdr` available to us.
 
 .. option:: --disable-rtadv
 
@@ -245,12 +255,6 @@ options from the list below.
    mind.  Specifically turn on -g3 -O0 for compiling options and add inclusion
    of grammar sandbox.
 
-.. option:: --enable-fuzzing
-
-   Turn on some compile options to allow you to run fuzzing tools against the
-   system. This flag is intended as a developer only tool and should not be
-   used for normal operations.
-
 .. option:: --disable-snmp
 
    Build without SNMP support.
@@ -269,13 +273,26 @@ options from the list below.
    With this option, we provide a way to strip out these characters for APK dev
    package builds.
 
+..option:: --disable-version-build-config
+
+   Remove the "configuerd with" field that has all of the build configuration
+   arguments when reporting the version string in `show version` command.
+
+..option:: --with-pkg-extra-version=VER
+   Add extra version field, for packagers/distributions
+
+..option::  --with-pkg-git-version
+
+   Add git information to MOTD and build version string
+
 .. option:: --enable-multipath=X
 
    Compile FRR with up to X way ECMP supported.  This number can be from 0-999.
-   For backwards compatability with older configure options when setting X = 0,
+   For backwards compatibility with older configure options when setting X = 0,
    we will build FRR with 64 way ECMP.  This is needed because there are
    hardcoded arrays that FRR builds towards, so we need to know how big to
-   make these arrays at build time.
+   make these arrays at build time.  Additionally if this parameter is
+   not passed in FRR will default to 16 ECMP.
 
 .. option:: --enable-shell-access
 
@@ -305,6 +322,39 @@ options from the list below.
 
    Build the Sysrepo northbound plugin.
 
+.. option:: --enable-grpc
+
+   Enable the gRPC northbound plugin.
+
+.. option:: --enable-zeromq
+
+   Enable the ZeroMQ handler.
+
+.. option:: --with-libpam
+
+   Use libpam for PAM support in vtysh.
+
+.. option:: --enable-time-check XXX
+
+   When this is enabled with a XXX value in microseconds, any thread that
+   runs for over this value will cause a warning to be issued to the log.
+   If you do not specify any value or don't include this option then
+   the default time is 5 seconds.  If --disable-time-check is specified
+   then no warning is issued for any thread run length.
+
+.. option:: --disable-cpu-time
+
+   Disable cpu process accounting, this command also disables the `show thread cpu`
+   command.  If this option is disabled, --enable-time-check is ignored.  This
+   disabling of cpu time effectively means that the getrusage call is skipped.
+   Since this is a process switch into the kernel, systems with high FRR
+   load might see improvement in behavior.  Be aware that `show thread cpu`
+   is considered a good data gathering tool from the perspective of developers.
+
+.. option:: --enable-pcreposix
+
+   Turn on the usage of PCRE Posix libs for regex functionality.
+
 You may specify any combination of the above options to the configure
 script. By default, the executables are placed in :file:`/usr/local/sbin`
 and the configuration files in :file:`/usr/local/etc`. The :file:`/usr/local/`
@@ -330,21 +380,26 @@ options to the configuration script.
    Look for YANG modules in `dir` [`prefix`/share/yang]. Note that the FRR
    YANG modules will be installed here.
 
-.. option:: --with-libyang-pluginsdir <dir>
+Python dependency, documentation and tests
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   Look for libyang plugins in `dir` [`prefix`/lib/frr/libyang_plugins].
-   Note that the FRR libyang plugins will be installed here.
+FRR's documentation and basic unit tests heavily use code written in Python.
+Additionally, FRR ships Python extensions written in C which are used during
+its build process.
 
-   This option is meaningless with libyang 0.16.74 or newer and will be
-   removed once support for older libyang versions is dropped.
+To this extent, FRR needs the following:
 
-When it's desired to run FRR without installing it in the system, it's possible
-to configure it as follows to look for YANG modules and libyang plugins in the
-compile directory:
-.. code-block:: shell
+* an installation of CPython, preferably version 3.2 or newer (2.7 works but
+  is end of life and will stop working at some point.)
+* development files (mostly headers) for that version of CPython
+* an installation of `sphinx` for that version of CPython, to build the
+  documentation
+* an installation of `pytest` for that version of CPython, to run the unit
+  tests
 
-   ./configure --with-libyang-pluginsdir="`pwd`/yang/libyang_plugins/.libs" \
-               --with-yangmodelsdir="`pwd`/yang"
+The `sphinx` and `pytest` dependencies can be avoided by not building
+documentation / not running ``make check``, but the CPython dependency is a
+hard dependency of the FRR build process (for the `clippy` tool.)
 
 .. _least-privilege-support:
 
@@ -443,7 +498,8 @@ Additional kernel modules are also needed to support MPLS forwarding.
       mpls_router
       mpls_iptunnel
 
-   The following is an example to enable MPLS forwarding in the kernel:
+   The following is an example to enable MPLS forwarding in the
+   kernel, typically by editing :file:`/etc/sysctl.conf`:
 
    .. code-block:: shell
 
@@ -466,34 +522,13 @@ Additional kernel modules are also needed to support MPLS forwarding.
    features can be found in
    http://schd.ws/hosted_files/ossna2017/fe/vrf-tutorial-oss.pdf.
 
-   The following impacts how BGP TCP sockets are managed across VRFs:
-
-   .. code-block:: shell
-
-      net.ipv4.tcp_l3mdev_accept=0
-
-   With this setting a BGP TCP socket is opened per VRF.  This setting
-   ensures that other TCP services, such as SSH, provided for non-VRF
-   purposes are blocked from VRF associated Linux interfaces.
-
-   .. code-block:: shell
-
-      net.ipv4.tcp_l3mdev_accept=1
-
-   With this setting a single BGP TCP socket is shared across the
-   system.  This setting exposes any TCP service running on the system,
-   e.g., SSH, to all VRFs.  Generally this setting is not used in
-   environments where VRFs are used to support multiple administrative
-   groups.
+   A separate BGP TCP socket is opened per VRF.
 
    **Important note** as of June 2018, Kernel versions 4.14-4.18 have a
    known bug where VRF-specific TCP sockets are not properly handled. When
    running these kernel versions, if unable to establish any VRF BGP
-   adjacencies, either downgrade to 4.13 or set
-   'net.ipv4.tcp_l3mdev_accept=1'. The fix for this issue is planned to be
-   included in future kernel versions. So upgrading your kernel may also
-   address this issue.
-
+   adjacencies, downgrade to 4.13. The issue was fixed in 4.14.57, 4.17.9
+   and more recent kernel versions.
 
 Building
 ^^^^^^^^

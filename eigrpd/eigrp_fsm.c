@@ -110,7 +110,7 @@ int eigrp_fsm_event_qact(struct eigrp_fsm_action_message *);
  * NSM[actual/starting state][occurred event].func
  * Functions are should be executed within separate thread.
  */
-struct {
+const struct {
 	int (*func)(struct eigrp_fsm_action_message *);
 } NSM[EIGRP_FSM_STATE_MAX][EIGRP_FSM_EVENT_MAX] = {
 	{
@@ -231,7 +231,7 @@ static const char *fsm_state2str(enum eigrp_fsm_events event)
 		return "Query from Successor while in active state";
 	case EIGRP_FSM_EVENT_LR_FCN:
 		return "Last Reply Event, Feasibility not satisfied";
-	};
+	}
 
 	return "Unknown";
 }
@@ -314,7 +314,7 @@ eigrp_get_fsm_event(struct eigrp_fsm_action_message *msg)
 			if (prefix->rij->count)
 				return EIGRP_FSM_KEEP_STATE;
 
-			zlog_info("All reply received\n");
+			zlog_info("All reply received");
 			if (head->reported_distance < prefix->fdistance) {
 				return EIGRP_FSM_EVENT_LR_FCS;
 			}
@@ -344,7 +344,7 @@ eigrp_get_fsm_event(struct eigrp_fsm_action_message *msg)
 			} else if (prefix->rij->count) {
 				return EIGRP_FSM_KEEP_STATE;
 			} else {
-				zlog_info("All reply received\n");
+				zlog_info("All reply received");
 				return EIGRP_FSM_EVENT_LR;
 			}
 		} else if (msg->packet_type == EIGRP_OPC_UPDATE
@@ -366,7 +366,7 @@ eigrp_get_fsm_event(struct eigrp_fsm_action_message *msg)
 			if (prefix->rij->count) {
 				return EIGRP_FSM_KEEP_STATE;
 			} else {
-				zlog_info("All reply received\n");
+				zlog_info("All reply received");
 				if (head->reported_distance
 				    < prefix->fdistance) {
 					return EIGRP_FSM_EVENT_LR_FCS;
@@ -390,7 +390,7 @@ eigrp_get_fsm_event(struct eigrp_fsm_action_message *msg)
 			} else if (prefix->rij->count) {
 				return EIGRP_FSM_KEEP_STATE;
 			} else {
-				zlog_info("All reply received\n");
+				zlog_info("All reply received");
 				return EIGRP_FSM_EVENT_LR;
 			}
 		} else if (msg->packet_type == EIGRP_OPC_UPDATE
@@ -445,7 +445,7 @@ int eigrp_fsm_event_nq_fcn(struct eigrp_fsm_action_message *msg)
 	prefix->rdistance = prefix->distance = prefix->fdistance = ne->distance;
 	prefix->reported_metric = ne->total_metric;
 
-	if (eigrp_nbr_count_get()) {
+	if (eigrp_nbr_count_get(eigrp)) {
 		prefix->req_action |= EIGRP_FSM_NEED_QUERY;
 		listnode_add(eigrp->topology_changes_internalIPV4, prefix);
 	} else {
@@ -471,7 +471,7 @@ int eigrp_fsm_event_q_fcn(struct eigrp_fsm_action_message *msg)
 	prefix->state = EIGRP_FSM_STATE_ACTIVE_3;
 	prefix->rdistance = prefix->distance = prefix->fdistance = ne->distance;
 	prefix->reported_metric = ne->total_metric;
-	if (eigrp_nbr_count_get()) {
+	if (eigrp_nbr_count_get(eigrp)) {
 		prefix->req_action |= EIGRP_FSM_NEED_QUERY;
 		listnode_add(eigrp->topology_changes_internalIPV4, prefix);
 	} else {
@@ -486,7 +486,7 @@ int eigrp_fsm_event_q_fcn(struct eigrp_fsm_action_message *msg)
 
 int eigrp_fsm_event_keep_state(struct eigrp_fsm_action_message *msg)
 {
-	struct eigrp *eigrp;
+	struct eigrp *eigrp = msg->eigrp;
 	struct eigrp_prefix_entry *prefix = msg->prefix;
 	struct eigrp_nexthop_entry *ne = listnode_head(prefix->entries);
 
@@ -499,13 +499,11 @@ int eigrp_fsm_event_keep_state(struct eigrp_fsm_action_message *msg)
 			if (msg->packet_type == EIGRP_OPC_QUERY)
 				eigrp_send_reply(msg->adv_router, prefix);
 			prefix->req_action |= EIGRP_FSM_NEED_UPDATE;
-			eigrp = eigrp_lookup();
-			assert(eigrp);
 			listnode_add(eigrp->topology_changes_internalIPV4,
 				     prefix);
 		}
-		eigrp_topology_update_node_flags(prefix);
-		eigrp_update_routing_table(prefix);
+		eigrp_topology_update_node_flags(eigrp, prefix);
+		eigrp_update_routing_table(eigrp, prefix);
 	}
 
 	if (msg->packet_type == EIGRP_OPC_QUERY)
@@ -536,9 +534,10 @@ int eigrp_fsm_event_lr(struct eigrp_fsm_action_message *msg)
 	prefix->state = EIGRP_FSM_STATE_PASSIVE;
 	prefix->req_action |= EIGRP_FSM_NEED_UPDATE;
 	listnode_add(eigrp->topology_changes_internalIPV4, prefix);
-	eigrp_topology_update_node_flags(prefix);
-	eigrp_update_routing_table(prefix);
-	eigrp_update_topology_table_prefix(eigrp->topology_table, prefix);
+	eigrp_topology_update_node_flags(eigrp, prefix);
+	eigrp_update_routing_table(eigrp, prefix);
+	eigrp_update_topology_table_prefix(eigrp, eigrp->topology_table,
+					   prefix);
 
 	return 1;
 }
@@ -588,9 +587,10 @@ int eigrp_fsm_event_lr_fcs(struct eigrp_fsm_action_message *msg)
 	}
 	prefix->req_action |= EIGRP_FSM_NEED_UPDATE;
 	listnode_add(eigrp->topology_changes_internalIPV4, prefix);
-	eigrp_topology_update_node_flags(prefix);
-	eigrp_update_routing_table(prefix);
-	eigrp_update_topology_table_prefix(eigrp->topology_table, prefix);
+	eigrp_topology_update_node_flags(eigrp, prefix);
+	eigrp_update_routing_table(eigrp, prefix);
+	eigrp_update_topology_table_prefix(eigrp, eigrp->topology_table,
+					   prefix);
 
 	return 1;
 }
@@ -612,7 +612,7 @@ int eigrp_fsm_event_lr_fcn(struct eigrp_fsm_action_message *msg)
 	prefix->rdistance = prefix->distance = best_successor->distance;
 	prefix->reported_metric = best_successor->total_metric;
 
-	if (eigrp_nbr_count_get()) {
+	if (eigrp_nbr_count_get(eigrp)) {
 		prefix->req_action |= EIGRP_FSM_NEED_QUERY;
 		listnode_add(eigrp->topology_changes_internalIPV4, prefix);
 	} else {

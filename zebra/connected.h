@@ -28,6 +28,10 @@
 #include "lib/if.h"
 #include "lib/prefix.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern struct connected *connected_check(struct interface *ifp,
 					 union prefixconstptr p);
 extern struct connected *connected_check_ptp(struct interface *ifp,
@@ -36,12 +40,12 @@ extern struct connected *connected_check_ptp(struct interface *ifp,
 
 extern void connected_add_ipv4(struct interface *ifp, int flags,
 			       struct in_addr *addr, uint16_t prefixlen,
-			       struct in_addr *broad, const char *label,
+			       struct in_addr *dest, const char *label,
 			       uint32_t metric);
 
 extern void connected_delete_ipv4(struct interface *ifp, int flags,
 				  struct in_addr *addr, uint16_t prefixlen,
-				  struct in_addr *broad);
+				  struct in_addr *dest);
 
 extern void connected_delete_ipv4_unnumbered(struct connected *ifc);
 
@@ -49,13 +53,16 @@ extern void connected_up(struct interface *ifp, struct connected *ifc);
 extern void connected_down(struct interface *ifp, struct connected *ifc);
 
 extern void connected_add_ipv6(struct interface *ifp, int flags,
-			       struct in6_addr *address, struct in6_addr *broad,
+			       struct in6_addr *address, struct in6_addr *dest,
 			       uint16_t prefixlen, const char *label,
 			       uint32_t metric);
 extern void connected_delete_ipv6(struct interface *ifp,
 				  struct in6_addr *address,
-				  struct in6_addr *broad, uint16_t prefixlen);
+				  struct in6_addr *dest, uint16_t prefixlen);
 
 extern int connected_is_unnumbered(struct interface *);
 
+#ifdef __cplusplus
+}
+#endif
 #endif /*_ZEBRA_CONNECTED_H */

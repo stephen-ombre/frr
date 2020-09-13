@@ -32,12 +32,16 @@
 #include "rt.h"
 #include "pbr.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct zebra_pbr_rule {
 	int sock;
 
 	struct pbr_rule rule;
 
-	struct interface *ifp;
+	char ifname[INTERFACE_NAMSIZ];
 
 	vrf_id_t vrf_id;
 };
@@ -50,6 +54,8 @@ struct zebra_pbr_rule {
 	(r->rule.filter.filter_bm & PBR_FILTER_SRC_PORT)
 #define IS_RULE_FILTERING_ON_DST_PORT(r) \
 	(r->rule.filter.filter_bm & PBR_FILTER_DST_PORT)
+#define IS_RULE_FILTERING_ON_DSFIELD(r) \
+	(r->rule.filter.filter_bm & PBR_FILTER_DSFIELD)
 #define IS_RULE_FILTERING_ON_FWMARK(r) \
 	(r->rule.filter.filter_bm & PBR_FILTER_FWMARK)
 
@@ -73,6 +79,9 @@ struct zebra_pbr_ipset {
 	 * but value is an enum ipset_type
 	 */
 	uint32_t type;
+
+	uint8_t family;
+
 	char ipset_name[ZEBRA_IPSET_NAME_SIZE];
 };
 
@@ -141,8 +150,12 @@ struct zebra_pbr_iptable {
 	uint16_t tcp_mask_flags;
 	uint8_t dscp_value;
 	uint8_t fragment;
+	uint8_t protocol;
 
 	uint32_t nb_interface;
+	uint16_t flow_label;
+
+	uint8_t family;
 
 	struct list *interface_name_list;
 
@@ -150,6 +163,7 @@ struct zebra_pbr_iptable {
 };
 
 extern const struct message icmp_typecode_str[];
+extern const struct message icmpv6_typecode_str[];
 
 const char *zebra_pbr_ipset_type2str(uint32_t type);
 
@@ -165,19 +179,6 @@ void zebra_pbr_add_iptable(struct zebra_pbr_iptable *iptable);
 void zebra_pbr_del_iptable(struct zebra_pbr_iptable *iptable);
 
 /*
- * Install specified rule for a specific interface.
- * It is possible that the user-defined sequence number and the one in the
- * forwarding plane may not coincide, hence the API requires a separate
- * rule priority - maps to preference/FRA_PRIORITY on Linux.
- */
-extern enum zebra_dplane_result kernel_add_pbr_rule(struct zebra_pbr_rule *rule);
-
-/*
- * Uninstall specified rule for a specific interface.
- */
-extern enum zebra_dplane_result kernel_del_pbr_rule(struct zebra_pbr_rule *rule);
-
-/*
  * Get to know existing PBR rules in the kernel - typically called at startup.
  */
 extern void kernel_read_pbr_rules(struct zebra_ns *zns);
@@ -185,8 +186,7 @@ extern void kernel_read_pbr_rules(struct zebra_ns *zns);
 /*
  * Handle success or failure of rule (un)install in the kernel.
  */
-extern void kernel_pbr_rule_add_del_status(struct zebra_pbr_rule *rule,
-					   enum zebra_dplane_status res);
+extern void zebra_pbr_dplane_result(struct zebra_dplane_ctx *ctx);
 
 /*
  * Handle success or failure of ipset kinds (un)install in the kernel.
@@ -207,7 +207,7 @@ extern void kernel_pbr_iptable_add_del_status(struct zebra_pbr_iptable *iptable,
 extern int kernel_pbr_rule_del(struct zebra_pbr_rule *rule);
 
 extern void zebra_pbr_rules_free(void *arg);
-extern uint32_t zebra_pbr_rules_hash_key(void *arg);
+extern uint32_t zebra_pbr_rules_hash_key(const void *arg);
 extern bool zebra_pbr_rules_hash_equal(const void *arg1, const void *arg2);
 
 /* has operates on 32bit pointer
@@ -216,16 +216,16 @@ extern bool zebra_pbr_rules_hash_equal(const void *arg1, const void *arg2);
 #define ZEBRA_IPSET_NAME_HASH_SIZE (ZEBRA_IPSET_NAME_SIZE / 4)
 
 extern void zebra_pbr_ipset_free(void *arg);
-extern uint32_t zebra_pbr_ipset_hash_key(void *arg);
+extern uint32_t zebra_pbr_ipset_hash_key(const void *arg);
 extern bool zebra_pbr_ipset_hash_equal(const void *arg1, const void *arg2);
 
 extern void zebra_pbr_ipset_entry_free(void *arg);
-extern uint32_t zebra_pbr_ipset_entry_hash_key(void *arg);
+extern uint32_t zebra_pbr_ipset_entry_hash_key(const void *arg);
 extern bool zebra_pbr_ipset_entry_hash_equal(const void *arg1,
 					     const void *arg2);
 
 extern void zebra_pbr_iptable_free(void *arg);
-extern uint32_t zebra_pbr_iptable_hash_key(void *arg);
+extern uint32_t zebra_pbr_iptable_hash_key(const void *arg);
 extern bool zebra_pbr_iptable_hash_equal(const void *arg1, const void *arg2);
 
 extern void zebra_pbr_init(void);
@@ -251,5 +251,9 @@ DECLARE_HOOK(zebra_pbr_ipset_entry_update,
 	     (int cmd, struct zebra_pbr_ipset_entry *ipset), (cmd, ipset));
 DECLARE_HOOK(zebra_pbr_ipset_update,
 	     (int cmd, struct zebra_pbr_ipset *ipset), (cmd, ipset));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZEBRA_PBR_H */

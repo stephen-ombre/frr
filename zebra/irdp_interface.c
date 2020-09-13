@@ -45,7 +45,7 @@
 #include "zebra/interface.h"
 #include "zebra/rtadv.h"
 #include "zebra/rib.h"
-#include "zebra/zserv.h"
+#include "zebra/zebra_router.h"
 #include "zebra/redistribute.h"
 #include "zebra/irdp.h"
 #include "zebra/zebra_errors.h"
@@ -53,6 +53,7 @@
 #include "if.h"
 #include "sockunion.h"
 #include "log.h"
+#include "network.h"
 
 extern int irdp_sock;
 
@@ -223,8 +224,7 @@ static void irdp_if_start(struct interface *ifp, int multicast,
 	}
 	if ((irdp_sock < 0) && ((irdp_sock = irdp_sock_init()) < 0)) {
 		flog_warn(EC_ZEBRA_IRDP_CANNOT_ACTIVATE_IFACE,
-			  "IRDP: Cannot activate interface %s (cannot create "
-			  "IRDP socket)",
+			  "IRDP: Cannot activate interface %s (cannot create IRDP socket)",
 			  ifp->name);
 		return;
 	}
@@ -267,7 +267,7 @@ static void irdp_if_start(struct interface *ifp, int multicast,
 		}
 
 	srandom(seed);
-	timer = (random() % IRDP_DEFAULT_INTERVAL) + 1;
+	timer = (frr_weak_random() % IRDP_DEFAULT_INTERVAL) + 1;
 
 	irdp->AdvPrefList = list_new();
 	irdp->AdvPrefList->del = (void (*)(void *))Adv_free; /* Destructor */
@@ -285,7 +285,7 @@ static void irdp_if_start(struct interface *ifp, int multicast,
 			   timer);
 
 	irdp->t_advertise = NULL;
-	thread_add_timer(zebrad.master, irdp_send_thread, ifp, timer,
+	thread_add_timer(zrouter.master, irdp_send_thread, ifp, timer,
 			 &irdp->t_advertise);
 }
 
@@ -352,7 +352,7 @@ static void irdp_if_no_shutdown(struct interface *ifp)
 
 	irdp->flags &= ~IF_SHUTDOWN;
 
-	irdp_if_start(ifp, irdp->flags & IF_BROADCAST ? FALSE : TRUE, FALSE);
+	irdp_if_start(ifp, irdp->flags & IF_BROADCAST ? false : true, false);
 }
 
 
@@ -407,7 +407,7 @@ DEFUN (ip_irdp_multicast,
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	irdp_if_get(ifp);
 
-	irdp_if_start(ifp, TRUE, TRUE);
+	irdp_if_start(ifp, true, true);
 	return CMD_SUCCESS;
 }
 
@@ -421,7 +421,7 @@ DEFUN (ip_irdp_broadcast,
 	VTY_DECLVAR_CONTEXT(interface, ifp);
 	irdp_if_get(ifp);
 
-	irdp_if_start(ifp, FALSE, TRUE);
+	irdp_if_start(ifp, false, true);
 	return CMD_SUCCESS;
 }
 
@@ -502,8 +502,7 @@ DEFUN (ip_irdp_minadvertinterval,
 		return CMD_SUCCESS;
 	} else {
 		vty_out(vty,
-			"%% MinAdvertInterval must be less than or equal to "
-			"MaxAdvertInterval\n");
+			"%% MinAdvertInterval must be less than or equal to MaxAdvertInterval\n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 }
@@ -527,8 +526,7 @@ DEFUN (ip_irdp_maxadvertinterval,
 		return CMD_SUCCESS;
 	} else {
 		vty_out(vty,
-			"%% MaxAdvertInterval must be greater than or equal to "
-			"MinAdvertInterval\n");
+			"%% MaxAdvertInterval must be greater than or equal to MinAdvertInterval\n");
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 }

@@ -122,12 +122,6 @@ static struct log_ref ferr_bgp_warn[] = {
 		.suggestion = "Please collect log files and open Issue",
 	},
 	{
-		.code = EC_BGP_NO_SOCKOPT_MARK,
-		.title = "Unable to set socket MARK option",
-		.description = "BGP attempted to set the SO_MARK option for a socket and was unable to do so",
-		.suggestion = "Please collect log files and open Issue",
-	},
-	{
 		.code = EC_BGP_EVPN_PMSI_PRESENT,
 		.title = "BGP Received a EVPN NLRI with PMSI included",
 		.description = "BGP has received a type-3 NLRI with PMSI information.  At this time FRR is not capable of properly handling this NLRI type",
@@ -433,12 +427,6 @@ static struct log_ref ferr_bgp_err[] = {
 		.suggestion = "Most likely a bug. If the problem persists, report the problem for troubleshooting"
 	},
 	{
-		.code = EC_BGP_MULTI_INSTANCE,
-		.title = "BGP config multi-instance issue",
-		.description = "BGP configuration attempting multiple instances without enabling the feature",
-		.suggestion = "Correct the configuration so that bgp multiple-instance is enabled if desired"
-	},
-	{
 		.code = EC_BGP_EVPN_AS_MISMATCH,
 		.title = "BGP AS configuration issue",
 		.description = "BGP configuration attempted for a different AS than currently configured",
@@ -467,6 +455,12 @@ static struct log_ref ferr_bgp_err[] = {
 		.title = "BGP has detected a configuration overwrite during peer collision resolution",
 		.description = "As part of BGP startup, the peer and ourselves can start connections to each other at the same time. During this process BGP received additional configuration, but it was only applied to one of the two nascent connections. Depending on the result of collision detection and resolution this configuration might be lost.  To remedy this, after performing collision detection and resolution the peer session has been reset in order to apply the new configuration.",
 		.suggestion = "Gather data and open a Issue so that this developmental escape can be fixed, the peer should have been reset",
+	},
+	{
+		.code = EC_BGP_ROUTER_ID_SAME,
+		.title = "BGP has detected a duplicate router id during collision resolution",
+		.description = "As part of normal collision detection for opening a connection to a peer, BGP has detected that the remote peer's router-id is the same as ours",
+		.suggestion = "Change one of the two router-id's",
 	},
 	{
 		.code = END_FERR,

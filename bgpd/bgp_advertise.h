@@ -21,16 +21,11 @@
 #ifndef _QUAGGA_BGP_ADVERTISE_H
 #define _QUAGGA_BGP_ADVERTISE_H
 
-#include <lib/fifo.h>
+#include "lib/typesafe.h"
+
+PREDECL_DLIST(bgp_adv_fifo)
 
 struct update_subgroup;
-
-/* BGP advertise FIFO.  */
-struct bgp_advertise_fifo {
-	struct bgp_advertise *next;
-	struct bgp_advertise *prev;
-	uint32_t count;
-};
 
 /* BGP advertise attribute.  */
 struct bgp_advertise_attr {
@@ -46,14 +41,14 @@ struct bgp_advertise_attr {
 
 struct bgp_advertise {
 	/* FIFO for advertisement.  */
-	struct bgp_advertise_fifo fifo;
+	struct bgp_adv_fifo_item fifo;
 
 	/* Link list for same attribute advertise.  */
 	struct bgp_advertise *next;
 	struct bgp_advertise *prev;
 
 	/* Prefix information.  */
-	struct bgp_node *rn;
+	struct bgp_dest *dest;
 
 	/* Reference pointer.  */
 	struct bgp_adj_out *adj;
@@ -64,6 +59,8 @@ struct bgp_advertise {
 	/* BGP info.  */
 	struct bgp_path_info *pathi;
 };
+
+DECLARE_DLIST(bgp_adv_fifo, struct bgp_advertise, fifo)
 
 /* BGP adjacency out.  */
 struct bgp_adj_out {
@@ -77,7 +74,7 @@ struct bgp_adj_out {
 	TAILQ_ENTRY(bgp_adj_out) subgrp_adj_train;
 
 	/* Prefix information.  */
-	struct bgp_node *rn;
+	struct bgp_dest *dest;
 
 	uint32_t addpath_tx_id;
 
@@ -104,15 +101,18 @@ struct bgp_adj_in {
 	/* Received attribute.  */
 	struct attr *attr;
 
+	/* timestamp (monotime) */
+	time_t uptime;
+
 	/* Addpath identifier */
 	uint32_t addpath_rx_id;
 };
 
 /* BGP advertisement list.  */
 struct bgp_synchronize {
-	struct bgp_advertise_fifo update;
-	struct bgp_advertise_fifo withdraw;
-	struct bgp_advertise_fifo withdraw_low;
+	struct bgp_adv_fifo_head update;
+	struct bgp_adv_fifo_head withdraw;
+	struct bgp_adv_fifo_head withdraw_low;
 };
 
 /* BGP adjacency linked list.  */
@@ -138,46 +138,16 @@ struct bgp_synchronize {
 #define BGP_ADJ_IN_ADD(N, A) BGP_PATH_INFO_ADD(N, A, adj_in)
 #define BGP_ADJ_IN_DEL(N, A) BGP_PATH_INFO_DEL(N, A, adj_in)
 
-#define BGP_ADV_FIFO_ADD(F, N)                                                 \
-	do {                                                                   \
-		FIFO_ADD((F), (N));                                            \
-		(F)->count++;                                                  \
-	} while (0)
-
-#define BGP_ADV_FIFO_DEL(F, N)                                                 \
-	do {                                                                   \
-		FIFO_DEL((N));                                                 \
-		(F)->count--;                                                  \
-	} while (0)
-
-#define BGP_ADV_FIFO_INIT(F)                                                   \
-	do {                                                                   \
-		FIFO_INIT((F));                                                \
-		(F)->count = 0;                                                \
-	} while (0)
-
-#define BGP_ADV_FIFO_COUNT(F) (F)->count
-
-#define BGP_ADV_FIFO_EMPTY(F)                                                  \
-	(((struct bgp_advertise_fifo *)(F))->next                              \
-	 == (struct bgp_advertise *)(F))
-
-#define BGP_ADV_FIFO_HEAD(F)                                                   \
-	((((struct bgp_advertise_fifo *)(F))->next                             \
-	  == (struct bgp_advertise *)(F))                                      \
-		 ? NULL                                                        \
-		 : (F)->next)
-
 /* Prototypes.  */
-extern int bgp_adj_out_lookup(struct peer *, struct bgp_node *, uint32_t);
-extern void bgp_adj_in_set(struct bgp_node *, struct peer *, struct attr *,
+extern bool bgp_adj_out_lookup(struct peer *, struct bgp_dest *, uint32_t);
+extern void bgp_adj_in_set(struct bgp_dest *, struct peer *, struct attr *,
 			   uint32_t);
-extern int bgp_adj_in_unset(struct bgp_node *, struct peer *, uint32_t);
-extern void bgp_adj_in_remove(struct bgp_node *, struct bgp_adj_in *);
+extern bool bgp_adj_in_unset(struct bgp_dest *, struct peer *, uint32_t);
+extern void bgp_adj_in_remove(struct bgp_dest *, struct bgp_adj_in *);
 
 extern void bgp_sync_init(struct peer *);
 extern void bgp_sync_delete(struct peer *);
-extern unsigned int baa_hash_key(void *p);
+extern unsigned int baa_hash_key(const void *p);
 extern bool baa_hash_cmp(const void *p1, const void *p2);
 extern void bgp_advertise_add(struct bgp_advertise_attr *baa,
 			      struct bgp_advertise *adv);

@@ -58,7 +58,6 @@ static void nhrp_route_update_put(struct route_node *rn)
 	if (!ri->ifp && !ri->nhrp_ifp
 	    && sockunion_family(&ri->via) == AF_UNSPEC) {
 		XFREE(MTYPE_NHRP_ROUTE, rn->info);
-		rn->info = NULL;
 		route_unlock_node(rn);
 	}
 	route_unlock_node(rn);
@@ -171,8 +170,7 @@ void nhrp_route_announce(int add, enum nhrp_cache_type type,
 
 		prefix2str(&api.prefix, buf[0], sizeof(buf[0]));
 		zlog_debug(
-			"Zebra send: route %s %s nexthop %s metric %u"
-			" count %d dev %s",
+			"Zebra send: route %s %s nexthop %s metric %u count %d dev %s",
 			add ? "add" : "del", buf[0],
 			nexthop ? inet_ntop(api.prefix.family, &api_nh->gate,
 					    buf[1], sizeof(buf[1]))
@@ -184,8 +182,7 @@ void nhrp_route_announce(int add, enum nhrp_cache_type type,
 			   &api);
 }
 
-int nhrp_route_read(int cmd, struct zclient *zclient, zebra_size_t length,
-		    vrf_id_t vrf_id)
+int nhrp_route_read(ZAPI_CALLBACK_ARGS)
 {
 	struct zapi_route api;
 	struct zapi_nexthop *api_nh;
@@ -199,6 +196,10 @@ int nhrp_route_read(int cmd, struct zclient *zclient, zebra_size_t length,
 
 	/* we completely ignore srcdest routes for now. */
 	if (CHECK_FLAG(api.message, ZAPI_MESSAGE_SRCPFX))
+		return 0;
+
+	/* ignore our routes */
+	if (api.type == ZEBRA_ROUTE_NHRP)
 		return 0;
 
 	sockunion_family(&nexthop_addr) = AF_UNSPEC;
@@ -222,8 +223,8 @@ int nhrp_route_read(int cmd, struct zclient *zclient, zebra_size_t length,
 	added = (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD);
 	debugf(NHRP_DEBUG_ROUTE, "if-route-%s: %s via %s dev %s",
 	       added ? "add" : "del",
-	       prefix2str(&api.prefix, buf[0], sizeof buf[0]),
-	       sockunion2str(&nexthop_addr, buf[1], sizeof buf[1]),
+	       prefix2str(&api.prefix, buf[0], sizeof(buf[0])),
+	       sockunion2str(&nexthop_addr, buf[1], sizeof(buf[1])),
 	       ifp ? ifp->name : "(none)");
 
 	nhrp_route_update_zebra(&api.prefix, &nexthop_addr, ifp);
@@ -250,7 +251,7 @@ int nhrp_route_get_nexthop(const union sockunion *addr, struct prefix *p,
 	ri = rn->info;
 	if (ri->nhrp_ifp) {
 		debugf(NHRP_DEBUG_ROUTE, "lookup %s: nhrp_if=%s",
-		       prefix2str(&lookup, buf, sizeof buf),
+		       prefix2str(&lookup, buf, sizeof(buf)),
 		       ri->nhrp_ifp->name);
 
 		if (via)
@@ -259,7 +260,7 @@ int nhrp_route_get_nexthop(const union sockunion *addr, struct prefix *p,
 			*ifp = ri->nhrp_ifp;
 	} else {
 		debugf(NHRP_DEBUG_ROUTE, "lookup %s: zebra route dev %s",
-		       prefix2str(&lookup, buf, sizeof buf),
+		       prefix2str(&lookup, buf, sizeof(buf)),
 		       ri->ifp ? ri->ifp->name : "(none)");
 
 		if (via)
@@ -346,10 +347,6 @@ void nhrp_zebra_init(void)
 
 	zclient = zclient_new(master, &zclient_options_default);
 	zclient->zebra_connected = nhrp_zebra_connected;
-	zclient->interface_add = nhrp_interface_add;
-	zclient->interface_delete = nhrp_interface_delete;
-	zclient->interface_up = nhrp_interface_up;
-	zclient->interface_down = nhrp_interface_down;
 	zclient->interface_address_add = nhrp_interface_address_add;
 	zclient->interface_address_delete = nhrp_interface_address_delete;
 	zclient->redistribute_route_add = nhrp_route_read;

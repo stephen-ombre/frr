@@ -39,7 +39,7 @@ static struct log_ref ferr_ospf_warn[] = {
 	},
 	{
 		.code = EC_OSPF_PACKET,
-		.title = "OSPF has detected packet information missmatch",
+		.title = "OSPF has detected packet information mismatch",
 		.description = "OSPF has detected that packet information received is incorrect",
 		.suggestion = "Ensure interface configuration is correct, gather log files from here and the peer and open an Issue",
 	},
@@ -158,6 +158,12 @@ static struct log_ref ferr_ospf_err[] = {
 		.suggestion = "Restart OSPF instance, If the problem persists, report the problem for troubleshooting"
 	},
 	{
+		.code = EC_OSPF_SR_SID_OVERFLOW,
+		.title = "OSPF SR Segment-ID overflow",
+		.description = "OSPF Segment Routing ID index or label exceed Global or Local Block Range",
+		.suggestion = "Restart OSPF instance, If the problem persists, report the problem for troubleshooting"
+	},
+	{
 		.code = EC_OSPF_INVALID_ALGORITHM,
 		.title = "OSPF SR Invalid Algorithm",
 		.description = "OSPF Segment Routing invalid Algorithm",
@@ -172,11 +178,8 @@ static struct log_ref ferr_ospf_err[] = {
 	{
 		.code = EC_OSPF_LARGE_HELLO,
 		.title = "OSPF Encountered a Large Hello",
-		.description = "OSPF attempted to send a Hello larger than MTU "
-					   "but did not",
-		.suggestion = "Too many neighbors configured on a single interface."
-					  " Suggestion is to decrease the number of neighbors on"
-					  " a single interface/subnet"
+		.description = "OSPF attempted to send a Hello larger than MTU but did not",
+		.suggestion = "Too many neighbors configured on a single interface. Suggestion is to decrease the number of neighbors on a single interface/subnet"
 	},
 	{
 		.code = END_FERR,

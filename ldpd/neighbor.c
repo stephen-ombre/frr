@@ -49,7 +49,7 @@ RB_GENERATE(nbr_addr_head, nbr, addr_tree, nbr_addr_compare)
 RB_GENERATE(nbr_pid_head, nbr, pid_tree, nbr_pid_compare)
 RB_GENERATE(nbrp_head, nbr_params, entry, nbr_params_compare)
 
-struct {
+const struct {
 	int		state;
 	enum nbr_event	event;
 	enum nbr_action	action;
@@ -143,8 +143,7 @@ nbr_fsm(struct nbr *nbr, enum nbr_event event)
 
 	if (nbr_fsm_tbl[i].state == -1) {
 		/* event outside of the defined fsm, ignore it. */
-		log_warnx("%s: lsr-id %s, event %s not expected in "
-		    "state %s", __func__, inet_ntoa(nbr->id),
+		log_warnx("%s: lsr-id %s, event %s not expected in state %s", __func__, inet_ntoa(nbr->id),
 		    nbr_event_names[event], nbr_state_name(old_state));
 		return (0);
 	}
@@ -153,8 +152,7 @@ nbr_fsm(struct nbr *nbr, enum nbr_event event)
 		nbr->state = new_state;
 
 	if (old_state != nbr->state) {
-		log_debug("%s: event %s resulted in action %s and "
-		    "changing state for lsr-id %s from %s to %s",
+		log_debug("%s: event %s resulted in action %s and changing state for lsr-id %s from %s to %s",
 		    __func__, nbr_event_names[event],
 		    nbr_action_names[nbr_fsm_tbl[i].action],
 		    inet_ntoa(nbr->id), nbr_state_name(old_state),
@@ -619,6 +617,16 @@ nbr_establish_connection(struct nbr *nbr)
 #endif
 	}
 
+	if (nbr->af == AF_INET) {
+		if (sock_set_ipv4_tos(nbr->fd, IPTOS_PREC_INTERNETCONTROL) == -1)
+			log_warn("%s: lsr-id %s, sock_set_ipv4_tos error",
+				__func__, inet_ntoa(nbr->id));
+	} else if (nbr->af == AF_INET6) {
+		if (sock_set_ipv6_dscp(nbr->fd, IPTOS_PREC_INTERNETCONTROL) == -1)
+			log_warn("%s: lsr-id %s, sock_set_ipv6_dscp error",
+				__func__, inet_ntoa(nbr->id));
+	}
+
 	addr2sa(nbr->af, &nbr->laddr, 0, &local_su);
 	addr2sa(nbr->af, &nbr->raddr, LDP_PORT, &remote_su);
 	if (nbr->af == AF_INET6 && nbr->raddr_scope)
@@ -755,6 +763,8 @@ nbr_act_session_operational(struct nbr *nbr)
 
 	/* this is necessary to avoid ipc synchronization issues */
 	nbr_update_peerid(nbr);
+
+	ldp_sync_fsm_nbr_event(nbr, LDP_SYNC_EVT_LDP_SYNC_START);
 
 	memset(&lde_nbr, 0, sizeof(lde_nbr));
 	lde_nbr.id = nbr->id;

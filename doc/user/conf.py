@@ -16,6 +16,7 @@ import sys
 import os
 import re
 import pygments
+import sphinx
 from sphinx.highlighting import lexers
 
 # If extensions (or modules to document with autodoc) are in another directory,
@@ -132,7 +133,8 @@ language = None
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 exclude_patterns = ['_build', 'rpki.rst', 'routeserver.rst',
-                    'ospf_fundamentals.rst', 'flowspec.rst', 'snmptrap.rst']
+                    'ospf_fundamentals.rst', 'flowspec.rst', 'snmptrap.rst',
+                    'wecmp_linkbw.rst']
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -168,12 +170,19 @@ todo_include_todos = True
 # a list of builtin themes.
 html_theme = 'default'
 
+try:
+    import sphinx_rtd_theme
+
+    html_theme = 'sphinx_rtd_theme'
+except ImportError:
+    pass
+
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
-html_theme_options = {
-    'sidebarbgcolor': '#374249'
-}
+#html_theme_options = {
+#    'sidebarbgcolor': '#374249'
+#}
 
 # Add any paths that contain custom themes here, relative to this directory.
 #html_theme_path = []
@@ -351,14 +360,36 @@ texinfo_documents = [
 with open('../extra/frrlexer.py', 'rb') as lex:
     frrlexerpy = lex.read()
 
+# Parse version string into int array
+def vparse(s):
+    a = []
+
+    for c in s:
+        if c != '.':
+            a.append(int(c))
+
+    while len(a) < 3:
+        a.append(0)
+
+    return a[:3]
+
 # custom extensions here
 def setup(app):
     # object type for FRR CLI commands, can be extended to document parent CLI
     # node later on
     app.add_object_type('clicmd', 'clicmd')
+
     # css overrides for HTML theme
-    app.add_stylesheet('overrides.css')
-    app.add_javascript('overrides.js')
+    # Note sphinx version differences
+    sver = vparse(sphinx.__version__)
+
+    if sver < vparse('1.8.0') :
+        app.add_stylesheet('overrides.css')
+        app.add_javascript('overrides.js')
+    else:
+        app.add_css_file('overrides.css')
+        app.add_js_file('overrides.js')
+
     # load Pygments lexer for FRR config syntax
     #
     # NB: in Pygments 2.2+ this can be done with `load_lexer_from_file`, but we

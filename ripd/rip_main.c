@@ -25,7 +25,6 @@
 #include "thread.h"
 #include "command.h"
 #include "memory.h"
-#include "memory_vty.h"
 #include "prefix.h"
 #include "filter.h"
 #include "keychain.h"
@@ -34,19 +33,19 @@
 #include "sigevent.h"
 #include "zclient.h"
 #include "vrf.h"
+#include "if_rmap.h"
 #include "libfrr.h"
+#include "routemap.h"
 
 #include "ripd/ripd.h"
+#include "ripd/rip_nb.h"
 #include "ripd/rip_errors.h"
 
 /* ripd options. */
-#if CONFDATE > 20190521
-	CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-static struct option longopts[] = {{"retain", no_argument, NULL, 'r'}, {0}};
+static struct option longopts[] = {{0}};
 
 /* ripd privileges */
-zebra_capabilities_t _caps_p[] = {ZCAP_NET_RAW, ZCAP_BIND};
+zebra_capabilities_t _caps_p[] = {ZCAP_NET_RAW, ZCAP_BIND, ZCAP_SYS_ADMIN};
 
 struct zebra_privs_t ripd_privs = {
 #if defined(FRR_USER)
@@ -59,7 +58,7 @@ struct zebra_privs_t ripd_privs = {
 	.vty_group = VTY_GROUP,
 #endif
 	.caps_p = _caps_p,
-	.cap_num_p = 2,
+	.cap_num_p = array_size(_caps_p),
 	.cap_num_i = 0};
 
 /* Master of threads. */
@@ -81,8 +80,8 @@ static void sigint(void)
 {
 	zlog_notice("Terminating on signal");
 
-	rip_clean();
-
+	rip_vrf_terminate();
+	if_rmap_terminate();
 	rip_zclient_stop();
 	frr_fini();
 
@@ -114,9 +113,12 @@ static struct quagga_signal_t ripd_signals[] = {
 	},
 };
 
-static const struct frr_yang_module_info *ripd_yang_modules[] = {
+static const struct frr_yang_module_info *const ripd_yang_modules[] = {
+	&frr_filter_info,
 	&frr_interface_info,
 	&frr_ripd_info,
+	&frr_route_map_info,
+	&frr_vrf_info,
 };
 
 FRR_DAEMON_INFO(ripd, RIP, .vty_port = RIP_VTY_PORT,
@@ -128,10 +130,7 @@ FRR_DAEMON_INFO(ripd, RIP, .vty_port = RIP_VTY_PORT,
 		.privs = &ripd_privs, .yang_modules = ripd_yang_modules,
 		.n_yang_modules = array_size(ripd_yang_modules), )
 
-#if CONFDATE > 20190521
-CPP_NOTICE("-r / --retain has reached deprecation EOL, remove")
-#endif
-#define DEPRECATED_OPTIONS "r"
+#define DEPRECATED_OPTIONS ""
 
 /* Main routine of ripd. */
 int main(int argc, char **argv)
@@ -171,18 +170,17 @@ int main(int argc, char **argv)
 	/* Library initialization. */
 	rip_error_init();
 	keychain_init();
-	vrf_init(NULL, NULL, NULL, NULL, NULL);
+	rip_vrf_init();
 
 	/* RIP related initialization. */
 	rip_init();
 	rip_if_init();
 	rip_cli_init();
 	rip_zclient_init(master);
-	rip_peer_init();
 
 	frr_config_fork();
 	frr_run(master);
 
 	/* Not reached. */
-	return (0);
+	return 0;
 }

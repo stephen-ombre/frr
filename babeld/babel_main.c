@@ -68,13 +68,13 @@ const unsigned char ones[16] =
     {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-static const char *state_file = DAEMON_VTY_DIR "/babel-state";
+static char state_file[1024];
 
 unsigned char protocol_group[16]; /* babel's link-local multicast address */
 int protocol_port;                /* babel's port */
 int protocol_socket = -1;         /* socket: communicate with others babeld */
 
-static char babel_config_default[] = SYSCONFDIR BABEL_DEFAULT_CONFIG;
+static const char babel_config_default[] = SYSCONFDIR BABEL_DEFAULT_CONFIG;
 static char *babel_vty_addr = NULL;
 static int babel_vty_port = BABEL_VTY_PORT;
 
@@ -136,10 +136,11 @@ struct option longopts[] =
     { 0 }
   };
 
-static const struct frr_yang_module_info *babeld_yang_modules[] =
-  {
-    &frr_interface_info,
-  };
+static const struct frr_yang_module_info *const babeld_yang_modules[] = {
+	&frr_filter_info,
+	&frr_interface_info,
+	&frr_vrf_info,
+};
 
 FRR_DAEMON_INFO(babeld, BABELD,
 		.vty_port = BABEL_VTY_PORT,
@@ -187,6 +188,9 @@ main(int argc, char **argv)
 	  }
     }
 
+    snprintf(state_file, sizeof(state_file), "%s/%s",
+	     frr_vtydir, "babel-state");
+
     /* create the threads handler */
     master = frr_init ();
 
@@ -199,6 +203,8 @@ main(int argc, char **argv)
     babel_replace_by_null(STDIN_FILENO);
 
     /* init some quagga's dependencies, and babeld's commands */
+    if_zapi_callbacks(babel_ifp_create, babel_ifp_up,
+		      babel_ifp_down, babel_ifp_destroy);
     babeld_quagga_init();
     /* init zebra client's structure and it's commands */
     /* this replace kernel_setup && kernel_setup_socket */

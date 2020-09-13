@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2018 Christian Franke
  *
- * This file is part of FreeRangeRouting (FRR)
+ * This file is part of FRRouting (FRR)
  *
  * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -27,7 +27,6 @@
 #include "isisd/isisd.h"
 #include "isisd/isis_memory.h"
 #include "isisd/isis_flags.h"
-#include "dict.h"
 #include "isisd/isis_circuit.h"
 #include "isisd/isis_lsp.h"
 #include "isisd/isis_misc.h"
@@ -51,9 +50,9 @@ struct isis_tx_queue_entry {
 	struct isis_tx_queue *queue;
 };
 
-static unsigned tx_queue_hash_key(void *p)
+static unsigned tx_queue_hash_key(const void *p)
 {
-	struct isis_tx_queue_entry *e = p;
+	const struct isis_tx_queue_entry *e = p;
 
 	uint32_t id_key = jhash(e->lsp->hdr.lsp_id,
 				ISIS_SYS_ID_LEN + 2, 0x55aa5a5a);
@@ -145,7 +144,7 @@ void _isis_tx_queue_add(struct isis_tx_queue *queue,
 	if (!queue)
 		return;
 
-	if (isis->debugs & DEBUG_TX_QUEUE) {
+	if (IS_DEBUG_TX_QUEUE) {
 		zlog_debug("Add LSP %s to %s queue as %s LSP. (From %s %s:%d)",
 			   rawlspid_print(lsp->hdr.lsp_id),
 			   queue->circuit->interface->name,
@@ -184,7 +183,7 @@ void _isis_tx_queue_del(struct isis_tx_queue *queue, struct isis_lsp *lsp,
 	if (!e)
 		return;
 
-	if (isis->debugs & DEBUG_TX_QUEUE) {
+	if (IS_DEBUG_TX_QUEUE) {
 		zlog_debug("Remove LSP %s from %s queue. (From %s %s:%d)",
 			   rawlspid_print(lsp->hdr.lsp_id),
 			   queue->circuit->interface->name,

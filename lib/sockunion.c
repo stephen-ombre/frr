@@ -27,6 +27,7 @@
 #include "log.h"
 #include "jhash.h"
 #include "lib_errors.h"
+#include "printfrr.h"
 
 DEFINE_MTYPE_STATIC(LIB, SOCKUNION, "Socket union")
 
@@ -124,7 +125,6 @@ static const char *sockunion_log(const union sockunion *su, char *buf,
 
 	case AF_INET6:
 		return inet_ntop(AF_INET6, &(su->sin6.sin6_addr), buf, len);
-		break;
 
 	default:
 		snprintf(buf, len, "af_unknown %d ", su->sa.sa_family);
@@ -163,7 +163,7 @@ int sockunion_accept(int sock, union sockunion *su)
 }
 
 /* Return sizeof union sockunion.  */
-static int sockunion_sizeof(const union sockunion *su)
+int sockunion_sizeof(const union sockunion *su)
 {
 	int ret;
 
@@ -215,7 +215,7 @@ enum connect_result sockunion_connect(int fd, const union sockunion *peersu,
 		if (errno != EINPROGRESS) {
 			char str[SU_ADDRSTRLEN];
 			zlog_info("can't connect to %s fd %d : %s",
-				  sockunion_log(&su, str, sizeof str), fd,
+				  sockunion_log(&su, str, sizeof(str)), fd,
 				  safe_strerror(errno));
 			return connect_error;
 		}
@@ -366,21 +366,6 @@ int sockopt_cork(int sock, int onoff)
 	return 0;
 }
 
-int sockopt_mark_default(int sock, int mark, struct zebra_privs_t *cap)
-{
-#ifdef SO_MARK
-	int ret;
-
-	frr_elevate_privs(cap) {
-		ret = setsockopt(sock, SOL_SOCKET, SO_MARK, &mark,
-				 sizeof(mark));
-	}
-	return ret;
-#else
-	return 0;
-#endif
-}
-
 int sockopt_minttl(int family, int sock, int minttl)
 {
 #ifdef IP_MINTTL
@@ -422,8 +407,7 @@ int sockopt_v6only(int family, int sock)
 				 sizeof(int));
 		if (ret < 0) {
 			flog_err(EC_LIB_SOCKET,
-				 "can't set sockopt IPV6_V6ONLY "
-				 "to socket %d",
+				 "can't set sockopt IPV6_V6ONLY to socket %d",
 				 sock);
 			return -1;
 		}
@@ -472,7 +456,7 @@ unsigned int sockunion_hash(const union sockunion *su)
 		return jhash_1word(su->sin.sin_addr.s_addr, 0);
 	case AF_INET6:
 		return jhash2(su->sin6.sin6_addr.s6_addr32,
-			      ZEBRA_NUM_OF(su->sin6.sin6_addr.s6_addr32), 0);
+			      array_size(su->sin6.sin6_addr.s6_addr32), 0);
 	}
 	return 0;
 }
@@ -534,8 +518,8 @@ union sockunion *sockunion_getsockname(int fd)
 	} name;
 	union sockunion *su;
 
-	memset(&name, 0, sizeof name);
-	len = sizeof name;
+	memset(&name, 0, sizeof(name));
+	len = sizeof(name);
 
 	ret = getsockname(fd, (struct sockaddr *)&name, &len);
 	if (ret < 0) {
@@ -572,8 +556,8 @@ union sockunion *sockunion_getpeername(int fd)
 	} name;
 	union sockunion *su;
 
-	memset(&name, 0, sizeof name);
-	len = sizeof name;
+	memset(&name, 0, sizeof(name));
+	len = sizeof(name);
 	ret = getpeername(fd, (struct sockaddr *)&name, &len);
 	if (ret < 0) {
 		flog_err(EC_LIB_SOCKET, "Can't get remote address and port: %s",
@@ -681,4 +665,50 @@ void sockunion_free(union sockunion *su)
 void sockunion_init(union sockunion *su)
 {
 	memset(su, 0, sizeof(union sockunion));
+}
+
+printfrr_ext_autoreg_p("SU", printfrr_psu)
+static ssize_t printfrr_psu(char *buf, size_t bsz, const char *fmt,
+			    int prec, const void *ptr)
+{
+	const union sockunion *su = ptr;
+	struct fbuf fb = { .buf = buf, .pos = buf, .len = bsz - 1 };
+	bool include_port = false;
+	bool endflags = false;
+	ssize_t consumed = 2;
+
+	while (!endflags) {
+		switch (fmt[consumed++]) {
+		case 'p':
+			include_port = true;
+			break;
+		default:
+			consumed--;
+			endflags = true;
+			break;
+		}
+	};
+
+	switch (sockunion_family(su)) {
+	case AF_UNSPEC:
+		bprintfrr(&fb, "(unspec)");
+		break;
+	case AF_INET:
+		inet_ntop(AF_INET, &su->sin.sin_addr, buf, bsz);
+		fb.pos += strlen(fb.buf);
+		if (include_port)
+			bprintfrr(&fb, ":%d", su->sin.sin_port);
+		break;
+	case AF_INET6:
+		inet_ntop(AF_INET6, &su->sin6.sin6_addr, buf, bsz);
+		fb.pos += strlen(fb.buf);
+		if (include_port)
+			bprintfrr(&fb, ":%d", su->sin6.sin6_port);
+		break;
+	default:
+		bprintfrr(&fb, "(af %d)", sockunion_family(su));
+	}
+
+	fb.pos[0] = '\0';
+	return consumed;
 }

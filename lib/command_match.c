@@ -88,7 +88,7 @@ enum matcher_rv command_match(struct graph *cmdgraph, vector vline,
 
 	// prepend a dummy token to match that pesky start node
 	vector vvline = vector_init(vline->alloced + 1);
-	vector_set_index(vvline, 0, (void *)XSTRDUP(MTYPE_TMP, "dummy"));
+	vector_set_index(vvline, 0, XSTRDUP(MTYPE_TMP, "dummy"));
 	memcpy(vvline->index + 1, vline->index,
 	       sizeof(void *) * vline->alloced);
 	vvline->active = vline->active + 1;
@@ -714,7 +714,7 @@ static enum match_type match_ipv4(const char *str)
 				dots++;
 				break;
 			}
-			if (!isdigit((int)*str))
+			if (!isdigit((unsigned char)*str))
 				return no_match;
 
 			str++;
@@ -723,8 +723,13 @@ static enum match_type match_ipv4(const char *str)
 		if (str - sp > 3)
 			return no_match;
 
-		strncpy(buf, sp, str - sp);
-		if (atoi(buf) > 255)
+		memcpy(buf, sp, str - sp);
+
+		int v = atoi(buf);
+
+		if (v > 255)
+			return no_match;
+		if (v > 0 && buf[0] == '0')
 			return no_match;
 
 		nums++;
@@ -765,7 +770,7 @@ static enum match_type match_ipv4_prefix(const char *str)
 				break;
 			}
 
-			if (!isdigit((int)*str))
+			if (!isdigit((unsigned char)*str))
 				return no_match;
 
 			str++;
@@ -774,8 +779,13 @@ static enum match_type match_ipv4_prefix(const char *str)
 		if (str - sp > 3)
 			return no_match;
 
-		strncpy(buf, sp, str - sp);
-		if (atoi(buf) > 255)
+		memcpy(buf, sp, str - sp);
+
+		int v = atoi(buf);
+
+		if (v > 255)
+			return no_match;
+		if (v > 0 && buf[0] == '0')
 			return no_match;
 
 		if (dots == 3) {
@@ -797,7 +807,7 @@ static enum match_type match_ipv4_prefix(const char *str)
 
 	sp = str;
 	while (*str != '\0') {
-		if (!isdigit((int)*str))
+		if (!isdigit((unsigned char)*str))
 			return no_match;
 
 		str++;

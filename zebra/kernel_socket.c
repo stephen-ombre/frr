@@ -43,7 +43,7 @@
 
 #include "zebra/rt.h"
 #include "zebra/interface.h"
-#include "zebra/zserv.h"
+#include "zebra/zebra_router.h"
 #include "zebra/debug.h"
 #include "zebra/kernel_socket.h"
 #include "zebra/rib.h"
@@ -148,7 +148,9 @@ const struct message rtm_type_str[] = {{RTM_ADD, "RTM_ADD"},
 #ifdef RTM_OLDDEL
 				       {RTM_OLDDEL, "RTM_OLDDEL"},
 #endif /* RTM_OLDDEL */
+#ifdef RTM_RESOLVE
 				       {RTM_RESOLVE, "RTM_RESOLVE"},
+#endif	/* RTM_RESOLVE */
 				       {RTM_NEWADDR, "RTM_NEWADDR"},
 				       {RTM_DELADDR, "RTM_DELADDR"},
 				       {RTM_IFINFO, "RTM_IFINFO"},
@@ -278,8 +280,9 @@ size_t _rta_get(caddr_t sap, void *destp, size_t destlen, bool checkaf)
 		}
 
 		if (copylen > destlen) {
-			zlog_warn("%s: destination buffer too small (%lu vs %lu)",
-				  __func__, copylen, destlen);
+			zlog_warn(
+				"%s: destination buffer too small (%zu vs %zu)",
+				__func__, copylen, destlen);
 			memcpy(dest, sap, destlen);
 		} else
 			memcpy(dest, sap, copylen);
@@ -301,12 +304,13 @@ size_t rta_getattr(caddr_t sap, void *destp, size_t destlen)
 size_t rta_getsdlname(caddr_t sap, void *destp, short *destlen)
 {
 	struct sockaddr_dl *sdl = (struct sockaddr_dl *)sap;
-	struct sockaddr *sa = (struct sockaddr *)sap;
 	uint8_t *dest = destp;
 	size_t tlen, copylen;
 
 	copylen = sdl->sdl_nlen;
 #ifdef HAVE_STRUCT_SOCKADDR_SA_LEN
+	struct sockaddr *sa = (struct sockaddr *)sap;
+
 	tlen = (sa->sa_len == 0) ? sizeof(ROUNDUP_TYPE) : ROUNDUP(sa->sa_len);
 #else  /* !HAVE_STRUCT_SOCKADDR_SA_LEN */
 	tlen = SAROUNDUP(sap);
@@ -314,8 +318,9 @@ size_t rta_getsdlname(caddr_t sap, void *destp, short *destlen)
 
 	if (copylen > 0 && dest != NULL && sdl->sdl_family == AF_LINK) {
 		if (copylen > IFNAMSIZ) {
-			zlog_warn("%s: destination buffer too small (%lu vs %d)",
-				  __func__, copylen, IFNAMSIZ);
+			zlog_warn(
+				"%s: destination buffer too small (%zu vs %d)",
+				__func__, copylen, IFNAMSIZ);
 			memcpy(dest, sdl->sdl_data, IFNAMSIZ);
 			dest[IFNAMSIZ] = 0;
 			*destlen = IFNAMSIZ;
@@ -518,7 +523,7 @@ static enum zebra_link_type sdl_to_zebra_link_type(unsigned int sdlt)
 int ifm_read(struct if_msghdr *ifm)
 {
 	struct interface *ifp = NULL;
-	struct sockaddr_dl *sdl;
+	struct sockaddr_dl *sdl = NULL;
 	char ifname[IFNAMSIZ];
 	short ifnlen = 0;
 	int maskbit;
@@ -551,7 +556,7 @@ int ifm_read(struct if_msghdr *ifm)
 	 * is 12 bytes larger than the 32 bit version.
 	 */
 	if (((struct sockaddr *)cp)->sa_family == AF_UNSPEC)
-		cp = cp + 12;
+		cp += 12;
 #endif
 
 	/* Look up for RTA_IFP and skip others. */
@@ -622,7 +627,7 @@ int ifm_read(struct if_msghdr *ifm)
 		 * RTA_IFP) is required.
 		 */
 		if (!ifnlen) {
-			zlog_debug("Interface index %d (new) missing ifname\n",
+			zlog_debug("Interface index %d (new) missing ifname",
 				   ifm->ifm_index);
 			return -1;
 		}
@@ -638,7 +643,7 @@ int ifm_read(struct if_msghdr *ifm)
 		if (ifp == NULL) {
 			/* Interface that zebra was not previously aware of, so
 			 * create. */
-			ifp = if_create(ifname, VRF_DEFAULT);
+			ifp = if_create_name(ifname, VRF_DEFAULT);
 			if (IS_ZEBRA_DEBUG_KERNEL)
 				zlog_debug("%s: creating ifp for ifindex %d",
 					   __func__, ifm->ifm_index);
@@ -707,8 +712,7 @@ int ifm_read(struct if_msghdr *ifm)
 	{
 		if (ifp->ifindex != ifm->ifm_index) {
 			zlog_debug(
-				"%s: index mismatch, ifname %s, ifp index %d, "
-				"ifm index %d",
+				"%s: index mismatch, ifname %s, ifp index %d, ifm index %d",
 				__func__, ifp->name, ifp->ifindex,
 				ifm->ifm_index);
 			return -1;
@@ -828,9 +832,7 @@ static void ifam_read_mesg(struct ifa_msghdr *ifm, union sockunion *addr,
 					? ip_masklen(mask->sin.sin_addr)
 					: ip6_masklen(mask->sin6.sin6_addr);
 			zlog_debug(
-				"%s: ifindex %d, ifname %s, ifam_addrs {%s}, "
-				"ifam_flags 0x%x, addr %s/%d broad %s dst %s "
-				"gateway %s",
+				"%s: ifindex %d, ifname %s, ifam_addrs {%s}, ifam_flags 0x%x, addr %s/%d broad %s dst %s gateway %s",
 				__func__, ifm->ifam_index,
 				(ifnlen ? ifname : "(nil)"),
 				rtatostr(ifm->ifam_addrs, fbuf, sizeof(fbuf)),
@@ -973,8 +975,7 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 	/* rt_msghdr version check. */
 	if (rtm->rtm_version != RTM_VERSION)
 		flog_warn(EC_ZEBRA_RTM_VERSION_MISMATCH,
-			  "Routing message version different %d should be %d."
-			  "This may cause problem\n",
+			  "Routing message version different %d should be %d.This may cause problem\n",
 			  rtm->rtm_version, RTM_VERSION);
 
 	/* Be sure structure is cleared */
@@ -1134,14 +1135,17 @@ void rtm_read(struct rt_msghdr *rtm)
 	 */
 	if (rtm->rtm_type == RTM_CHANGE)
 		rib_delete(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL,
-			   0, zebra_flags, &p, NULL, NULL, 0, 0, 0, true);
+			   0, zebra_flags, &p, NULL, NULL, 0, RT_TABLE_MAIN, 0,
+			   0, true, false);
 	if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 	    || rtm->rtm_type == RTM_CHANGE)
 		rib_add(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL, 0,
-			zebra_flags, &p, NULL, &nh, 0, 0, 0, 0, 0);
+			zebra_flags, &p, NULL, &nh, 0, RT_TABLE_MAIN,
+			0, 0, 0, 0);
 	else
 		rib_delete(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL,
-			   0, zebra_flags, &p, NULL, &nh, 0, 0, 0, true);
+			   0, zebra_flags, &p, NULL, &nh, 0, RT_TABLE_MAIN, 0,
+			   0, true, false);
 }
 
 /* Interface function for the kernel routing table updates.  Support
@@ -1363,7 +1367,7 @@ static int kernel_read(struct thread *thread)
 	/* Fetch routing socket. */
 	sock = THREAD_FD(thread);
 
-	nbytes = read(sock, &buf, sizeof buf);
+	nbytes = read(sock, &buf, sizeof(buf));
 
 	if (nbytes <= 0) {
 		if (nbytes < 0 && errno != EWOULDBLOCK && errno != EAGAIN)
@@ -1372,7 +1376,7 @@ static int kernel_read(struct thread *thread)
 		return 0;
 	}
 
-	thread_add_read(zebrad.master, kernel_read, NULL, sock, NULL);
+	thread_add_read(zrouter.master, kernel_read, NULL, sock, NULL);
 
 	if (IS_ZEBRA_DEBUG_KERNEL)
 		rtmsg_debug(&buf.r.rtm);
@@ -1385,7 +1389,7 @@ static int kernel_read(struct thread *thread)
 	 */
 	if (rtm->rtm_msglen != nbytes) {
 		zlog_debug(
-			"kernel_read: rtm->rtm_msglen %d, nbytes %d, type %d\n",
+			"kernel_read: rtm->rtm_msglen %d, nbytes %d, type %d",
 			rtm->rtm_msglen, nbytes, rtm->rtm_type);
 		return -1;
 	}
@@ -1419,7 +1423,7 @@ static int kernel_read(struct thread *thread)
 /* Make routing socket. */
 static void routing_socket(struct zebra_ns *zns)
 {
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 		routing_sock = ns_socket(AF_ROUTE, SOCK_RAW, 0, zns->ns_id);
 
 		dplane_routing_sock =
@@ -1445,7 +1449,7 @@ static void routing_socket(struct zebra_ns *zns)
 	  zlog_warn ("Can't set O_NONBLOCK to routing socket");*/
 
 	/* kernel_read needs rewrite. */
-	thread_add_read(zebrad.master, kernel_read, NULL, routing_sock, NULL);
+	thread_add_read(zrouter.master, kernel_read, NULL, routing_sock, NULL);
 }
 
 /* Exported interface function.  This function simply calls
@@ -1458,6 +1462,101 @@ void kernel_init(struct zebra_ns *zns)
 void kernel_terminate(struct zebra_ns *zns, bool complete)
 {
 	return;
+}
+
+void kernel_update_multi(struct dplane_ctx_q *ctx_list)
+{
+	struct zebra_dplane_ctx *ctx;
+	struct dplane_ctx_q handled_list;
+	enum zebra_dplane_result res;
+
+	TAILQ_INIT(&handled_list);
+
+	while (true) {
+		ctx = dplane_ctx_dequeue(ctx_list);
+		if (ctx == NULL)
+			break;
+
+		/*
+		 * A previous provider plugin may have asked to skip the
+		 * kernel update.
+		 */
+		if (dplane_ctx_is_skip_kernel(ctx)) {
+			res = ZEBRA_DPLANE_REQUEST_SUCCESS;
+			goto skip_one;
+		}
+
+		switch (dplane_ctx_get_op(ctx)) {
+
+		case DPLANE_OP_ROUTE_INSTALL:
+		case DPLANE_OP_ROUTE_UPDATE:
+		case DPLANE_OP_ROUTE_DELETE:
+			res = kernel_route_update(ctx);
+			break;
+
+		case DPLANE_OP_NH_INSTALL:
+		case DPLANE_OP_NH_UPDATE:
+		case DPLANE_OP_NH_DELETE:
+			res = kernel_nexthop_update(ctx);
+			break;
+
+		case DPLANE_OP_LSP_INSTALL:
+		case DPLANE_OP_LSP_UPDATE:
+		case DPLANE_OP_LSP_DELETE:
+			res = kernel_lsp_update(ctx);
+			break;
+
+		case DPLANE_OP_PW_INSTALL:
+		case DPLANE_OP_PW_UNINSTALL:
+			res = kernel_pw_update(ctx);
+			break;
+
+		case DPLANE_OP_ADDR_INSTALL:
+		case DPLANE_OP_ADDR_UNINSTALL:
+			res = kernel_address_update_ctx(ctx);
+			break;
+
+		case DPLANE_OP_MAC_INSTALL:
+		case DPLANE_OP_MAC_DELETE:
+			res = kernel_mac_update_ctx(ctx);
+			break;
+
+		case DPLANE_OP_NEIGH_INSTALL:
+		case DPLANE_OP_NEIGH_UPDATE:
+		case DPLANE_OP_NEIGH_DELETE:
+		case DPLANE_OP_VTEP_ADD:
+		case DPLANE_OP_VTEP_DELETE:
+		case DPLANE_OP_NEIGH_DISCOVER:
+			res = kernel_neigh_update_ctx(ctx);
+			break;
+
+		case DPLANE_OP_RULE_ADD:
+		case DPLANE_OP_RULE_DELETE:
+		case DPLANE_OP_RULE_UPDATE:
+			res = kernel_pbr_rule_update(ctx);
+			break;
+
+		/* Ignore 'notifications' - no-op */
+		case DPLANE_OP_SYS_ROUTE_ADD:
+		case DPLANE_OP_SYS_ROUTE_DELETE:
+		case DPLANE_OP_ROUTE_NOTIFY:
+		case DPLANE_OP_LSP_NOTIFY:
+			res = ZEBRA_DPLANE_REQUEST_SUCCESS;
+			break;
+
+		default:
+			res = ZEBRA_DPLANE_REQUEST_FAILURE;
+			break;
+		}
+
+	skip_one:
+		dplane_ctx_set_status(ctx, res);
+
+		dplane_ctx_enqueue_tail(&handled_list, ctx);
+	}
+
+	TAILQ_INIT(ctx_list);
+	dplane_ctx_list_append(ctx_list, &handled_list);
 }
 
 #endif /* !HAVE_NETLINK */

@@ -29,6 +29,10 @@
 #include "vlan.h"
 #include "vxlan.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* zebra L2 interface information - bridge slave (linkage to bridge) */
 struct zebra_l2info_brslave {
 	ifindex_t bridge_ifindex; /* Bridge Master */
@@ -50,6 +54,11 @@ struct zebra_l2info_vxlan {
 	vni_t vni;		/* VNI */
 	struct in_addr vtep_ip; /* Local tunnel IP */
 	vlanid_t access_vlan;   /* Access VLAN - for VLAN-aware bridge. */
+	struct in_addr mcast_grp;
+	ifindex_t ifindex_link; /* Interface index of interface
+				 * linked with VXLAN
+				 */
+	ns_id_t link_nsid;
 };
 
 struct zebra_l2info_bondslave {
@@ -76,7 +85,7 @@ extern void zebra_l2_map_slave_to_bridge(struct zebra_l2info_brslave *br_slave);
 extern void
 zebra_l2_unmap_slave_from_bridge(struct zebra_l2info_brslave *br_slave);
 extern void
-zebra_l2_map_slave_to_bond(struct zebra_l2info_bondslave *bond_slave);
+zebra_l2_map_slave_to_bond(struct zebra_l2info_bondslave *bond_slave, vrf_id_t);
 extern void
 zebra_l2_unmap_slave_from_bond(struct zebra_l2info_bondslave *bond_slave);
 extern void zebra_l2_bridge_add_update(struct interface *ifp,
@@ -96,4 +105,13 @@ extern void zebra_l2if_update_bridge_slave(struct interface *ifp,
 
 extern void zebra_l2if_update_bond_slave(struct interface *ifp,
 					 ifindex_t bond_ifindex);
+extern void zebra_vlan_bitmap_compute(struct interface *ifp,
+		uint32_t vid_start, uint16_t vid_end);
+extern void zebra_vlan_mbr_re_eval(struct interface *ifp,
+		bitfield_t vlan_bitmap);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* _ZEBRA_L2_H */

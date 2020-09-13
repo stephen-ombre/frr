@@ -23,6 +23,10 @@
 
 #include "lib/ferr.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum lib_log_refs {
 	EC_LIB_PRIVILEGES = LIB_FERR_START,
 	EC_LIB_VRF_START,
@@ -41,6 +45,7 @@ enum lib_log_refs {
 	EC_LIB_STREAM,
 	EC_LIB_LINUX_NS,
 	EC_LIB_SLOW_THREAD,
+	EC_LIB_NO_THREAD,
 	EC_LIB_RMAP_RECURSION_LIMIT,
 	EC_LIB_BACKUP_CONFIG,
 	EC_LIB_VRF_LENGTH,
@@ -76,10 +81,16 @@ enum lib_log_refs {
 	EC_LIB_SYSREPO_INIT,
 	EC_LIB_SYSREPO_DATA_CONVERT,
 	EC_LIB_LIBSYSREPO,
+	EC_LIB_GRPC_INIT,
 	EC_LIB_ID_CONSISTENCY,
 	EC_LIB_ID_EXHAUST,
+	EC_LIB_RESOLVER,
 };
 
 extern void lib_error_init(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

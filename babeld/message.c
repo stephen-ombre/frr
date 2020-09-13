@@ -710,8 +710,7 @@ fill_rtt_message(struct interface *ifp)
             DO_HTONL(babel_ifp->sendbuf + babel_ifp->buffered_hello + 10, time);
             return 1;
         } else {
-            flog_err(EC_BABEL_PACKET, "No space left for timestamp sub-TLV "
-                     "(this shouldn't happen)");
+            flog_err(EC_BABEL_PACKET, "No space left for timestamp sub-TLV (this shouldn't happen)");
             return -1;
         }
     }
@@ -1115,7 +1114,9 @@ really_send_update(struct interface *ifp,
     if(channels_len >= 0) {
         accumulate_byte(ifp, 2);
         accumulate_byte(ifp, channels_len);
-        accumulate_bytes(ifp, channels, channels_len);
+
+	if (channels && channels_len > 0)
+		accumulate_bytes(ifp, channels, channels_len);
     }
     end_message(ifp, MESSAGE_UPDATE, 10 + (real_plen + 7) / 8 - omit +
                 channels_size);

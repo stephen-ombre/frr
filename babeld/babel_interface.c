@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include "vector.h"
 #include "distribute.h"
 #include "lib_errors.h"
+#include "network.h"
 
 #include "babel_main.h"
 #include "util.h"
@@ -39,8 +40,9 @@ THE SOFTWARE.
 #include "neighbour.h"
 #include "route.h"
 #include "xroute.h"
-#include "babel_memory.h"
 #include "babel_errors.h"
+
+DEFINE_MTYPE_STATIC(BABELD, BABEL_IF, "Babel Interface")
 
 #define IS_ENABLE(ifp) (babel_enable_if_lookup(ifp->name) >= 0)
 
@@ -57,16 +59,18 @@ static void babel_interface_free (babel_interface_nfo *bi);
 
 
 static vector babel_enable_if;                 /* enable interfaces (by cmd). */
-static struct cmd_node babel_interface_node =  /* babeld's interface node.    */
-{
-    INTERFACE_NODE,
-    "%s(config-if)# ",
-    1 /* VTYSH */
+static int interface_config_write(struct vty *vty);
+static struct cmd_node babel_interface_node = {
+    .name = "interface",
+    .node = INTERFACE_NODE,
+    .parent_node = CONFIG_NODE,
+    .prompt = "%s(config-if)# ",
+    .config_write = interface_config_write,
 };
 
 
 int
-babel_interface_up (int cmd, struct zclient *client, zebra_size_t length, vrf_id_t vrf)
+babel_interface_up (ZAPI_CALLBACK_ARGS)
 {
     struct stream *s = NULL;
     struct interface *ifp = NULL;
@@ -74,7 +78,7 @@ babel_interface_up (int cmd, struct zclient *client, zebra_size_t length, vrf_id
     debugf(BABEL_DEBUG_IF, "receive a 'interface up'");
 
     s = zclient->ibuf;
-    ifp = zebra_interface_state_read(s, vrf); /* it updates iflist */
+    ifp = zebra_interface_state_read(s, vrf_id); /* it updates iflist */
 
     if (ifp == NULL) {
         return 0;
@@ -85,15 +89,9 @@ babel_interface_up (int cmd, struct zclient *client, zebra_size_t length, vrf_id
 }
 
 int
-babel_interface_down (int cmd, struct zclient *client, zebra_size_t length, vrf_id_t vrf)
+babel_ifp_down(struct interface *ifp)
 {
-    struct stream *s = NULL;
-    struct interface *ifp = NULL;
-
     debugf(BABEL_DEBUG_IF, "receive a 'interface down'");
-
-    s = zclient->ibuf;
-    ifp = zebra_interface_state_read(s, vrf); /* it updates iflist */
 
     if (ifp == NULL) {
         return 0;
@@ -103,51 +101,28 @@ babel_interface_down (int cmd, struct zclient *client, zebra_size_t length, vrf_
     return 0;
 }
 
-int
-babel_interface_add (int cmd, struct zclient *client, zebra_size_t length, vrf_id_t vrf)
+int babel_ifp_create (struct interface *ifp)
 {
-    struct interface *ifp = NULL;
-
     debugf(BABEL_DEBUG_IF, "receive a 'interface add'");
 
-    /* read and add the interface in the iflist. */
-    ifp = zebra_interface_add_read (zclient->ibuf, vrf);
-
-    if (ifp == NULL) {
-        return 0;
-    }
-
     interface_recalculate(ifp);
-    return 0;
-}
+
+     return 0;
+ }
 
 int
-babel_interface_delete (int cmd, struct zclient *client, zebra_size_t length, vrf_id_t vrf)
+babel_ifp_destroy(struct interface *ifp)
 {
-    struct interface *ifp;
-    struct stream *s;
-
     debugf(BABEL_DEBUG_IF, "receive a 'interface delete'");
-
-    s = zclient->ibuf;
-    ifp = zebra_interface_state_read(s, vrf); /* it updates iflist */
-
-    if (ifp == NULL)
-        return 0;
 
     if (IS_ENABLE(ifp))
         interface_reset(ifp);
 
-    /* To support pseudo interface do not free interface structure.  */
-    /* if_delete(ifp); */
-    if_set_index(ifp, IFINDEX_INTERNAL);
-
     return 0;
 }
 
 int
-babel_interface_address_add (int cmd, struct zclient *client,
-                             zebra_size_t length, vrf_id_t vrf)
+babel_interface_address_add (ZAPI_CALLBACK_ARGS)
 {
     babel_interface_nfo *babel_ifp;
     struct connected *ifc;
@@ -156,7 +131,7 @@ babel_interface_address_add (int cmd, struct zclient *client,
     debugf(BABEL_DEBUG_IF, "receive a 'interface address add'");
 
     ifc = zebra_interface_address_read (ZEBRA_INTERFACE_ADDRESS_ADD,
-                                        zclient->ibuf, vrf);
+                                        zclient->ibuf, vrf_id);
 
     if (ifc == NULL)
         return 0;
@@ -183,8 +158,7 @@ babel_interface_address_add (int cmd, struct zclient *client,
 }
 
 int
-babel_interface_address_delete (int cmd, struct zclient *client,
-                                zebra_size_t length, vrf_id_t vrf)
+babel_interface_address_delete (ZAPI_CALLBACK_ARGS)
 {
     babel_interface_nfo *babel_ifp;
     struct connected *ifc;
@@ -193,7 +167,7 @@ babel_interface_address_delete (int cmd, struct zclient *client,
     debugf(BABEL_DEBUG_IF, "receive a 'interface address delete'");
 
     ifc = zebra_interface_address_read (ZEBRA_INTERFACE_ADDRESS_DELETE,
-                                        zclient->ibuf, vrf);
+                                        zclient->ibuf, vrf_id);
 
     if (ifc == NULL)
         return 0;
@@ -718,8 +692,7 @@ interface_recalculate(struct interface *ifp)
 
     rc = resize_receive_buffer(mtu);
     if(rc < 0)
-        zlog_warn("couldn't resize "
-                  "receive buffer for interface %s (%d) (%d bytes).\n",
+        zlog_warn("couldn't resize receive buffer for interface %s (%d) (%d bytes).\n",
                   ifp->name, ifp->ifindex, mtu);
 
     memset(&mreq, 0, sizeof(mreq));
@@ -922,8 +895,7 @@ static void
 show_babel_neighbour_sub (struct vty *vty, struct neighbour *neigh)
 {
     vty_out (vty,
-             "Neighbour %s dev %s reach %04x rxcost %d txcost %d "
-             "rtt %s rttcost %d%s.\n",
+             "Neighbour %s dev %s reach %04x rxcost %d txcost %d rtt %s rttcost %d%s.\n",
              format_address(neigh->address),
              neigh->ifp->name,
              neigh->reach,
@@ -998,7 +970,7 @@ show_babel_routes_sub(struct babel_route *route, struct vty *vty,
         channels[0] = '\0';
     else {
         int k, j = 0;
-        snprintf(channels, 100, " chan (");
+        snprintf(channels, sizeof(channels), " chan (");
         j = strlen(channels);
         for(k = 0; k < DIVERSITY_HOPS; k++) {
             if(route->channels[k] == 0)
@@ -1014,8 +986,7 @@ show_babel_routes_sub(struct babel_route *route, struct vty *vty,
     }
 
     vty_out (vty,
-            "%s metric %d refmetric %d id %s seqno %d%s age %d "
-            "via %s neigh %s%s%s%s\n",
+            "%s metric %d refmetric %d id %s seqno %d%s age %d via %s neigh %s%s%s%s\n",
             format_prefix(route->src->prefix, route->src->plen),
             route_metric(route), route->refmetric,
             format_eui64(route->src->id),
@@ -1096,7 +1067,7 @@ DEFUN (show_babel_route_prefix,
       vty_out (vty, "%% Malformed address\n");
       return CMD_WARNING;
     }
-        
+
     routes = route_stream(0);
     if(routes) {
         while(1) {
@@ -1261,6 +1232,11 @@ DEFUN (show_babel_parameters,
     return CMD_SUCCESS;
 }
 
+int babel_ifp_up(struct interface *ifp)
+{
+	return 0;
+}
+
 void
 babel_if_init(void)
 {
@@ -1271,7 +1247,7 @@ babel_if_init(void)
     babel_enable_if = vector_init (1);
 
     /* install interface node and commands */
-    install_node (&babel_interface_node, interface_config_write);
+    install_node(&babel_interface_node);
     if_cmd_init();
 
     install_element(BABEL_NODE, &babel_network_cmd);
@@ -1414,16 +1390,11 @@ static babel_interface_nfo *
 babel_interface_allocate (void)
 {
     babel_interface_nfo *babel_ifp;
-    babel_ifp = XMALLOC(MTYPE_BABEL_IF, sizeof(babel_interface_nfo));
-    if(babel_ifp == NULL)
-        return NULL;
-
-    /* Here are set the default values for an interface. */
-    memset(babel_ifp, 0, sizeof(babel_interface_nfo));
+    babel_ifp = XCALLOC(MTYPE_BABEL_IF, sizeof(babel_interface_nfo));
     /* All flags are unset */
     babel_ifp->bucket_time = babel_now.tv_sec;
     babel_ifp->bucket = BUCKET_TOKENS_MAX;
-    babel_ifp->hello_seqno = (random() & 0xFFFF);
+    babel_ifp->hello_seqno = (frr_weak_random() & 0xFFFF);
     babel_ifp->rtt_min = 10000;
     babel_ifp->rtt_max = 120000;
     babel_ifp->max_rtt_penalty = 150;

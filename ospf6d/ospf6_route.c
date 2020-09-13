@@ -147,19 +147,19 @@ void ospf6_linkstate_prefix2str(struct prefix *prefix, char *buf, int size)
 }
 
 /* Global strings for logging */
-const char *ospf6_dest_type_str[OSPF6_DEST_TYPE_MAX] = {
+const char *const ospf6_dest_type_str[OSPF6_DEST_TYPE_MAX] = {
 	"Unknown", "Router", "Network", "Discard", "Linkstate", "AddressRange",
 };
 
-const char *ospf6_dest_type_substr[OSPF6_DEST_TYPE_MAX] = {
+const char *const ospf6_dest_type_substr[OSPF6_DEST_TYPE_MAX] = {
 	"?", "R", "N", "D", "L", "A",
 };
 
-const char *ospf6_path_type_str[OSPF6_PATH_TYPE_MAX] = {
+const char *const ospf6_path_type_str[OSPF6_PATH_TYPE_MAX] = {
 	"Unknown", "Intra-Area", "Inter-Area", "External-1", "External-2",
 };
 
-const char *ospf6_path_type_substr[OSPF6_PATH_TYPE_MAX] = {
+const char *const ospf6_path_type_substr[OSPF6_PATH_TYPE_MAX] = {
 	"??", "IA", "IE", "E1", "E2",
 };
 
@@ -174,8 +174,7 @@ struct ospf6_nexthop *ospf6_nexthop_create(void)
 
 void ospf6_nexthop_delete(struct ospf6_nexthop *nh)
 {
-	if (nh)
-		XFREE(MTYPE_OSPF6_NEXTHOP, nh);
+	XFREE(MTYPE_OSPF6_NEXTHOP, nh);
 }
 
 void ospf6_clear_nexthops(struct list *nh_list)
@@ -308,14 +307,14 @@ void ospf6_route_zebra_copy_nexthops(struct ospf6_route *route,
 				inet_ntop(AF_INET6, &nh->address, buf,
 					  sizeof(buf));
 				ifname = ifindex2ifname(nh->ifindex,
-							VRF_DEFAULT);
+							ospf6->vrf_id);
 				zlog_debug("  nexthop: %s%%%.*s(%d)", buf,
 					   IFNAMSIZ, ifname, nh->ifindex);
 			}
 			if (i >= entries)
 				return;
 
-			nexthops[i].vrf_id = VRF_DEFAULT;
+			nexthops[i].vrf_id = ospf6->vrf_id;
 			nexthops[i].ifindex = nh->ifindex;
 			if (!IN6_IS_ADDR_UNSPECIFIED(&nh->address)) {
 				nexthops[i].gate.ipv6 = nh->address;
@@ -332,11 +331,12 @@ int ospf6_route_get_first_nh_index(struct ospf6_route *route)
 	struct ospf6_nexthop *nh;
 
 	if (route) {
-		if ((nh = (struct ospf6_nexthop *)listhead(route->nh_list)))
-			return (nh->ifindex);
+		nh = listnode_head(route->nh_list);
+		if (nh)
+			return nh->ifindex;
 	}
 
-	return (-1);
+	return -1;
 }
 
 int ospf6_nexthop_cmp(struct ospf6_nexthop *a, struct ospf6_nexthop *b)
@@ -1042,6 +1042,11 @@ void ospf6_route_show(struct vty *vty, struct ospf6_route *route)
 	struct listnode *node;
 	struct ospf6_nexthop *nh;
 
+	if (ospf6 == NULL) {
+		vty_out(vty, "OSPFv3 is not running\n");
+		return;
+	}
+
 	monotime(&now);
 	timersub(&now, &route->changed, &res);
 	timerstring(&res, duration, sizeof(duration));
@@ -1060,7 +1065,7 @@ void ospf6_route_show(struct vty *vty, struct ospf6_route *route)
 	for (ALL_LIST_ELEMENTS_RO(route->nh_list, node, nh)) {
 		/* nexthop */
 		inet_ntop(AF_INET6, &nh->address, nexthop, sizeof(nexthop));
-		ifname = ifindex2ifname(nh->ifindex, VRF_DEFAULT);
+		ifname = ifindex2ifname(nh->ifindex, ospf6->vrf_id);
 
 		if (!i) {
 			vty_out(vty, "%c%1s %2s %-30s %-25s %6.*s %s\n",
@@ -1085,6 +1090,11 @@ void ospf6_route_show_detail(struct vty *vty, struct ospf6_route *route)
 	char duration[64];
 	struct listnode *node;
 	struct ospf6_nexthop *nh;
+
+	if (ospf6 == NULL) {
+		vty_out(vty, "OSPFv3 is not running\n");
+		return;
+	}
 
 	monotime(&now);
 
@@ -1160,7 +1170,7 @@ void ospf6_route_show_detail(struct vty *vty, struct ospf6_route *route)
 	for (ALL_LIST_ELEMENTS_RO(route->nh_list, node, nh)) {
 		/* nexthop */
 		inet_ntop(AF_INET6, &nh->address, nexthop, sizeof(nexthop));
-		ifname = ifindex2ifname(nh->ifindex, VRF_DEFAULT);
+		ifname = ifindex2ifname(nh->ifindex, ospf6->vrf_id);
 		vty_out(vty, "  %s %.*s\n", nexthop, IFNAMSIZ, ifname);
 	}
 	vty_out(vty, "\n");

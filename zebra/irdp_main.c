@@ -56,7 +56,7 @@
 #include "zebra/interface.h"
 #include "zebra/rtadv.h"
 #include "zebra/rib.h"
-#include "zebra/zserv.h"
+#include "zebra/zebra_router.h"
 #include "zebra/redistribute.h"
 #include "zebra/irdp.h"
 #include "zebra/zebra_errors.h"
@@ -66,6 +66,7 @@
 #include "if.h"
 #include "sockunion.h"
 #include "log.h"
+#include "network.h"
 
 /* GLOBAL VARS */
 
@@ -82,7 +83,7 @@ int irdp_sock_init(void)
 	int save_errno;
 	int sock;
 
-	frr_elevate_privs(&zserv_privs) {
+	frr_with_privs(&zserv_privs) {
 
 		sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 		save_errno = errno;
@@ -113,7 +114,7 @@ int irdp_sock_init(void)
 	};
 
 	t_irdp_raw = NULL;
-	thread_add_read(zebrad.master, irdp_read_raw, NULL, sock, &t_irdp_raw);
+	thread_add_read(zrouter.master, irdp_read_raw, NULL, sock, &t_irdp_raw);
 
 	return sock;
 }
@@ -190,7 +191,7 @@ static void irdp_send(struct interface *ifp, struct prefix *p, struct stream *s)
 
 	if (irdp->flags & IF_DEBUG_MESSAGES)
 		zlog_debug("IRDP: TX Advert on %s %s Holdtime=%d Preference=%d",
-			   ifp->name, prefix2str(p, buf, sizeof buf),
+			   ifp->name, prefix2str(p, buf, sizeof(buf)),
 			   irdp->flags & IF_SHUTDOWN ? 0 : irdp->Lifetime,
 			   get_pref(irdp, p));
 
@@ -233,7 +234,7 @@ int irdp_send_thread(struct thread *t_advert)
 		}
 
 	tmp = irdp->MaxAdvertInterval - irdp->MinAdvertInterval;
-	timer = random() % (tmp + 1);
+	timer = frr_weak_random() % (tmp + 1);
 	timer = irdp->MinAdvertInterval + timer;
 
 	if (irdp->irdp_sent < MAX_INITIAL_ADVERTISEMENTS
@@ -241,11 +242,11 @@ int irdp_send_thread(struct thread *t_advert)
 		timer = MAX_INITIAL_ADVERT_INTERVAL;
 
 	if (irdp->flags & IF_DEBUG_MISC)
-		zlog_debug("IRDP: New timer for %s set to %u\n", ifp->name,
+		zlog_debug("IRDP: New timer for %s set to %u", ifp->name,
 			   timer);
 
 	irdp->t_advertise = NULL;
-	thread_add_timer(zebrad.master, irdp_send_thread, ifp, timer,
+	thread_add_timer(zrouter.master, irdp_send_thread, ifp, timer,
 			 &irdp->t_advertise);
 	return 0;
 }
@@ -303,10 +304,10 @@ void process_solicit(struct interface *ifp)
 		thread_cancel(irdp->t_advertise);
 	irdp->t_advertise = NULL;
 
-	timer = (random() % MAX_RESPONSE_DELAY) + 1;
+	timer = (frr_weak_random() % MAX_RESPONSE_DELAY) + 1;
 
 	irdp->t_advertise = NULL;
-	thread_add_timer(zebrad.master, irdp_send_thread, ifp, timer,
+	thread_add_timer(zrouter.master, irdp_send_thread, ifp, timer,
 			 &irdp->t_advertise);
 }
 

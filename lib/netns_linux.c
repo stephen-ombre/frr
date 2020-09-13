@@ -51,7 +51,7 @@ static struct ns *ns_lookup_name_internal(const char *name);
 
 RB_GENERATE(ns_head, ns, entry, ns_compare)
 
-struct ns_head ns_tree = RB_INITIALIZER(&ns_tree);
+static struct ns_head ns_tree = RB_INITIALIZER(&ns_tree);
 
 static struct ns *default_ns;
 static int ns_current_ns_fd;
@@ -74,7 +74,8 @@ static inline int ns_map_compare(const struct ns_map_nsid *a,
 RB_HEAD(ns_map_nsid_head, ns_map_nsid);
 RB_PROTOTYPE(ns_map_nsid_head, ns_map_nsid, id_entry, ns_map_compare);
 RB_GENERATE(ns_map_nsid_head, ns_map_nsid, id_entry, ns_map_compare);
-struct ns_map_nsid_head ns_map_nsid_list = RB_INITIALIZER(&ns_map_nsid_list);
+static struct ns_map_nsid_head ns_map_nsid_list =
+		RB_INITIALIZER(&ns_map_nsid_list);
 
 static ns_id_t ns_id_external_numbering;
 
@@ -123,7 +124,7 @@ static int have_netns(void)
 }
 
 /* Holding NS hooks  */
-struct ns_master {
+static struct ns_master {
 	int (*ns_new_hook)(struct ns *ns);
 	int (*ns_delete_hook)(struct ns *ns);
 	int (*ns_enable_hook)(struct ns *ns);
@@ -344,8 +345,7 @@ void ns_delete(struct ns *ns)
 	// if_terminate (&ns->iflist);
 
 	RB_REMOVE(ns_head, &ns_tree, ns);
-	if (ns->name)
-		XFREE(MTYPE_NS_NAME, ns->name);
+	XFREE(MTYPE_NS_NAME, ns->name);
 
 	XFREE(MTYPE_NS, ns);
 }
@@ -371,7 +371,7 @@ int ns_enable(struct ns *ns, void (*func)(ns_id_t, void *))
 
 void ns_disable(struct ns *ns)
 {
-	return ns_disable_internal(ns);
+	ns_disable_internal(ns);
 }
 
 struct ns *ns_lookup(ns_id_t ns_id)
@@ -431,7 +431,7 @@ char *ns_netns_pathname(struct vty *vty, const char *name)
 		/* relevant pathname */
 		char tmp_name[PATH_MAX];
 
-		snprintf(tmp_name, PATH_MAX, "%s/%s", NS_RUN_DIR, name);
+		snprintf(tmp_name, sizeof(tmp_name), "%s/%s", NS_RUN_DIR, name);
 		result = realpath(tmp_name, pathname);
 	}
 

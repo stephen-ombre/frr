@@ -30,21 +30,26 @@
 #include "vty.h"
 #include "command.h"
 #include "version.h"
-#include "memory_vty.h"
+#include "lib_vty.h"
+#include "log_vty.h"
 #include "zclient.h"
-#include "log_int.h"
 #include "module.h"
 #include "network.h"
 #include "lib_errors.h"
 #include "db.h"
 #include "northbound_cli.h"
+#include "northbound_db.h"
+#include "debug.h"
+#include "frrcu.h"
+#include "frr_pthread.h"
+#include "defaults.h"
 
 DEFINE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
 DEFINE_KOOH(frr_early_fini, (), ())
 DEFINE_KOOH(frr_fini, (), ())
 
 const char frr_sysconfdir[] = SYSCONFDIR;
-const char frr_vtydir[] = DAEMON_VTY_DIR;
+char frr_vtydir[256];
 #ifdef HAVE_SQLITE3
 const char frr_dbdir[] = DAEMON_DB_DIR;
 #endif
@@ -55,13 +60,13 @@ char frr_protonameinst[256] = "NONE";
 
 char config_default[512];
 char frr_zclientpath[256];
-static char pidfile_default[512];
+static char pidfile_default[1024];
 #ifdef HAVE_SQLITE3
 static char dbfile_default[512];
 #endif
-static char vtypath_default[256];
+static char vtypath_default[512];
 
-bool debug_memstats_at_exit = 0;
+bool debug_memstats_at_exit = false;
 static bool nodetach_term, nodetach_daemon;
 
 static char comb_optstr[256];
@@ -79,8 +84,8 @@ static void opt_extend(const struct optspec *os)
 {
 	const struct option *lo;
 
-	strcat(comb_optstr, os->optstr);
-	strcat(comb_helpstr, os->helpstr);
+	strlcat(comb_optstr, os->optstr, sizeof(comb_optstr));
+	strlcat(comb_helpstr, os->helpstr, sizeof(comb_helpstr));
 	for (lo = os->longopts; lo->name; lo++)
 		memcpy(comb_next_lo++, lo, sizeof(*lo));
 }
@@ -92,24 +97,30 @@ static void opt_extend(const struct optspec *os)
 #define OPTION_LOGLEVEL  1004
 #define OPTION_TCLI      1005
 #define OPTION_DB_FILE   1006
+#define OPTION_LOGGING   1007
 
 static const struct option lo_always[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"version", no_argument, NULL, 'v'},
 	{"daemon", no_argument, NULL, 'd'},
 	{"module", no_argument, NULL, 'M'},
+	{"profile", required_argument, NULL, 'F'},
+	{"pathspace", required_argument, NULL, 'N'},
 	{"vty_socket", required_argument, NULL, OPTION_VTYSOCK},
 	{"moduledir", required_argument, NULL, OPTION_MODULEDIR},
 	{"log", required_argument, NULL, OPTION_LOG},
 	{"log-level", required_argument, NULL, OPTION_LOGLEVEL},
 	{"tcli", no_argument, NULL, OPTION_TCLI},
+	{"command-log-always", no_argument, NULL, OPTION_LOGGING},
 	{NULL}};
 static const struct optspec os_always = {
-	"hvdM:",
+	"hvdM:F:N:",
 	"  -h, --help         Display this help and exit\n"
 	"  -v, --version      Print program version\n"
 	"  -d, --daemon       Runs in daemon mode\n"
 	"  -M, --module       Load specified module\n"
+	"  -F, --profile      Use specified configuration profile\n"
+	"  -N, --pathspace    Insert prefix into config & socket paths\n"
 	"      --vty_socket   Override vty socket path\n"
 	"      --moduledir    Override modules directory\n"
 	"      --log          Set Logging to stdout, syslog, or file:<name>\n"
@@ -124,18 +135,16 @@ static const struct option lo_cfg_pid_dry[] = {
 #ifdef HAVE_SQLITE3
 	{"db_file", required_argument, NULL, OPTION_DB_FILE},
 #endif
-	{"pathspace", required_argument, NULL, 'N'},
 	{"dryrun", no_argument, NULL, 'C'},
 	{"terminal", no_argument, NULL, 't'},
 	{NULL}};
 static const struct optspec os_cfg_pid_dry = {
-	"f:i:CtN:",
+	"f:i:Ct",
 	"  -f, --config_file  Set configuration file name\n"
 	"  -i, --pid_file     Set process identifier file name\n"
 #ifdef HAVE_SQLITE3
 	"      --db_file      Set database file name\n"
 #endif
-	"  -N, --pathspace    Insert prefix into config & socket paths\n"
 	"  -C, --dryrun       Check configuration for validity and exit\n"
 	"  -t, --terminal     Open terminal session on stdio\n"
 	"  -d -t              Daemonize after terminal session ends\n",
@@ -168,14 +177,13 @@ static const struct optspec os_user = {"u:g:",
 				       "  -g, --group        Group to run as\n",
 				       lo_user};
 
-
 bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 		      const char *path)
 {
 	memset(sa, 0, sizeof(*sa));
 
 	if (!path)
-		path = ZEBRA_SERV_PATH;
+		path = frr_zclientpath;
 
 	if (!strncmp(path, ZAPI_TCP_PATHNAME, strlen(ZAPI_TCP_PATHNAME))) {
 		/* note: this functionality is disabled at bottom */
@@ -281,6 +289,11 @@ bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 
 static struct frr_daemon_info *di = NULL;
 
+void frr_init_vtydir(void)
+{
+	snprintf(frr_vtydir, sizeof(frr_vtydir), DAEMON_VTY_DIR, "", "");
+}
+
 void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 {
 	di = daemon;
@@ -303,10 +316,13 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 	if (di->flags & FRR_DETACH_LATER)
 		nodetach_daemon = true;
 
+	frr_init_vtydir();
 	snprintf(config_default, sizeof(config_default), "%s/%s.conf",
 		 frr_sysconfdir, di->name);
 	snprintf(pidfile_default, sizeof(pidfile_default), "%s/%s.pid",
 		 frr_vtydir, di->name);
+	snprintf(frr_zclientpath, sizeof(frr_zclientpath),
+		 ZEBRA_SERV_PATH, "", "");
 #ifdef HAVE_SQLITE3
 	snprintf(dbfile_default, sizeof(dbfile_default), "%s/%s.db",
 		 frr_dbdir, di->name);
@@ -314,8 +330,6 @@ void frr_preinit(struct frr_daemon_info *daemon, int argc, char **argv)
 
 	strlcpy(frr_protoname, di->logname, sizeof(frr_protoname));
 	strlcpy(frr_protonameinst, di->logname, sizeof(frr_protonameinst));
-
-	strlcpy(frr_zclientpath, ZEBRA_SERV_PATH, sizeof(frr_zclientpath));
 
 	di->cli_mode = FRR_CLI_CLASSIC;
 }
@@ -368,7 +382,7 @@ static int frr_opt(int opt)
 		exit(0);
 		break;
 	case 'd':
-		di->daemon_mode = 1;
+		di->daemon_mode = true;
 		break;
 	case 'M':
 		oc = XMALLOC(MTYPE_TMP, sizeof(*oc));
@@ -376,6 +390,32 @@ static int frr_opt(int opt)
 		oc->next = NULL;
 		*modnext = oc;
 		modnext = &oc->next;
+		break;
+	case 'F':
+		if (!frr_defaults_profile_valid(optarg)) {
+			const char **p;
+			FILE *ofd = stderr;
+
+			if (!strcmp(optarg, "help"))
+				ofd = stdout;
+			else
+				fprintf(stderr,
+					"The \"%s\" configuration profile is not valid for this FRR version.\n",
+					optarg);
+
+			fprintf(ofd, "Available profiles are:\n");
+			for (p = frr_defaults_profiles; *p; p++)
+				fprintf(ofd, "%s%s\n",
+					strcmp(*p, DFLT_NAME) ? "   " : " * ",
+					*p);
+
+			if (ofd == stdout)
+				exit(0);
+			fprintf(ofd, "\n");
+			errors++;
+			break;
+		}
+		frr_defaults_profile_set(optarg);
 		break;
 	case 'i':
 		if (di->flags & FRR_NO_CFG_PID_DRY)
@@ -388,14 +428,16 @@ static int frr_opt(int opt)
 		di->config_file = optarg;
 		break;
 	case 'N':
-		if (di->flags & FRR_NO_CFG_PID_DRY)
-			return 1;
 		if (di->pathspace) {
 			fprintf(stderr,
 				"-N/--pathspace option specified more than once!\n");
 			errors++;
 			break;
 		}
+		if (di->zpathspace)
+			fprintf(stderr,
+				"-N option overridden by -z for zebra named socket path\n");
+
 		if (strchr(optarg, '/') || strchr(optarg, '.')) {
 			fprintf(stderr,
 				"slashes or dots are not permitted in the --pathspace option.\n");
@@ -403,6 +445,14 @@ static int frr_opt(int opt)
 			break;
 		}
 		di->pathspace = optarg;
+
+		if (!di->zpathspace)
+			snprintf(frr_zclientpath, sizeof(frr_zclientpath),
+				 ZEBRA_SERV_PATH, "/", di->pathspace);
+		snprintf(frr_vtydir, sizeof(frr_vtydir), DAEMON_VTY_DIR, "/",
+			 di->pathspace);
+		snprintf(pidfile_default, sizeof(pidfile_default), "%s/%s.pid",
+			 frr_vtydir, di->name);
 		break;
 #ifdef HAVE_SQLITE3
 	case OPTION_DB_FILE:
@@ -414,14 +464,18 @@ static int frr_opt(int opt)
 	case 'C':
 		if (di->flags & FRR_NO_CFG_PID_DRY)
 			return 1;
-		di->dryrun = 1;
+		di->dryrun = true;
 		break;
 	case 't':
 		if (di->flags & FRR_NO_CFG_PID_DRY)
 			return 1;
-		di->terminal = 1;
+		di->terminal = true;
 		break;
 	case 'z':
+		di->zpathspace = true;
+		if (di->pathspace)
+			fprintf(stderr,
+				"-z option overrides -N option for zebra named socket path\n");
 		if (di->flags & FRR_NO_ZCLIENT)
 			return 1;
 		strlcpy(frr_zclientpath, optarg, sizeof(frr_zclientpath));
@@ -493,6 +547,9 @@ static int frr_opt(int opt)
 		break;
 	case OPTION_LOGLEVEL:
 		di->early_loglevel = optarg;
+		break;
+	case OPTION_LOGGING:
+		di->log_always = true;
 		break;
 	default:
 		return 1;
@@ -570,12 +627,14 @@ struct thread_master *frr_init(void)
 {
 	struct option_chain *oc;
 	struct frrmod_runtime *module;
+	struct zprivs_ids_t ids;
 	char moderr[256];
 	char p_instance[16] = "", p_pathspace[256] = "";
 	const char *dir;
 	dir = di->module_path ? di->module_path : frr_moduledir;
 
 	srandom(time(NULL));
+	frr_defaults_apply();
 
 	if (di->instance) {
 		snprintf(frr_protonameinst, sizeof(frr_protonameinst), "%s[%u]",
@@ -588,17 +647,18 @@ struct thread_master *frr_init(void)
 
 	snprintf(config_default, sizeof(config_default), "%s%s%s%s.conf",
 		 frr_sysconfdir, p_pathspace, di->name, p_instance);
-	snprintf(pidfile_default, sizeof(pidfile_default), "%s/%s%s%s.pid",
-		 frr_vtydir, p_pathspace, di->name, p_instance);
+	snprintf(pidfile_default, sizeof(pidfile_default), "%s/%s%s.pid",
+		 frr_vtydir, di->name, p_instance);
 #ifdef HAVE_SQLITE3
 	snprintf(dbfile_default, sizeof(dbfile_default), "%s/%s%s%s.db",
 		 frr_dbdir, p_pathspace, di->name, p_instance);
 #endif
 
 	zprivs_preinit(di->privs);
+	zprivs_get_ids(&ids);
 
-	openzlog(di->progname, di->logname, di->instance,
-		 LOG_CONS | LOG_NDELAY | LOG_PID, LOG_DAEMON);
+	zlog_init(di->progname, di->logname, di->instance,
+		  ids.uid_normal, ids.gid_normal);
 
 	command_setup_early_logging(di->early_logging, di->early_loglevel);
 
@@ -646,14 +706,24 @@ struct thread_master *frr_init(void)
 	else
 		cmd_init(1);
 
-	vty_init(master);
-	memory_init();
+	vty_init(master, di->log_always);
+	lib_cmd_init();
+
+	frr_pthread_init();
 
 	log_ref_init();
+	log_ref_vty_init();
 	lib_error_init();
 
-	yang_init();
-	nb_init(master, di->yang_modules, di->n_yang_modules);
+	yang_init(true);
+
+	debug_init_cli();
+
+	nb_init(master, di->yang_modules, di->n_yang_modules, true);
+	if (nb_db_init() != NB_OK)
+		flog_warn(EC_LIB_NB_DATABASE,
+			  "%s: failed to initialize northbound database",
+			  __func__);
 
 	return master;
 }
@@ -810,22 +880,38 @@ static void frr_daemonize(void)
  */
 static int frr_config_read_in(struct thread *t)
 {
-	if (!vty_read_config(NULL, di->config_file, config_default) &&
-	    di->backup_config_file) {
+	if (!vty_read_config(vty_shared_candidate_config, di->config_file,
+			     config_default)
+	    && di->backup_config_file) {
 		char *orig = XSTRDUP(MTYPE_TMP, host_config_get());
 
 		zlog_info("Attempting to read backup config file: %s specified",
 			  di->backup_config_file);
-		vty_read_config(NULL, di->backup_config_file, config_default);
+		vty_read_config(vty_shared_candidate_config,
+				di->backup_config_file, config_default);
 
 		host_config_set(orig);
 		XFREE(MTYPE_TMP, orig);
 	}
 
 	/*
-	 * Update the shared candidate after reading the startup configuration.
+	 * Automatically commit the candidate configuration after
+	 * reading the configuration file.
 	 */
-	nb_config_replace(vty_shared_candidate_config, running_config, true);
+	if (frr_get_cli_mode() == FRR_CLI_TRANSACTIONAL) {
+		struct nb_context context = {};
+		char errmsg[BUFSIZ] = {0};
+		int ret;
+
+		context.client = NB_CLIENT_CLI;
+		ret = nb_candidate_commit(&context, vty_shared_candidate_config,
+					  true, "Read configuration file", NULL,
+					  errmsg, sizeof(errmsg));
+		if (ret != NB_OK && ret != NB_ERR_NO_CHANGES)
+			zlog_err(
+				"%s: failed to read configuration file: %s (%s)",
+				__func__, nb_err_name(ret), errmsg);
+	}
 
 	return 0;
 }
@@ -851,6 +937,7 @@ void frr_config_fork(void)
 	if (!di->pid_file)
 		di->pid_file = pidfile_default;
 	pid_output(di->pid_file);
+	zlog_tls_buffer_init();
 }
 
 static void frr_vty_serv(void)
@@ -861,9 +948,7 @@ static void frr_vty_serv(void)
 		const char *dir;
 		char defvtydir[256];
 
-		snprintf(defvtydir, sizeof(defvtydir), "%s%s%s", frr_vtydir,
-			 di->pathspace ? "/" : "",
-			 di->pathspace ? di->pathspace : "");
+		snprintf(defvtydir, sizeof(defvtydir), "%s", frr_vtydir);
 
 		dir = di->vty_sock_path ? di->vty_sock_path : defvtydir;
 
@@ -1004,7 +1089,7 @@ void frr_run(struct thread_master *master)
 	}
 
 	/* end fixed stderr startup logging */
-	zlog_startup_stderr = false;
+	zlog_startup_end();
 
 	struct thread thread;
 	while (thread_fetch(master, &thread))
@@ -1024,7 +1109,6 @@ void frr_fini(void)
 
 	hook_call(frr_fini);
 
-	/* memory_init -> nothing needed */
 	vty_terminate();
 	cmd_terminate();
 	nb_terminate();
@@ -1033,12 +1117,15 @@ void frr_fini(void)
 	db_close();
 #endif
 	log_ref_fini();
+	frr_pthread_finish();
 	zprivs_terminate(di->privs);
 	/* signal_init -> nothing needed */
 	thread_master_free(master);
 	master = NULL;
-	closezlog();
+	zlog_tls_buffer_fini();
+	zlog_fini();
 	/* frrmod_init -> nothing needed / hooks */
+	rcu_shutdown();
 
 	if (!debug_memstats_at_exit)
 		return;

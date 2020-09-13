@@ -69,6 +69,8 @@ struct eigrp_metrics {
 };
 
 struct eigrp {
+	vrf_id_t vrf_id;
+
 	uint16_t AS;	 /* Autonomous system number */
 	uint16_t vrid;       /* Virtual Router ID */
 	uint8_t k_values[6]; /*Array for K values configuration*/
@@ -85,7 +87,7 @@ struct eigrp {
 	struct list *eiflist;		  /* eigrp interfaces */
 	uint8_t passive_interface_default; /* passive-interface default */
 
-	unsigned int fd;
+	int fd;
 	unsigned int maxsndbuflen;
 
 	uint32_t sequence_number; /*Global EIGRP sequence number*/
@@ -174,13 +176,15 @@ struct eigrp_interface {
 
 	/* To which multicast groups do we currently belong? */
 
+	uint32_t curr_bandwidth;
+	uint32_t curr_mtu;
 
 	uint8_t multicast_memberships;
 
 	/* EIGRP Network Type. */
 	uint8_t type;
 
-	struct prefix *address;      /* Interface prefix */
+	struct prefix address;      /* Interface prefix */
 
 	/* Neighbor information. */
 	struct list *nbrs; /* EIGRP Neighbor List */
@@ -409,7 +413,6 @@ struct TLV_IPv4_Internal_type {
 
 	uint8_t prefix_length;
 
-	unsigned char destination_part[4];
 	struct in_addr destination;
 } __attribute__((packed));
 

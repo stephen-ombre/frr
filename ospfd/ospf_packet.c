@@ -33,7 +33,9 @@
 #include "log.h"
 #include "sockopt.h"
 #include "checksum.h"
+#ifdef CRYPTO_INTERNAL
 #include "md5.h"
+#endif
 #include "vrf.h"
 #include "lib_errors.h"
 
@@ -51,6 +53,7 @@
 #include "ospfd/ospf_flood.h"
 #include "ospfd/ospf_dump.h"
 #include "ospfd/ospf_errors.h"
+#include "ospfd/ospf_zebra.h"
 
 /*
  * OSPF Fragmentation / fragmented writes
@@ -130,7 +133,7 @@ static int ospf_auth_type(struct ospf_interface *oi)
 	return auth_type;
 }
 
-struct ospf_packet *ospf_packet_new(size_t size)
+static struct ospf_packet *ospf_packet_new(size_t size)
 {
 	struct ospf_packet *new;
 
@@ -229,22 +232,8 @@ void ospf_fifo_free(struct ospf_fifo *fifo)
 	XFREE(MTYPE_OSPF_FIFO, fifo);
 }
 
-void ospf_packet_add(struct ospf_interface *oi, struct ospf_packet *op)
+static void ospf_packet_add(struct ospf_interface *oi, struct ospf_packet *op)
 {
-	if (!oi->obuf) {
-		flog_err(
-			EC_OSPF_PKT_PROCESS,
-			"ospf_packet_add(interface %s in state %d [%s], packet type %s, "
-			"destination %s) called with NULL obuf, ignoring "
-			"(please report this bug)!\n",
-			IF_NAME(oi), oi->state,
-			lookup_msg(ospf_ism_state_msg, oi->state, NULL),
-			lookup_msg(ospf_packet_type_str,
-				   stream_getc_from(op->s, 1), NULL),
-			inet_ntoa(op->dst));
-		return;
-	}
-
 	/* Add packet to end of queue. */
 	ospf_fifo_push(oi->obuf, op);
 
@@ -255,20 +244,6 @@ void ospf_packet_add(struct ospf_interface *oi, struct ospf_packet *op)
 static void ospf_packet_add_top(struct ospf_interface *oi,
 				struct ospf_packet *op)
 {
-	if (!oi->obuf) {
-		flog_err(
-			EC_OSPF_PKT_PROCESS,
-			"ospf_packet_add(interface %s in state %d [%s], packet type %s, "
-			"destination %s) called with NULL obuf, ignoring "
-			"(please report this bug)!\n",
-			IF_NAME(oi), oi->state,
-			lookup_msg(ospf_ism_state_msg, oi->state, NULL),
-			lookup_msg(ospf_packet_type_str,
-				   stream_getc_from(op->s, 1), NULL),
-			inet_ntoa(op->dst));
-		return;
-	}
-
 	/* Add packet to head of queue. */
 	ospf_fifo_push_head(oi->obuf, op);
 
@@ -276,7 +251,7 @@ static void ospf_packet_add_top(struct ospf_interface *oi,
 	/* ospf_fifo_debug (oi->obuf); */
 }
 
-void ospf_packet_delete(struct ospf_interface *oi)
+static void ospf_packet_delete(struct ospf_interface *oi)
 {
 	struct ospf_packet *op;
 
@@ -286,7 +261,7 @@ void ospf_packet_delete(struct ospf_interface *oi)
 		ospf_packet_free(op);
 }
 
-struct ospf_packet *ospf_packet_dup(struct ospf_packet *op)
+static struct ospf_packet *ospf_packet_dup(struct ospf_packet *op)
 {
 	struct ospf_packet *new;
 
@@ -332,7 +307,11 @@ static unsigned int ospf_packet_max(struct ospf_interface *oi)
 static int ospf_check_md5_digest(struct ospf_interface *oi,
 				 struct ospf_header *ospfh)
 {
+#ifdef CRYPTO_OPENSSL
+	EVP_MD_CTX *ctx;
+#elif CRYPTO_INTERNAL
 	MD5_CTX ctx;
+#endif
 	unsigned char digest[OSPF_AUTH_MD5_SIZE];
 	struct crypt_key *ck;
 	struct ospf_neighbor *nbr;
@@ -361,11 +340,21 @@ static int ospf_check_md5_digest(struct ospf_interface *oi,
 	}
 
 	/* Generate a digest for the ospf packet - their digest + our digest. */
+#ifdef CRYPTO_OPENSSL
+	unsigned int md5_size = OSPF_AUTH_MD5_SIZE;
+	ctx = EVP_MD_CTX_new();
+	EVP_DigestInit(ctx, EVP_md5());
+	EVP_DigestUpdate(ctx, ospfh, length);
+	EVP_DigestUpdate(ctx, ck->auth_key, OSPF_AUTH_MD5_SIZE);
+	EVP_DigestFinal(ctx, digest, &md5_size);
+	EVP_MD_CTX_free(ctx);
+#elif CRYPTO_INTERNAL
 	memset(&ctx, 0, sizeof(ctx));
 	MD5Init(&ctx);
 	MD5Update(&ctx, ospfh, length);
 	MD5Update(&ctx, ck->auth_key, OSPF_AUTH_MD5_SIZE);
 	MD5Final(digest, &ctx);
+#endif
 
 	/* compare the two */
 	if (memcmp((caddr_t)ospfh + length, digest, OSPF_AUTH_MD5_SIZE)) {
@@ -389,7 +378,11 @@ static int ospf_make_md5_digest(struct ospf_interface *oi,
 {
 	struct ospf_header *ospfh;
 	unsigned char digest[OSPF_AUTH_MD5_SIZE] = {0};
+#ifdef CRYPTO_OPENSSL
+	EVP_MD_CTX *ctx;
+#elif CRYPTO_INTERNAL
 	MD5_CTX ctx;
+#endif
 	void *ibuf;
 	uint32_t t;
 	struct crypt_key *ck;
@@ -422,11 +415,21 @@ static int ospf_make_md5_digest(struct ospf_interface *oi,
 	}
 
 	/* Generate a digest for the entire packet + our secret key. */
+#ifdef CRYPTO_OPENSSL
+	unsigned int md5_size = OSPF_AUTH_MD5_SIZE;
+	ctx = EVP_MD_CTX_new();
+	EVP_DigestInit(ctx, EVP_md5());
+	EVP_DigestUpdate(ctx, ibuf, ntohs(ospfh->length));
+	EVP_DigestUpdate(ctx, auth_key, OSPF_AUTH_MD5_SIZE);
+	EVP_DigestFinal(ctx, digest, &md5_size);
+	EVP_MD_CTX_free(ctx);
+#elif CRYPTO_INTERNAL
 	memset(&ctx, 0, sizeof(ctx));
 	MD5Init(&ctx);
 	MD5Update(&ctx, ibuf, ntohs(ospfh->length));
 	MD5Update(&ctx, auth_key, OSPF_AUTH_MD5_SIZE);
 	MD5Final(digest, &ctx);
+#endif
 
 	/* Append md5 digest to the end of the stream. */
 	stream_put(op->s, digest, OSPF_AUTH_MD5_SIZE);
@@ -602,23 +605,15 @@ static void ospf_write_frags(int fd, struct ospf_packet *op, struct ip *iph,
 		if (ret < 0)
 			flog_err(
 				EC_LIB_SOCKET,
-				"*** ospf_write_frags: sendmsg failed to %s,"
-				" id %d, off %d, len %d, mtu %u failed with %s",
+				"*** ospf_write_frags: sendmsg failed to %s, id %d, off %d, len %d, mtu %u failed with %s",
 				inet_ntoa(iph->ip_dst), iph->ip_id, iph->ip_off,
 				iph->ip_len, mtu, safe_strerror(errno));
 
 		if (IS_DEBUG_OSPF_PACKET(type - 1, SEND)) {
 			zlog_debug(
-				"ospf_write_frags: sent id %d, off %d, len %d to %s\n",
+				"ospf_write_frags: sent id %d, off %d, len %d to %s",
 				iph->ip_id, iph->ip_off, iph->ip_len,
 				inet_ntoa(iph->ip_dst));
-			if (IS_DEBUG_OSPF_PACKET(type - 1, DETAIL)) {
-				zlog_debug(
-					"-----------------IP Header Dump----------------------");
-				ospf_ip_header_dump(iph);
-				zlog_debug(
-					"-----------------------------------------------------");
-			}
 		}
 
 		iph->ip_off += offset;
@@ -660,12 +655,17 @@ static int ospf_write(struct thread *thread)
 	struct in_pktinfo *pi;
 #endif
 
-	ospf->t_write = NULL;
+	if (ospf->fd < 0 || ospf->oi_running == 0) {
+		if (IS_DEBUG_OSPF_EVENT)
+			zlog_debug(
+				"ospf_write failed to send, fd %d, instance %u"
+				,ospf->fd, ospf->oi_running);
+		return -1;
+	}
 
 	node = listhead(ospf->oi_write_q);
 	assert(node);
 	oi = listgetdata(node);
-	assert(oi);
 
 #ifdef WANT_OSPF_WRITE_FRAGMENT
 	/* seed ipid static with low order bits of time */
@@ -725,7 +725,7 @@ static int ospf_write(struct thread *thread)
 		 * but.. */
 		if (sizeof(struct ip)
 		    > (unsigned int)(iph.ip_hl << OSPF_WRITE_IPHL_SHIFT))
-			iph.ip_hl++; /* we presume sizeof struct ip cant
+			iph.ip_hl++; /* we presume sizeof(struct ip) cant
 					overflow ip_hl.. */
 
 		iph.ip_v = IPVERSION;
@@ -798,16 +798,14 @@ static int ospf_write(struct thread *thread)
 		sockopt_iphdrincl_swab_systoh(&iph);
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"ospf_write to %s, "
-				"id %d, off %d, len %d, interface %s, mtu %u:",
+				"ospf_write to %s, id %d, off %d, len %d, interface %s, mtu %u:",
 				inet_ntoa(iph.ip_dst), iph.ip_id, iph.ip_off,
 				iph.ip_len, oi->ifp->name, oi->ifp->mtu);
 
 		if (ret < 0)
 			flog_err(
 				EC_LIB_SOCKET,
-				"*** sendmsg in ospf_write failed to %s, "
-				"id %d, off %d, len %d, interface %s, mtu %u: %s",
+				"*** sendmsg in ospf_write failed to %s, id %d, off %d, len %d, interface %s, mtu %u: %s",
 				inet_ntoa(iph.ip_dst), iph.ip_id, iph.ip_off,
 				iph.ip_len, oi->ifp->name, oi->ifp->mtu,
 				safe_strerror(errno));
@@ -817,7 +815,6 @@ static int ospf_write(struct thread *thread)
 			if (IS_DEBUG_OSPF_PACKET(type - 1, DETAIL)) {
 				zlog_debug(
 					"-----------------------------------------------------");
-				ospf_ip_header_dump(&iph);
 				stream_set_getp(op->s, 0);
 				ospf_packet_dump(op->s);
 			}
@@ -868,9 +865,7 @@ static int ospf_write(struct thread *thread)
 		/* Setup to service from the head of the queue again */
 		if (!list_isempty(ospf->oi_write_q)) {
 			node = listhead(ospf->oi_write_q);
-			assert(node);
 			oi = listgetdata(node);
-			assert(oi);
 		}
 	}
 
@@ -900,8 +895,7 @@ static void ospf_hello(struct ip *iph, struct ospf_header *ospfh,
 	if (IPV4_ADDR_SAME(&ospfh->router_id, &oi->ospf->router_id)) {
 		if (IS_DEBUG_OSPF_PACKET(ospfh->type - 1, RECV)) {
 			zlog_debug(
-				"ospf_header[%s/%s]: selforiginated, "
-				"dropping.",
+				"ospf_header[%s/%s]: selforiginated, dropping.",
 				lookup_msg(ospf_packet_type_str, ospfh->type,
 					   NULL),
 				inet_ntoa(iph->ip_src));
@@ -930,8 +924,7 @@ static void ospf_hello(struct ip *iph, struct ospf_header *ospfh,
 	/* Compare Router Dead Interval. */
 	if (OSPF_IF_PARAM(oi, v_wait) != ntohl(hello->dead_interval)) {
 		flog_warn(EC_OSPF_PACKET,
-			  "Packet %s [Hello:RECV]: RouterDeadInterval mismatch "
-			  "(expected %u, but received %u).",
+			  "Packet %s [Hello:RECV]: RouterDeadInterval mismatch (expected %u, but received %u).",
 			  inet_ntoa(ospfh->router_id),
 			  OSPF_IF_PARAM(oi, v_wait),
 			  ntohl(hello->dead_interval));
@@ -944,8 +937,7 @@ static void ospf_hello(struct ip *iph, struct ospf_header *ospfh,
 		    != ntohs(hello->hello_interval)) {
 			flog_warn(
 				EC_OSPF_PACKET,
-				"Packet %s [Hello:RECV]: HelloInterval mismatch "
-				"(expected %u, but received %u).",
+				"Packet %s [Hello:RECV]: HelloInterval mismatch (expected %u, but received %u).",
 				inet_ntoa(ospfh->router_id),
 				OSPF_IF_PARAM(oi, v_hello),
 				ntohs(hello->hello_interval));
@@ -1077,7 +1069,8 @@ static void ospf_hello(struct ip *iph, struct ospf_header *ospfh,
 	/* If neighbor itself declares DR and no BDR exists,
 	   cause event BackupSeen */
 	if (IPV4_ADDR_SAME(&nbr->address.u.prefix4, &hello->d_router))
-		if (hello->bd_router.s_addr == 0 && oi->state == ISM_Waiting)
+		if (hello->bd_router.s_addr == INADDR_ANY
+		    && oi->state == ISM_Waiting)
 			OSPF_ISM_EVENT_SCHEDULE(oi, ISM_BackupSeen);
 
 	/* neighbor itself declares BDR. */
@@ -1215,8 +1208,7 @@ static void ospf_db_desc_proc(struct stream *s, struct ospf_interface *oi,
 			 */
 			if (IS_DEBUG_OSPF_EVENT)
 				zlog_debug(
-					"Packet [DD:RECV]: LSA received Type %d, "
-					"ID %s is not recent.",
+					"Packet [DD:RECV]: LSA received Type %d, ID %s is not recent.",
 					lsah->type, inet_ntoa(lsah->id));
 			ospf_lsa_discard(new);
 		}
@@ -1352,16 +1344,25 @@ static void ospf_db_desc(struct ip *iph, struct ospf_header *ospfh,
 	/* Add event to thread. */
 	OSPF_NSM_EVENT_SCHEDULE(nbr, NSM_PacketReceived);
 
+	if (CHECK_FLAG(oi->ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+		zlog_info(
+			"%s:Packet[DD]: Neighbor %s state is %s, seq_num:0x%x, local:0x%x",
+			(oi->ospf->name) ? oi->ospf->name : VRF_DEFAULT_NAME,
+			inet_ntoa(nbr->router_id),
+			lookup_msg(ospf_nsm_state_msg, nbr->state, NULL),
+			ntohl(dd->dd_seqnum), nbr->dd_seqnum);
+
 	/* Process DD packet by neighbor status. */
 	switch (nbr->state) {
 	case NSM_Down:
 	case NSM_Attempt:
 	case NSM_TwoWay:
-		flog_warn(
-			EC_OSPF_PACKET,
-			"Packet[DD]: Neighbor %s state is %s, packet discarded.",
-			inet_ntoa(nbr->router_id),
-			lookup_msg(ospf_nsm_state_msg, nbr->state, NULL));
+		if (CHECK_FLAG(oi->ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+			zlog_info(
+				"Packet[DD]: Neighbor %s state is %s, packet discarded.",
+				inet_ntoa(nbr->router_id),
+				lookup_msg(ospf_nsm_state_msg, nbr->state,
+					   NULL));
 		break;
 	case NSM_Init:
 		OSPF_NSM_EVENT_EXECUTE(nbr, NSM_TwoWayReceived);
@@ -1395,8 +1396,7 @@ static void ospf_db_desc(struct ip *iph, struct ospf_header *ospfh,
 				if (CHECK_FLAG(oi->ospf->config,
 					       OSPF_LOG_ADJACENCY_DETAIL))
 					zlog_info(
-						"Packet[DD]: Neighbor %s: Initial DBD from Slave, "
-						"ignoring.",
+						"Packet[DD]: Neighbor %s: Initial DBD from Slave, ignoring.",
 						inet_ntoa(nbr->router_id));
 				break;
 			}
@@ -1491,10 +1491,6 @@ static void ospf_db_desc(struct ip *iph, struct ospf_header *ospfh,
 
 		/* Check DD Options. */
 		if (dd->options != nbr->options) {
-#ifdef ORIGINAL_CODING
-			/* Save the new options for debugging */
-			nbr->options = dd->options;
-#endif /* ORIGINAL_CODING */
 			flog_warn(EC_OSPF_PACKET,
 				  "Packet[DD]: Neighbor %s options mismatch.",
 				  inet_ntoa(nbr->router_id));
@@ -1524,8 +1520,7 @@ static void ospf_db_desc(struct ip *iph, struct ospf_header *ospfh,
 			if (IS_SET_DD_MS(nbr->dd_flags)) {
 				/* Master should discard duplicate DD packet. */
 				zlog_info(
-					"Packet[DD]: Neighbor %s duplicated, "
-					"packet discarded.",
+					"Packet[DD]: Neighbor %s duplicated, packet discarded.",
 					inet_ntoa(nbr->router_id));
 				break;
 			} else {
@@ -1845,8 +1840,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 	if (nbr->state < NSM_Exchange) {
 		if (IS_DEBUG_OSPF(nsm, NSM_EVENTS))
 			zlog_debug(
-				"Link State Update: "
-				"Neighbor[%s] state %s is less than Exchange",
+				"Link State Update: Neighbor[%s] state %s is less than Exchange",
 				inet_ntoa(ospfh->router_id),
 				lookup_msg(ospf_nsm_state_msg, nbr->state,
 					   NULL));
@@ -1945,8 +1939,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 				char buf3[INET_ADDRSTRLEN];
 
 				flog_err(EC_OSPF_ROUTER_LSA_MISMATCH,
-					 "Incoming Router-LSA from %s with "
-					 "Adv-ID[%s] != LS-ID[%s]",
+					 "Incoming Router-LSA from %s with Adv-ID[%s] != LS-ID[%s]",
 					 inet_ntop(AF_INET, &ospfh->router_id,
 						   buf1, INET_ADDRSTRLEN),
 					 inet_ntop(AF_INET, &lsa->data->id,
@@ -1956,8 +1949,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 						   INET_ADDRSTRLEN));
 				flog_err(
 					EC_OSPF_DOMAIN_CORRUPT,
-					"OSPF domain compromised by attack or corruption. "
-					"Verify correct operation of -ALL- OSPF routers.");
+					"OSPF domain compromised by attack or corruption. Verify correct operation of -ALL- OSPF routers.");
 				DISCARD_LSA(lsa, 0);
 			}
 
@@ -2029,16 +2021,15 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 			if (current == NULL) {
 				if (IS_DEBUG_OSPF_EVENT)
 					zlog_debug(
-						"LSA[%s]: Previously originated Opaque-LSA,"
-						"not found in the LSDB.",
+						"LSA[%s]: Previously originated Opaque-LSA,not found in the LSDB.",
 						dump_lsa_key(lsa));
 
 				SET_FLAG(lsa->flags, OSPF_LSA_SELF);
 
-				ospf_opaque_self_originated_lsa_received(nbr,
-									 lsa);
 				ospf_ls_ack_send(nbr, lsa);
 
+				ospf_opaque_self_originated_lsa_received(nbr,
+									 lsa);
 				continue;
 			}
 		}
@@ -2098,10 +2089,21 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 
 		if (current == NULL
 		    || (ret = ospf_lsa_more_recent(current, lsa)) < 0) {
+			/* CVE-2017-3224 */
+			if (current && (lsa->data->ls_seqnum ==
+					htonl(OSPF_MAX_SEQUENCE_NUMBER)
+					&& !IS_LSA_MAXAGE(lsa))) {
+				zlog_debug(
+					"Link State Update[%s]: has Max Seq but not MaxAge. Dropping it",
+					dump_lsa_key(lsa));
+
+				DISCARD_LSA(lsa, 4);
+			}
+
 			/* Actual flooding procedure. */
 			if (ospf_flood(oi->ospf, nbr, current, lsa)
 			    < 0) /* Trap NSSA later. */
-				DISCARD_LSA(lsa, 4);
+				DISCARD_LSA(lsa, 5);
 			continue;
 		}
 
@@ -2158,7 +2160,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 							oi->ls_ack,
 							ospf_lsa_lock(lsa));
 
-				DISCARD_LSA(lsa, 5);
+				DISCARD_LSA(lsa, 6);
 			} else
 			/* Acknowledge the receipt of the LSA by sending a
 			   Link State Acknowledgment packet back out the
@@ -2166,7 +2168,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 			   interface. */
 			{
 				ospf_ls_ack_send(nbr, lsa);
-				DISCARD_LSA(lsa, 6);
+				DISCARD_LSA(lsa, 7);
 			}
 		}
 
@@ -2183,7 +2185,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 			if (IS_LSA_MAXAGE(current)
 			    && current->data->ls_seqnum
 				       == htonl(OSPF_MAX_SEQUENCE_NUMBER)) {
-				DISCARD_LSA(lsa, 7);
+				DISCARD_LSA(lsa, 8);
 			}
 			/* Otherwise, as long as the database copy has not been
 			   sent in a
@@ -2206,7 +2208,7 @@ static void ospf_ls_upd(struct ospf *ospf, struct ip *iph,
 					ospf_ls_upd_send_lsa(
 						nbr, current,
 						OSPF_SEND_PACKET_DIRECT);
-				DISCARD_LSA(lsa, 8);
+				DISCARD_LSA(lsa, 9);
 			}
 		}
 	}
@@ -2240,8 +2242,7 @@ static void ospf_ls_ack(struct ip *iph, struct ospf_header *ospfh,
 	if (nbr->state < NSM_Exchange) {
 		if (IS_DEBUG_OSPF(nsm, NSM_EVENTS))
 			zlog_debug(
-				"Link State Acknowledgment: "
-				"Neighbor[%s] state %s is less than Exchange",
+				"Link State Acknowledgment: Neighbor[%s] state %s is less than Exchange",
 				inet_ntoa(ospfh->router_id),
 				lookup_msg(ospf_nsm_state_msg, nbr->state,
 					   NULL));
@@ -2297,18 +2298,18 @@ static struct stream *ospf_recv_packet(struct ospf *ospf, int fd,
 	msgh.msg_control = (caddr_t)buff;
 	msgh.msg_controllen = sizeof(buff);
 
-	ret = stream_recvmsg(ibuf, fd, &msgh, 0, OSPF_MAX_PACKET_SIZE + 1);
+	ret = stream_recvmsg(ibuf, fd, &msgh, MSG_DONTWAIT,
+			     OSPF_MAX_PACKET_SIZE + 1);
 	if (ret < 0) {
-		flog_warn(EC_OSPF_PACKET, "stream_recvmsg failed: %s",
-			  safe_strerror(errno));
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			flog_warn(EC_OSPF_PACKET, "stream_recvmsg failed: %s",
+				  safe_strerror(errno));
 		return NULL;
 	}
-	if ((unsigned int)ret < sizeof(iph)) /* ret must be > 0 now */
-	{
+	if ((unsigned int)ret < sizeof(struct ip)) {
 		flog_warn(
 			EC_OSPF_PACKET,
-			"ospf_recv_packet: discarding runt packet of length %d "
-			"(ip header size is %u)",
+			"ospf_recv_packet: discarding runt packet of length %d (ip header size is %u)",
 			ret, (unsigned int)sizeof(iph));
 		return NULL;
 	}
@@ -2320,7 +2321,7 @@ static struct stream *ospf_recv_packet(struct ospf *ospf, int fd,
 
 	ip_len = iph->ip_len;
 
-#if !defined(GNU_LINUX) && (OpenBSD < 200311) && (__FreeBSD_version < 1000000)
+#if defined(__FreeBSD__) && (__FreeBSD_version < 1000000)
 	/*
 	 * Kernel network code touches incoming IP header parameters,
 	 * before protocol specific processing.
@@ -2354,12 +2355,15 @@ static struct stream *ospf_recv_packet(struct ospf *ospf, int fd,
 	if (ret != ip_len) {
 		flog_warn(
 			EC_OSPF_PACKET,
-			"ospf_recv_packet read length mismatch: ip_len is %d, "
-			"but recvmsg returned %d",
+			"ospf_recv_packet read length mismatch: ip_len is %d, but recvmsg returned %d",
 			ip_len, ret);
 		return NULL;
 	}
 
+	if (IS_DEBUG_OSPF_PACKET(0, RECV))
+		zlog_debug("%s: fd %d(%s) on interface %d(%s)", __func__, fd,
+			   ospf_get_name(ospf), ifindex,
+			   *ifp ? (*ifp)->name : "Unknown");
 	return ibuf;
 }
 
@@ -2585,7 +2589,7 @@ static unsigned ospf_router_lsa_links_examin(struct router_lsa_link *link,
 {
 	unsigned counted_links = 0, thislinklen;
 
-	while (linkbytes) {
+	while (linkbytes >= OSPF_ROUTER_LSA_LINK_SIZE) {
 		thislinklen =
 			OSPF_ROUTER_LSA_LINK_SIZE + 4 * link->m[0].tos_count;
 		if (thislinklen > linkbytes) {
@@ -2623,26 +2627,32 @@ static unsigned ospf_lsa_examin(struct lsa_header *lsah, const uint16_t lsalen,
 		return MSG_NG;
 	}
 	switch (lsah->type) {
-	case OSPF_ROUTER_LSA:
-		/* RFC2328 A.4.2, LSA header + 4 bytes followed by N>=1
-		 * (12+)-byte link blocks */
-		if (headeronly) {
-			ret = (lsalen - OSPF_LSA_HEADER_SIZE
-			       - OSPF_ROUTER_LSA_MIN_SIZE)
-					      % 4
-				      ? MSG_NG
-				      : MSG_OK;
-			break;
-		}
+	case OSPF_ROUTER_LSA: {
+		/*
+		 * RFC2328 A.4.2, LSA header + 4 bytes followed by N>=0
+		 * (12+)-byte link blocks
+		 */
+		size_t linkbytes_len = lsalen - OSPF_LSA_HEADER_SIZE
+				       - OSPF_ROUTER_LSA_MIN_SIZE;
+
+		/*
+		 * LSA link blocks are variable length but always multiples of
+		 * 4; basic sanity check
+		 */
+		if (linkbytes_len % 4 != 0)
+			return MSG_NG;
+
+		if (headeronly)
+			return MSG_OK;
+
 		rlsa = (struct router_lsa *)lsah;
+
 		ret = ospf_router_lsa_links_examin(
 			(struct router_lsa_link *)rlsa->link,
-			lsalen - OSPF_LSA_HEADER_SIZE - 4, /* skip: basic
-							      header, "flags",
-							      0, "# links" */
-			ntohs(rlsa->links)		   /* 16 bits */
-			);
+			linkbytes_len,
+			ntohs(rlsa->links));
 		break;
+	}
 	case OSPF_AS_EXTERNAL_LSA:
 	/* RFC2328 A.4.5, LSA header + 4 bytes followed by N>=1 12-bytes long
 	 * blocks */
@@ -2918,55 +2928,58 @@ static int ospf_verify_header(struct stream *ibuf, struct ospf_interface *oi,
 	return 0;
 }
 
-/* Starting point of packet process function. */
-int ospf_read(struct thread *thread)
+enum ospf_read_return_enum {
+	OSPF_READ_ERROR,
+	OSPF_READ_CONTINUE,
+};
+
+static enum ospf_read_return_enum ospf_read_helper(struct ospf *ospf)
 {
 	int ret;
 	struct stream *ibuf;
-	struct ospf *ospf;
 	struct ospf_interface *oi;
 	struct ip *iph;
 	struct ospf_header *ospfh;
 	uint16_t length;
-	struct interface *ifp = NULL;
 	struct connected *c;
-
-	/* first of all get interface pointer. */
-	ospf = THREAD_ARG(thread);
-
-	/* prepare for next packet. */
-	ospf->t_read = NULL;
-	thread_add_read(master, ospf_read, ospf, ospf->fd, &ospf->t_read);
+	struct interface *ifp = NULL;
 
 	stream_reset(ospf->ibuf);
 	ibuf = ospf_recv_packet(ospf, ospf->fd, &ifp, ospf->ibuf);
 	if (ibuf == NULL)
-		return -1;
-	/* This raw packet is known to be at least as big as its IP header. */
+		return OSPF_READ_ERROR;
 
-	/* Note that there should not be alignment problems with this assignment
-	   because this is at the beginning of the stream data buffer. */
+	/*
+	 * This raw packet is known to be at least as big as its
+	 * IP header. Note that there should not be alignment problems with
+	 * this assignment because this is at the beginning of the
+	 * stream data buffer.
+	 */
 	iph = (struct ip *)STREAM_DATA(ibuf);
-	/* Note that sockopt_iphdrincl_swab_systoh was called in
-	 * ospf_recv_packet. */
-
+	/*
+	 * Note that sockopt_iphdrincl_swab_systoh was called in
+	 * ospf_recv_packet.
+	 */
 	if (ifp == NULL) {
-		/* Handle cases where the platform does not support retrieving
-		   the ifindex,
-		   and also platforms (such as Solaris 8) that claim to support
-		   ifindex
-		   retrieval but do not. */
+		/*
+		 * Handle cases where the platform does not support
+		 * retrieving the ifindex, and also platforms (such as
+		 * Solaris 8) that claim to support ifindex retrieval but do
+		 * not.
+		 */
 		c = if_lookup_address((void *)&iph->ip_src, AF_INET,
 				      ospf->vrf_id);
 		if (c)
 			ifp = c->ifp;
-		if (ifp == NULL)
-			return 0;
+		if (ifp == NULL) {
+			if (IS_DEBUG_OSPF_PACKET(0, RECV))
+				zlog_debug(
+					"%s: Unable to determine incoming interface from: %s(%s)",
+					__func__, inet_ntoa(iph->ip_src),
+					ospf_get_name(ospf));
+			return OSPF_READ_CONTINUE;
+		}
 	}
-
-	/* IP Header dump. */
-	if (IS_DEBUG_OSPF_PACKET(0, RECV))
-		ospf_ip_header_dump(iph);
 
 	/* Self-originated packet should be discarded silently. */
 	if (ospf_if_lookup_by_local_addr(ospf, NULL, iph->ip_src)) {
@@ -2975,30 +2988,44 @@ int ospf_read(struct thread *thread)
 				"ospf_read[%s]: Dropping self-originated packet",
 				inet_ntoa(iph->ip_src));
 		}
-		return 0;
+		return OSPF_READ_CONTINUE;
 	}
 
-	/* Advance from IP header to OSPF header (iph->ip_hl has been verified
-	   by ospf_recv_packet() to be correct). */
-	stream_forward_getp(ibuf, iph->ip_hl * 4);
+	/* Check that we have enough for an IP header */
+	if ((unsigned int)(iph->ip_hl << 2) >= STREAM_READABLE(ibuf)) {
+		if ((unsigned int)(iph->ip_hl << 2) == STREAM_READABLE(ibuf)) {
+			flog_warn(
+				EC_OSPF_PACKET,
+				"Rx'd IP packet with OSPF protocol number but no payload");
+		} else {
+			flog_warn(
+				EC_OSPF_PACKET,
+				"IP header length field claims header is %u bytes, but we only have %zu",
+				(unsigned int)(iph->ip_hl << 2),
+				STREAM_READABLE(ibuf));
+		}
+
+		return OSPF_READ_ERROR;
+	}
+	stream_forward_getp(ibuf, iph->ip_hl << 2);
 
 	ospfh = (struct ospf_header *)stream_pnt(ibuf);
 	if (MSG_OK
-	    != ospf_packet_examin(
-		       ospfh, stream_get_endp(ibuf) - stream_get_getp(ibuf)))
-		return -1;
+	    != ospf_packet_examin(ospfh, stream_get_endp(ibuf)
+						 - stream_get_getp(ibuf)))
+		return OSPF_READ_CONTINUE;
 	/* Now it is safe to access all fields of OSPF packet header. */
 
 	/* associate packet with ospf interface */
 	oi = ospf_if_lookup_recv_if(ospf, iph->ip_src, ifp);
 
-	/* ospf_verify_header() relies on a valid "oi" and thus can be called
-	   only
-	   after the passive/backbone/other checks below are passed. These
-	   checks
-	   in turn access the fields of unverified "ospfh" structure for their
-	   own
-	   purposes and must remain very accurate in doing this. */
+	/*
+	 * ospf_verify_header() relies on a valid "oi" and thus can be called
+	 * only after the passive/backbone/other checks below are passed.
+	 * These checks in turn access the fields of unverified "ospfh"
+	 * structure for their own purposes and must remain very accurate
+	 * in doing this.
+	 */
 
 	/* If incoming interface is passive one, ignore it. */
 	if (oi && OSPF_IF_PASSIVE_STATUS(oi) == OSPF_IF_PASSIVE) {
@@ -3006,8 +3033,7 @@ int ospf_read(struct thread *thread)
 
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"ignoring packet from router %s sent to %s, "
-				"received on a passive interface, %s",
+				"ignoring packet from router %s sent to %s, received on a passive interface, %s",
 				inet_ntop(AF_INET, &ospfh->router_id, buf[0],
 					  sizeof(buf[0])),
 				inet_ntop(AF_INET, &iph->ip_dst, buf[1],
@@ -3023,7 +3049,7 @@ int ospf_read(struct thread *thread)
 			OI_MEMBER_JOINED(oi, MEMBER_ALLROUTERS);
 			ospf_if_set_multicast(oi);
 		}
-		return 0;
+		return OSPF_READ_CONTINUE;
 	}
 
 
@@ -3031,34 +3057,35 @@ int ospf_read(struct thread *thread)
 	 * or header area is backbone but ospf_interface is not
 	 * check for VLINK interface
 	 */
-	if ((oi == NULL) || (OSPF_IS_AREA_ID_BACKBONE(ospfh->area_id)
-			     && !OSPF_IS_AREA_ID_BACKBONE(oi->area->area_id))) {
+	if ((oi == NULL)
+	    || (OSPF_IS_AREA_ID_BACKBONE(ospfh->area_id)
+		&& !OSPF_IS_AREA_ID_BACKBONE(oi->area->area_id))) {
 		if ((oi = ospf_associate_packet_vl(ospf, ifp, iph, ospfh))
 		    == NULL) {
 			if (!ospf->instance && IS_DEBUG_OSPF_EVENT)
 				zlog_debug(
-					"Packet from [%s] received on link %s"
-					" but no ospf_interface",
+					"Packet from [%s] received on link %s but no ospf_interface",
 					inet_ntoa(iph->ip_src), ifp->name);
-			return 0;
+			return OSPF_READ_CONTINUE;
 		}
 	}
 
-	/* else it must be a local ospf interface, check it was received on
-	 * correct link
+	/*
+	 * else it must be a local ospf interface, check it was
+	 * received on correct link
 	 */
 	else if (oi->ifp != ifp) {
 		if (IS_DEBUG_OSPF_EVENT)
 			flog_warn(EC_OSPF_PACKET,
 				  "Packet from [%s] received on wrong link %s",
 				  inet_ntoa(iph->ip_src), ifp->name);
-		return 0;
+		return OSPF_READ_CONTINUE;
 	} else if (oi->state == ISM_Down) {
 		char buf[2][INET_ADDRSTRLEN];
+
 		flog_warn(
 			EC_OSPF_PACKET,
-			"Ignoring packet from %s to %s received on interface that is "
-			"down [%s]; interface flags are %s",
+			"Ignoring packet from %s to %s received on interface that is down [%s]; interface flags are %s",
 			inet_ntop(AF_INET, &iph->ip_src, buf[0],
 				  sizeof(buf[0])),
 			inet_ntop(AF_INET, &iph->ip_dst, buf[1],
@@ -3071,13 +3098,15 @@ int ospf_read(struct thread *thread)
 			OI_MEMBER_JOINED(oi, MEMBER_DROUTERS);
 		if (oi->multicast_memberships)
 			ospf_if_set_multicast(oi);
-		return 0;
+		return OSPF_READ_CONTINUE;
 	}
 
 	/*
-	 * If the received packet is destined for AllDRouters, the packet
-	 * should be accepted only if the received ospf interface state is
-	 * either DR or Backup -- endo.
+	 * If the received packet is destined for AllDRouters, the
+	 * packet should be accepted only if the received ospf
+	 * interface state is either DR or Backup -- endo.
+	 *
+	 * I wonder who endo is?
 	 */
 	if (iph->ip_dst.s_addr == htonl(OSPF_ALLDROUTERS)
 	    && (oi->state != ISM_DR && oi->state != ISM_Backup)) {
@@ -3089,7 +3118,7 @@ int ospf_read(struct thread *thread)
 		/* Try to fix multicast membership. */
 		SET_FLAG(oi->multicast_memberships, MEMBER_DROUTERS);
 		ospf_if_set_multicast(oi);
-		return 0;
+		return OSPF_READ_CONTINUE;
 	}
 
 	/* Verify more OSPF header fields. */
@@ -3097,10 +3126,9 @@ int ospf_read(struct thread *thread)
 	if (ret < 0) {
 		if (IS_DEBUG_OSPF_PACKET(0, RECV))
 			zlog_debug(
-				"ospf_read[%s]: Header check failed, "
-				"dropping.",
+				"ospf_read[%s]: Header check failed, dropping.",
 				inet_ntoa(iph->ip_src));
-		return ret;
+		return OSPF_READ_CONTINUE;
 	}
 
 	/* Show debug receiving packet. */
@@ -3127,7 +3155,8 @@ int ospf_read(struct thread *thread)
 	/* Adjust size to message length. */
 	length = ntohs(ospfh->length) - OSPF_HEADER_SIZE;
 
-	/* Read rest of the packet and call each sort of packet routine. */
+	/* Read rest of the packet and call each sort of packet routine.
+	 */
 	switch (ospfh->type) {
 	case OSPF_MSG_HELLO:
 		ospf_hello(iph, ospfh, ibuf, oi, length);
@@ -3145,10 +3174,38 @@ int ospf_read(struct thread *thread)
 		ospf_ls_ack(iph, ospfh, ibuf, oi, length);
 		break;
 	default:
-		flog_warn(EC_OSPF_PACKET,
-			  "interface %s: OSPF packet header type %d is illegal",
-			  IF_NAME(oi), ospfh->type);
+		flog_warn(
+			EC_OSPF_PACKET,
+			"interface %s(%s): OSPF packet header type %d is illegal",
+			IF_NAME(oi), ospf_get_name(ospf), ospfh->type);
 		break;
+	}
+
+	return OSPF_READ_CONTINUE;
+}
+
+/* Starting point of packet process function. */
+int ospf_read(struct thread *thread)
+{
+	struct ospf *ospf;
+	int32_t count = 0;
+	enum ospf_read_return_enum ret;
+
+	/* first of all get interface pointer. */
+	ospf = THREAD_ARG(thread);
+
+	/* prepare for next packet. */
+	thread_add_read(master, ospf_read, ospf, ospf->fd, &ospf->t_read);
+
+	while (count < ospf->write_oi_count) {
+		count++;
+		ret = ospf_read_helper(ospf);
+		switch (ret) {
+		case OSPF_READ_ERROR:
+			return -1;
+		case OSPF_READ_CONTINUE:
+			break;
+		}
 	}
 
 	return 0;
@@ -3183,7 +3240,7 @@ static int ospf_make_auth(struct ospf_interface *oi, struct ospf_header *ospfh)
 
 	switch (ospf_auth_type(oi)) {
 	case OSPF_AUTH_NULL:
-		/* memset (ospfh->u.auth_data, 0, sizeof (ospfh->u.auth_data));
+		/* memset (ospfh->u.auth_data, 0, sizeof(ospfh->u.auth_data));
 		 */
 		break;
 	case OSPF_AUTH_SIMPLE:
@@ -3206,7 +3263,7 @@ static int ospf_make_auth(struct ospf_interface *oi, struct ospf_header *ospfh)
 		/* note: the seq is done in ospf_make_md5_digest() */
 		break;
 	default:
-		/* memset (ospfh->u.auth_data, 0, sizeof (ospfh->u.auth_data));
+		/* memset (ospfh->u.auth_data, 0, sizeof(ospfh->u.auth_data));
 		 */
 		break;
 	}
@@ -3284,7 +3341,7 @@ static int ospf_make_hello(struct ospf_interface *oi, struct stream *s)
 	for (rn = route_top(oi->nbrs); rn; rn = route_next(rn))
 		if ((nbr = rn->info))
 			if (nbr->router_id.s_addr
-			    != 0) /* Ignore 0.0.0.0 node. */
+			    != INADDR_ANY) /* Ignore 0.0.0.0 node. */
 				if (nbr->state
 				    != NSM_Attempt) /* Ignore Down neighbor. */
 					if (nbr->state
@@ -3296,17 +3353,17 @@ static int ospf_make_hello(struct ospf_interface *oi, struct stream *s)
 							/* Check neighbor is
 							 * sane? */
 							if (nbr->d_router.s_addr
-								    != 0
+								    != INADDR_ANY
 							    && IPV4_ADDR_SAME(
-								       &nbr->d_router,
-								       &oi->address
-										->u
-										.prefix4)
+								    &nbr->d_router,
+								    &oi->address
+									     ->u
+									     .prefix4)
 							    && IPV4_ADDR_SAME(
-								       &nbr->bd_router,
-								       &oi->address
-										->u
-										.prefix4))
+								    &nbr->bd_router,
+								    &oi->address
+									     ->u
+									     .prefix4))
 								flag = 1;
 
 							/* Hello packet overflows interface MTU. */
@@ -3314,8 +3371,7 @@ static int ospf_make_hello(struct ospf_interface *oi, struct stream *s)
 								> ospf_packet_max(oi)) {
 								flog_err(
 									EC_OSPF_LARGE_HELLO,
-									"Oversized Hello packet!"
-									" Larger than MTU. Not sending it out");
+									"Oversized Hello packet! Larger than MTU. Not sending it out");
 								return 0;
 							}
 
@@ -3436,7 +3492,14 @@ static int ospf_make_ls_req_func(struct stream *s, uint16_t *length,
 
 	oi = nbr->oi;
 
-	/* LS Request packet overflows interface MTU. */
+	/* LS Request packet overflows interface MTU
+	 * delta is just number of bytes required for 1 LS Req
+	 * ospf_packet_max will return the number of bytes can
+	 * be accomodated without ospf header. So length+delta
+	 * can be compared to ospf_packet_max
+	 * to check if it can fit another lsreq in the same packet.
+	 */
+
 	if (*length + delta > ospf_packet_max(oi))
 		return 0;
 
@@ -3455,7 +3518,7 @@ static int ospf_make_ls_req(struct ospf_neighbor *nbr, struct stream *s)
 {
 	struct ospf_lsa *lsa;
 	uint16_t length = OSPF_LS_REQ_MIN_SIZE;
-	unsigned long delta = stream_get_endp(s) + 12;
+	unsigned long delta = 12;
 	struct route_table *table;
 	struct route_node *rn;
 	int i;
@@ -3519,8 +3582,9 @@ static int ospf_make_ls_upd(struct ospf_interface *oi, struct list *update,
 
 		assert(lsa->data);
 
-		/* Will it fit? */
-		if (length + delta + ntohs(lsa->data->length) > size_noauth)
+		/* Will it fit? Minimum it has to fit atleast one */
+		if ((length + delta + ntohs(lsa->data->length) > size_noauth) &&
+				(count > 0))
 			break;
 
 		/* Keep pointer to LS age. */
@@ -3557,13 +3621,21 @@ static int ospf_make_ls_ack(struct ospf_interface *oi, struct list *ack,
 {
 	struct listnode *node, *nnode;
 	uint16_t length = OSPF_LS_ACK_MIN_SIZE;
-	unsigned long delta = stream_get_endp(s) + 24;
+	unsigned long delta = OSPF_LSA_HEADER_SIZE;
 	struct ospf_lsa *lsa;
 
 	for (ALL_LIST_ELEMENTS(ack, node, nnode, lsa)) {
 		assert(lsa);
 
-		if (length + delta > ospf_packet_max(oi))
+		/* LS Ack packet overflows interface MTU
+		 * delta is just number of bytes required for
+		 * 1 LS Ack(1 LS Hdr) ospf_packet_max will return
+		 * the number of bytes can be accomodated without
+		 * ospf header. So length+delta can be compared
+		 * against ospf_packet_max to check if it can fit
+		 * another ls header in the same packet.
+		 */
+		if ((length + delta) > ospf_packet_max(oi))
 			break;
 
 		stream_put(s, lsa->data, OSPF_LSA_HEADER_SIZE);
@@ -3606,7 +3678,7 @@ static void ospf_hello_send_sub(struct ospf_interface *oi, in_addr_t addr)
 		if (oi->ospf->vrf_id)
 			zlog_debug(
 				"%s: Hello Tx interface %s ospf vrf %s id %u",
-				__PRETTY_FUNCTION__, oi->ifp->name,
+				__func__, oi->ifp->name,
 				ospf_vrf_id_to_name(oi->ospf->vrf_id),
 				oi->ospf->vrf_id);
 	}
@@ -3673,8 +3745,6 @@ int ospf_hello_reply_timer(struct thread *thread)
 
 	nbr = THREAD_ARG(thread);
 	nbr->t_hello_reply = NULL;
-
-	assert(nbr->oi);
 
 	if (IS_DEBUG_OSPF(nsm, NSM_TIMERS))
 		zlog_debug("NSM[%s:%s]: Timer (hello-reply timer expire)",
@@ -3793,6 +3863,12 @@ void ospf_db_desc_send(struct ospf_neighbor *nbr)
 		ospf_packet_free(nbr->last_send);
 	nbr->last_send = ospf_packet_dup(op);
 	monotime(&nbr->last_send_ts);
+	if (CHECK_FLAG(oi->ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+		zlog_info(
+			"%s:Packet[DD]: %s DB Desc send with seqnum:%x , flags:%x",
+			(oi->ospf->name) ? oi->ospf->name : VRF_DEFAULT_NAME,
+			inet_ntoa(nbr->router_id), nbr->dd_seqnum,
+			nbr->dd_flags);
 }
 
 /* Re-send Database Description. */
@@ -3807,6 +3883,12 @@ void ospf_db_desc_resend(struct ospf_neighbor *nbr)
 
 	/* Hook thread to write packet. */
 	OSPF_ISM_WRITE_ON(oi->ospf);
+	if (CHECK_FLAG(oi->ospf->config, OSPF_LOG_ADJACENCY_DETAIL))
+		zlog_info(
+			"%s:Packet[DD]: %s DB Desc resend with seqnum:%x , flags:%x",
+			(oi->ospf->name) ? oi->ospf->name : VRF_DEFAULT_NAME,
+			inet_ntoa(nbr->router_id), nbr->dd_seqnum,
+			nbr->dd_flags);
 }
 
 /* Send Link State Request. */
@@ -3894,17 +3976,13 @@ static struct ospf_packet *ospf_ls_upd_packet_new(struct list *update,
 		if (!warned) {
 			flog_warn(
 				EC_OSPF_LARGE_LSA,
-				"ospf_ls_upd_packet_new: oversized LSA encountered!"
-				"will need to fragment. Not optimal. Try divide up"
-				" your network with areas. Use 'debug ospf packet send'"
-				" to see details, or look at 'show ip ospf database ..'");
+				"ospf_ls_upd_packet_new: oversized LSA encountered!will need to fragment. Not optimal. Try divide up your network with areas. Use 'debug ospf packet send' to see details, or look at 'show ip ospf database ..'");
 			warned = 1;
 		}
 
 		if (IS_DEBUG_OSPF_PACKET(0, SEND))
 			zlog_debug(
-				"ospf_ls_upd_packet_new: oversized LSA id:%s,"
-				" %d bytes originated by %s, will be fragmented!",
+				"ospf_ls_upd_packet_new: oversized LSA id:%s, %d bytes originated by %s, will be fragmented!",
 				inet_ntoa(lsa->data->id),
 				ntohs(lsa->data->length),
 				inet_ntoa(lsa->data->adv_router));
@@ -3922,9 +4000,7 @@ static struct ospf_packet *ospf_ls_upd_packet_new(struct list *update,
 
 	if (size > OSPF_MAX_PACKET_SIZE) {
 		flog_warn(EC_OSPF_LARGE_LSA,
-			  "ospf_ls_upd_packet_new: oversized LSA id:%s too big,"
-			  " %d bytes, packet size %ld, dropping it completely."
-			  " OSPF routing is broken!",
+			  "ospf_ls_upd_packet_new: oversized LSA id:%s too big, %d bytes, packet size %ld, dropping it completely. OSPF routing is broken!",
 			  inet_ntoa(lsa->data->id), ntohs(lsa->data->length),
 			  (long int)size);
 		list_delete_node(update, ln);
@@ -3998,6 +4074,23 @@ static void ospf_ls_upd_queue_send(struct ospf_interface *oi,
 			oi->on_write_q = 1;
 		}
 		ospf_write(&os_packet_thd);
+		/*
+		 * We are fake calling ospf_write with a fake
+		 * thread.  Imagine that we have oi_a already
+		 * enqueued and we have turned on the write
+		 * thread(t_write).
+		 * Now this function calls this for oi_b
+		 * so the on_write_q has oi_a and oi_b on
+		 * it, ospf_write runs and clears the packets
+		 * for both oi_a and oi_b.  Removing them from
+		 * the on_write_q.  After this thread of execution
+		 * finishes we will execute the t_write thread
+		 * with nothing in the on_write_q causing an
+		 * assert.  So just make sure that the t_write
+		 * is actually turned off.
+		 */
+		if (list_isempty(oi->ospf->oi_write_q))
+			OSPF_TIMER_OFF(oi->ospf->t_write);
 	} else {
 		/* Hook thread to write packet. */
 		OSPF_ISM_WRITE_ON(oi->ospf);
@@ -4038,8 +4131,7 @@ static int ospf_ls_upd_send_queue_event(struct thread *thread)
 	if (again != 0) {
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"ospf_ls_upd_send_queue: update lists not cleared,"
-				" %d nodes to try again, raising new event",
+				"ospf_ls_upd_send_queue: update lists not cleared, %d nodes to try again, raising new event",
 				again);
 		oi->t_ls_upd_event = NULL;
 		thread_add_event(master, ospf_ls_upd_send_queue_event, oi, 0,
@@ -4228,21 +4320,10 @@ void ospf_ls_ack_send_delayed(struct ospf_interface *oi)
  * punt-to-CPU set on them. This may overload the CPU control path that
  * can be avoided if the MAC was known apriori.
  */
-#define OSPF_PING_NBR_STR_MAX  (BUFSIZ)
 void ospf_proactively_arp(struct ospf_neighbor *nbr)
 {
-	char ping_nbr[OSPF_PING_NBR_STR_MAX];
-	int ret;
-
-	if (!nbr || !nbr->oi || !nbr->oi->ifp)
+	if (!nbr || !nbr->oi->ospf->proactive_arp)
 		return;
 
-	snprintf(ping_nbr, sizeof(ping_nbr),
-		 "ping -c 1 -I %s %s > /dev/null 2>&1 &", nbr->oi->ifp->name,
-		 inet_ntoa(nbr->address.u.prefix4));
-
-	ret = system(ping_nbr);
-	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("Executed %s %s", ping_nbr,
-			   ((ret == 0) ? "successfully" : "but failed"));
+	ospf_zebra_send_arp(nbr->oi->ifp, &nbr->address);
 }

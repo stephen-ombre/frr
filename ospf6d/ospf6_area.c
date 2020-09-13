@@ -61,8 +61,7 @@ static void ospf6_area_lsdb_hook_add(struct ospf6_lsa *lsa)
 	case OSPF6_LSTYPE_ROUTER:
 	case OSPF6_LSTYPE_NETWORK:
 		if (IS_OSPF6_DEBUG_EXAMIN_TYPE(lsa->header->type)) {
-			zlog_debug("%s Examin LSA %s", __PRETTY_FUNCTION__,
-				   lsa->name);
+			zlog_debug("%s Examin LSA %s", __func__, lsa->name);
 			zlog_debug(" Schedule SPF Calculation for %s",
 				   OSPF6_AREA(lsa->lsdb->data)->name);
 		}
@@ -138,11 +137,11 @@ static void ospf6_area_stub_update(struct ospf6_area *area)
 
 	if (IS_AREA_STUB(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Stubbing out area for if %s\n", area->name);
+			zlog_debug("Stubbing out area for if %s", area->name);
 		OSPF6_OPT_CLEAR(area->options, OSPF6_OPT_E);
 	} else if (IS_AREA_ENABLED(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Normal area for if %s\n", area->name);
+			zlog_debug("Normal area for if %s", area->name);
 		OSPF6_OPT_SET(area->options, OSPF6_OPT_E);
 		ospf6_asbr_send_externals_to_area(area);
 	}
@@ -157,7 +156,7 @@ static int ospf6_area_stub_set(struct ospf6 *ospf6, struct ospf6_area *area)
 		ospf6_area_stub_update(area);
 	}
 
-	return (1);
+	return 1;
 }
 
 static void ospf6_area_stub_unset(struct ospf6 *ospf6, struct ospf6_area *area)
@@ -380,22 +379,6 @@ void ospf6_area_show(struct vty *vty, struct ospf6_area *oa)
 		vty_out(vty, "SPF has not been run\n");
 }
 
-
-#define OSPF6_CMD_AREA_GET(str, oa)                                            \
-	{                                                                      \
-		char *ep;                                                      \
-		uint32_t area_id = htonl(strtoul(str, &ep, 10));               \
-		if (*ep && inet_pton(AF_INET, str, &area_id) != 1) {           \
-			vty_out(vty, "Malformed Area-ID: %s\n", str);          \
-			return CMD_SUCCESS;                                    \
-		}                                                              \
-		int format = !*ep ? OSPF6_AREA_FMT_DECIMAL                     \
-				  : OSPF6_AREA_FMT_DOTTEDQUAD;                 \
-		oa = ospf6_area_lookup(area_id, ospf6);                        \
-		if (oa == NULL)                                                \
-			oa = ospf6_area_create(area_id, ospf6, format);        \
-	}
-
 DEFUN (area_range,
        area_range_cmd,
        "area <A.B.C.D|(0-4294967295)> range X:X::X:X/M [<advertise|not-advertise|cost (0-16777215)>]",
@@ -450,7 +433,7 @@ DEFUN (area_range,
 
 	range->path.u.cost_config = cost;
 
-	zlog_debug("%s: for prefix %s, flag = %x\n", __func__,
+	zlog_debug("%s: for prefix %s, flag = %x", __func__,
 		   argv[idx_ipv6_prefixlen]->arg, range->flag);
 	if (range->rnode == NULL) {
 		ospf6_route_add(range, oa->range_table);
@@ -1021,4 +1004,17 @@ void ospf6_area_init(void)
 
 	install_element(OSPF6_NODE, &area_filter_list_cmd);
 	install_element(OSPF6_NODE, &no_area_filter_list_cmd);
+}
+
+void ospf6_area_interface_delete(struct ospf6_interface *oi)
+{
+	struct ospf6_area *oa;
+	struct listnode *node, *nnode;
+
+	if (!ospf6)
+		return;
+	for (ALL_LIST_ELEMENTS(ospf6->area_list, node, nnode, oa))
+		if(listnode_lookup(oa->if_list, oi))
+			listnode_delete(oa->if_list, oi);
+
 }

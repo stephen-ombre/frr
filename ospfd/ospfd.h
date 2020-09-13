@@ -25,6 +25,7 @@
 #include <zebra.h>
 #include "qobj.h"
 #include "libospf.h"
+#include "ldp_sync.h"
 
 #include "filter.h"
 #include "log.h"
@@ -117,6 +118,14 @@ struct ospf_redist {
 #define ROUTEMAP(R)        (R->route_map.map)
 };
 
+/* ospf->config */
+enum {
+	OSPF_RFC1583_COMPATIBLE =	(1 << 0),
+	OSPF_OPAQUE_CAPABLE =		(1 << 2),
+	OSPF_LOG_ADJACENCY_CHANGES =	(1 << 3),
+	OSPF_LOG_ADJACENCY_DETAIL =	(1 << 4),
+};
+
 /* OSPF instance structure. */
 struct ospf {
 	/* OSPF's running state based on the '[no] router ospf [<instance>]'
@@ -151,12 +160,8 @@ struct ospf {
 	/* NSSA ABR */
 	uint8_t anyNSSA; /* Bump for every NSSA attached. */
 
-	/* Configured variables. */
+	/* Configuration bitmask, refer to enum above */
 	uint8_t config;
-#define OSPF_RFC1583_COMPATIBLE         (1 << 0)
-#define OSPF_OPAQUE_CAPABLE		(1 << 2)
-#define OSPF_LOG_ADJACENCY_CHANGES	(1 << 3)
-#define OSPF_LOG_ADJACENCY_DETAIL	(1 << 4)
 
 	/* Opaque-LSA administrative flags. */
 	uint8_t opaque;
@@ -202,7 +207,6 @@ struct ospf {
 	struct ospf_lsdb *lsdb;
 
 	/* Flags. */
-	int external_origin; /* AS-external-LSA origin flag. */
 	int ase_calc;	/* ASE calculation flag. */
 
 	struct list *opaque_lsa_self; /* Type-11 Opaque-LSAs */
@@ -233,7 +237,6 @@ struct ospf {
 	struct thread *t_distribute_update; /* Distirbute list update timer. */
 	struct thread *t_spf_calc;	  /* SPF calculation timer. */
 	struct thread *t_ase_calc;	  /* ASE calculation timer. */
-	struct thread *t_external_lsa;      /* AS-external-LSA origin timer. */
 	struct thread
 		*t_opaque_lsa_self; /* Type-11 Opaque-LSAs origin event. */
 	struct thread *t_sr_update; /* Segment Routing update timer */
@@ -247,6 +250,8 @@ struct ospf {
 
 	struct thread *t_write;
 #define OSPF_WRITE_INTERFACE_COUNT_DEFAULT    20
+	struct thread *t_default_routemap_timer;
+
 	int write_oi_count; /* Num of packets sent per thread invocation */
 	struct thread *t_read;
 	int fd;
@@ -308,9 +313,16 @@ struct ospf {
 	 * update to neighbors immediatly */
 	uint8_t inst_shutdown;
 
+	/* Enable or disable sending proactive ARP requests. */
+	bool proactive_arp;
+#define OSPF_PROACTIVE_ARP_DEFAULT true
+
 	/* Redistributed external information. */
 	struct list *external[ZEBRA_ROUTE_MAX + 1];
 #define EXTERNAL_INFO(E)      (E->external_info)
+
+	/* MPLS LDP-IGP Sync */
+	struct ldp_sync_info_cmd ldp_sync_cmd;
 
 	QOBJ_FIELDS
 };
@@ -406,6 +418,12 @@ struct ospf_area {
 
 	/* Shortest Path Tree. */
 	struct vertex *spf;
+	struct list *spf_vertex_list;
+
+	bool spf_dry_run;   /* flag for checking if the SPF calculation is
+			       intended for the local RIB */
+	bool spf_root_node; /* flag for checking if the calculating node is the
+			       root node of the SPF tree */
 
 	/* Threads. */
 	struct thread *t_stub_router;     /* Stub-router timer */
@@ -502,8 +520,9 @@ extern struct zebra_privs_t ospfd_privs;
 /* Prototypes. */
 extern const char *ospf_redist_string(unsigned int route_type);
 extern struct ospf *ospf_lookup_instance(unsigned short);
-extern struct ospf *ospf_get(unsigned short instance, const char *name);
-extern struct ospf *ospf_get_instance(unsigned short);
+extern struct ospf *ospf_get(unsigned short instance, const char *name,
+			     bool *created);
+extern struct ospf *ospf_get_instance(unsigned short, bool *created);
 extern struct ospf *ospf_lookup_by_inst_name(unsigned short instance,
 					     const char *name);
 extern struct ospf *ospf_lookup_by_vrf_id(vrf_id_t vrf_id);
@@ -574,4 +593,5 @@ extern void ospf_vrf_unlink(struct ospf *ospf, struct vrf *vrf);
 const char *ospf_vrf_id_to_name(vrf_id_t vrf_id);
 int ospf_area_nssa_no_summary_set(struct ospf *, struct in_addr);
 
+const char *ospf_get_name(const struct ospf *ospf);
 #endif /* _ZEBRA_OSPFD_H */

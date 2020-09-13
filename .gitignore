@@ -28,9 +28,14 @@
 /aclocal.m4
 /libtool
 /libtool.orig
+/changelog-auto
 
 /Makefile
 /Makefile.in
+
+/symalyzer_report.html
+/jquery-3.4.1.min.js
+/jquery-3.4.1.min.js.tmp
 
 ### autoconf/automake subdir stuff
 
@@ -48,7 +53,18 @@
 *.pb.h
 *.pb-c.h
 *.pb-c.c
+*.pb.cc
 *_clippy.c
+*.bc
+*.cg.json
+*.cg.dot
+*.cg.svg
+
+### gcov outputs
+
+*.gcno
+*.gcov
+*.gcda
 
 ### dist
 
@@ -74,6 +90,7 @@ build
 *.bak
 *.swp
 *.pyc
+*.dmp
 __pycache__
 *.patch
 *.diff
@@ -85,5 +102,9 @@ GSYMS
 GRTAGS
 GPATH
 compile_commands.json
+.ccls-cache
 .dirstamp
 refix
+.vscode
+.kitchen
+.emacs.desktop*

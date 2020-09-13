@@ -27,8 +27,13 @@
 #include "yang.h"
 #include "yang_translator.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declaration(s). */
 struct vty;
+struct debug;
 
 /* Northbound events. */
 enum nb_event {
@@ -65,8 +70,9 @@ enum nb_event {
 enum nb_operation {
 	NB_OP_CREATE,
 	NB_OP_MODIFY,
-	NB_OP_DELETE,
+	NB_OP_DESTROY,
 	NB_OP_MOVE,
+	NB_OP_PRE_VALIDATE,
 	NB_OP_APPLY_FINISH,
 	NB_OP_GET_ELEM,
 	NB_OP_GET_NEXT,
@@ -80,6 +86,183 @@ union nb_resource {
 	void *ptr;
 };
 
+/*
+ * Northbound callbacks parameters.
+ */
+
+struct nb_cb_create_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/*
+	 * The transaction phase. Refer to the documentation comments of
+	 * nb_event for more details.
+	 */
+	enum nb_event event;
+
+	/* libyang data node that is being created. */
+	const struct lyd_node *dnode;
+
+	/*
+	 * Pointer to store resource(s) allocated during the NB_EV_PREPARE
+	 * phase. The same pointer can be used during the NB_EV_ABORT and
+	 * NB_EV_APPLY phases to either release or make use of the allocated
+	 * resource(s). It's set to NULL when the event is NB_EV_VALIDATE.
+	 */
+	union nb_resource *resource;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_modify_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/*
+	 * The transaction phase. Refer to the documentation comments of
+	 * nb_event for more details.
+	 */
+	enum nb_event event;
+
+	/* libyang data node that is being modified. */
+	const struct lyd_node *dnode;
+
+	/*
+	 * Pointer to store resource(s) allocated during the NB_EV_PREPARE
+	 * phase. The same pointer can be used during the NB_EV_ABORT and
+	 * NB_EV_APPLY phases to either release or make use of the allocated
+	 * resource(s). It's set to NULL when the event is NB_EV_VALIDATE.
+	 */
+	union nb_resource *resource;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_destroy_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/*
+	 * The transaction phase. Refer to the documentation comments of
+	 * nb_event for more details.
+	 */
+	enum nb_event event;
+
+	/* libyang data node that is being deleted. */
+	const struct lyd_node *dnode;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_move_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/*
+	 * The transaction phase. Refer to the documentation comments of
+	 * nb_event for more details.
+	 */
+	enum nb_event event;
+
+	/* libyang data node that is being moved. */
+	const struct lyd_node *dnode;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_pre_validate_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/* libyang data node associated with the 'pre_validate' callback. */
+	const struct lyd_node *dnode;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_apply_finish_args {
+	/* Context of the configuration transaction. */
+	struct nb_context *context;
+
+	/* libyang data node associated with the 'apply_finish' callback. */
+	const struct lyd_node *dnode;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
+};
+
+struct nb_cb_get_elem_args {
+	/* YANG data path of the data we want to get. */
+	const char *xpath;
+
+	/* Pointer to list entry (might be NULL). */
+	const void *list_entry;
+};
+
+struct nb_cb_get_next_args {
+	/* Pointer to parent list entry. */
+	const void *parent_list_entry;
+
+	/* Pointer to (leaf-)list entry. */
+	const void *list_entry;
+};
+
+struct nb_cb_get_keys_args {
+	/* Pointer to list entry. */
+	const void *list_entry;
+
+	/*
+	 * Structure to be filled based on the attributes of the provided list
+	 * entry.
+	 */
+	struct yang_list_keys *keys;
+};
+
+struct nb_cb_lookup_entry_args {
+	/* Pointer to parent list entry. */
+	const void *parent_list_entry;
+
+	/* Structure containing the keys of the list entry. */
+	const struct yang_list_keys *keys;
+};
+
+struct nb_cb_rpc_args {
+	/* XPath of the YANG RPC or action. */
+	const char *xpath;
+
+	/* Read-only list of input parameters. */
+	const struct list *input;
+
+	/* List of output parameters to be populated by the callback. */
+	struct list *output;
+};
+
+/*
+ * Set of configuration callbacks that can be associated to a northbound node.
+ */
 struct nb_callbacks {
 	/*
 	 * Configuration callback.
@@ -91,18 +274,9 @@ struct nb_callbacks {
 	 * initialize the default values of its children (if any) from the YANG
 	 * models.
 	 *
-	 * event
-	 *    The transaction phase. Refer to the documentation comments of
-	 *    nb_event for more details.
-	 *
-	 * dnode
-	 *    libyang data node that is being created.
-	 *
-	 * resource
-	 *    Pointer to store resource(s) allocated during the NB_EV_PREPARE
-	 *    phase. The same pointer can be used during the NB_EV_ABORT and
-	 *    NB_EV_APPLY phases to either release or make use of the allocated
-	 *    resource(s). It's set to NULL when the event is NB_EV_VALIDATE.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_create_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    - NB_OK on success.
@@ -111,8 +285,7 @@ struct nb_callbacks {
 	 *    - NB_ERR_INCONSISTENCY when an inconsistency was detected.
 	 *    - NB_ERR for other errors.
 	 */
-	int (*create)(enum nb_event event, const struct lyd_node *dnode,
-		      union nb_resource *resource);
+	int (*create)(struct nb_cb_create_args *args);
 
 	/*
 	 * Configuration callback.
@@ -123,18 +296,9 @@ struct nb_callbacks {
 	 * modified, the northbound treats this as if the list was deleted and a
 	 * new one created with the updated key value.
 	 *
-	 * event
-	 *    The transaction phase. Refer to the documentation comments of
-	 *    nb_event for more details.
-	 *
-	 * dnode
-	 *    libyang data node that is being modified
-	 *
-	 * resource
-	 *    Pointer to store resource(s) allocated during the NB_EV_PREPARE
-	 *    phase. The same pointer can be used during the NB_EV_ABORT and
-	 *    NB_EV_APPLY phases to either release or make use of the allocated
-	 *    resource(s). It's set to NULL when the event is NB_EV_VALIDATE.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_modify_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    - NB_OK on success.
@@ -143,8 +307,7 @@ struct nb_callbacks {
 	 *    - NB_ERR_INCONSISTENCY when an inconsistency was detected.
 	 *    - NB_ERR for other errors.
 	 */
-	int (*modify)(enum nb_event event, const struct lyd_node *dnode,
-		      union nb_resource *resource);
+	int (*modify)(struct nb_cb_modify_args *args);
 
 	/*
 	 * Configuration callback.
@@ -155,12 +318,9 @@ struct nb_callbacks {
 	 * The callback is supposed to delete the entire configuration object,
 	 * including its children when they exist.
 	 *
-	 * event
-	 *    The transaction phase. Refer to the documentation comments of
-	 *    nb_event for more details.
-	 *
-	 * dnode
-	 *    libyang data node that is being deleted.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_destroy_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    - NB_OK on success.
@@ -168,7 +328,7 @@ struct nb_callbacks {
 	 *    - NB_ERR_INCONSISTENCY when an inconsistency was detected.
 	 *    - NB_ERR for other errors.
 	 */
-	int (*delete)(enum nb_event event, const struct lyd_node *dnode);
+	int (*destroy)(struct nb_cb_destroy_args *args);
 
 	/*
 	 * Configuration callback.
@@ -176,12 +336,9 @@ struct nb_callbacks {
 	 * A list entry or leaf-list entry has been moved. Only applicable when
 	 * the "ordered-by user" statement is present.
 	 *
-	 * event
-	 *    The transaction phase. Refer to the documentation comments of
-	 *    nb_event for more details.
-	 *
-	 * dnode
-	 *    libyang data node that is being moved.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_move_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    - NB_OK on success.
@@ -189,7 +346,25 @@ struct nb_callbacks {
 	 *    - NB_ERR_INCONSISTENCY when an inconsistency was detected.
 	 *    - NB_ERR for other errors.
 	 */
-	int (*move)(enum nb_event event, const struct lyd_node *dnode);
+	int (*move)(struct nb_cb_move_args *args);
+
+	/*
+	 * Optional configuration callback.
+	 *
+	 * This callback can be used to validate subsections of the
+	 * configuration being committed before validating the configuration
+	 * changes themselves. It's useful to perform more complex validations
+	 * that depend on the relationship between multiple nodes.
+	 *
+	 * args
+	 *    Refer to the documentation comments of nb_cb_pre_validate_args for
+	 *    details.
+	 *
+	 * Returns:
+	 *    - NB_OK on success.
+	 *    - NB_ERR_VALIDATION when a validation error occurred.
+	 */
+	int (*pre_validate)(struct nb_cb_pre_validate_args *args);
 
 	/*
 	 * Optional configuration callback.
@@ -205,10 +380,11 @@ struct nb_callbacks {
 	 * once even if multiple changes occurred within the descendants of the
 	 * data node.
 	 *
-	 * dnode
-	 *    libyang data node associated with the 'apply_finish' callback.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_apply_finish_args for
+	 *    details.
 	 */
-	void (*apply_finish)(const struct lyd_node *dnode);
+	void (*apply_finish)(struct nb_cb_apply_finish_args *args);
 
 	/*
 	 * Operational data callback.
@@ -217,18 +393,15 @@ struct nb_callbacks {
 	 * leaf-list entry or inform if a typeless value (presence containers or
 	 * leafs of type empty) exists or not.
 	 *
-	 * xpath
-	 *    YANG data path of the data we want to get.
-	 *
-	 * list_entry
-	 *    Pointer to list entry (might be NULL).
+	 * args
+	 *    Refer to the documentation comments of nb_cb_get_elem_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    Pointer to newly created yang_data structure, or NULL to indicate
 	 *    the absence of data.
 	 */
-	struct yang_data *(*get_elem)(const char *xpath,
-				      const void *list_entry);
+	struct yang_data *(*get_elem)(struct nb_cb_get_elem_args *args);
 
 	/*
 	 * Operational data callback for YANG lists and leaf-lists.
@@ -237,18 +410,15 @@ struct nb_callbacks {
 	 * leaf-list. The 'list_entry' parameter will be NULL on the first
 	 * invocation.
 	 *
-	 * parent_list_entry
-	 *    Pointer to parent list entry.
-	 *
-	 * list_entry
-	 *    Pointer to (leaf-)list entry.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_get_next_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    Pointer to the next entry in the (leaf-)list, or NULL to signal
 	 *    that the end of the (leaf-)list was reached.
 	 */
-	const void *(*get_next)(const void *parent_list_entry,
-				const void *list_entry);
+	const void *(*get_next)(struct nb_cb_get_next_args *args);
 
 	/*
 	 * Operational data callback for YANG lists.
@@ -257,17 +427,14 @@ struct nb_callbacks {
 	 * given list_entry. Keyless lists don't need to implement this
 	 * callback.
 	 *
-	 * list_entry
-	 *    Pointer to list entry.
-	 *
-	 * keys
-	 *    Structure to be filled based on the attributes of the provided
-	 *    list entry.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_get_keys_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    NB_OK on success, NB_ERR otherwise.
 	 */
-	int (*get_keys)(const void *list_entry, struct yang_list_keys *keys);
+	int (*get_keys)(struct nb_cb_get_keys_args *args);
 
 	/*
 	 * Operational data callback for YANG lists.
@@ -276,17 +443,14 @@ struct nb_callbacks {
 	 * keys given as a parameter. Keyless lists don't need to implement this
 	 * callback.
 	 *
-	 * parent_list_entry
-	 *    Pointer to parent list entry.
-	 *
-	 * keys
-	 *    Structure containing the keys of the list entry.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_lookup_entry_args for
+	 *    details.
 	 *
 	 * Returns:
 	 *    Pointer to the list entry if found, or NULL if not found.
 	 */
-	const void *(*lookup_entry)(const void *parent_list_entry,
-				    const struct yang_list_keys *keys);
+	const void *(*lookup_entry)(struct nb_cb_lookup_entry_args *args);
 
 	/*
 	 * RPC and action callback.
@@ -295,20 +459,13 @@ struct nb_callbacks {
 	 * callback should fetch all the input parameters from the 'input' list,
 	 * and add output parameters to the 'output' list if necessary.
 	 *
-	 * xpath
-	 *    XPath of the YANG RPC or action.
-	 *
-	 * input
-	 *    Read-only list of input parameters.
-	 *
-	 * output
-	 *    List of output parameters to be populated by the callback.
+	 * args
+	 *    Refer to the documentation comments of nb_cb_rpc_args for details.
 	 *
 	 * Returns:
 	 *    NB_OK on success, NB_ERR otherwise.
 	 */
-	int (*rpc)(const char *xpath, const struct list *input,
-		   struct list *output);
+	int (*rpc)(struct nb_cb_rpc_args *args);
 
 	/*
 	 * Optional callback to show the CLI command associated to the given
@@ -332,6 +489,18 @@ struct nb_callbacks {
 	 */
 	void (*cli_show)(struct vty *vty, struct lyd_node *dnode,
 			 bool show_defaults);
+
+	/*
+	 * Optional callback to show the CLI node end for lists or containers.
+	 *
+	 * vty
+	 *    The vty terminal to dump the configuration to.
+	 *
+	 * dnode
+	 *    libyang data node that should be shown in the form of a CLI
+	 *    command.
+	 */
+	void (*cli_show_end)(struct vty *vty, struct lyd_node *dnode);
 };
 
 /*
@@ -372,6 +541,13 @@ struct nb_node {
 /* The YANG list doesn't contain key leafs. */
 #define F_NB_NODE_KEYLESS_LIST 0x02
 
+/*
+ * HACK: old gcc versions (< 5.x) have a bug that prevents C99 flexible arrays
+ * from working properly on shared libraries. For those compilers, use a fixed
+ * size array to work around the problem.
+ */
+#define YANG_MODULE_MAX_NODES 1024
+
 struct frr_yang_module_info {
 	/* YANG module name. */
 	const char *name;
@@ -386,7 +562,11 @@ struct frr_yang_module_info {
 
 		/* Priority - lower priorities are processed first. */
 		uint32_t priority;
+#if defined(__GNUC__) && ((__GNUC__ - 0) < 5) && !defined(__clang__)
+	} nodes[YANG_MODULE_MAX_NODES + 1];
+#else
 	} nodes[];
+#endif
 };
 
 /* Northbound error codes. */
@@ -409,9 +589,34 @@ enum nb_error {
 
 /* Northbound clients. */
 enum nb_client {
-	NB_CLIENT_CLI = 0,
+	NB_CLIENT_NONE = 0,
+	NB_CLIENT_CLI,
 	NB_CLIENT_CONFD,
 	NB_CLIENT_SYSREPO,
+	NB_CLIENT_GRPC,
+};
+
+/* Northbound context. */
+struct nb_context {
+	/* Northbound client. */
+	enum nb_client client;
+
+	/* Northbound user (can be NULL). */
+	const void *user;
+
+	/* Client-specific data. */
+#if 0
+	union {
+		struct {
+		} cli;
+		struct {
+		} confd;
+		struct {
+		} sysrepo;
+		struct {
+		} grpc;
+	} client_data;
+#endif
 };
 
 /* Northbound configuration. */
@@ -424,7 +629,7 @@ struct nb_config {
 struct nb_config_cb {
 	RB_ENTRY(nb_config_cb) entry;
 	enum nb_operation operation;
-	char xpath[XPATH_MAXLEN];
+	uint32_t seq;
 	const struct nb_node *nb_node;
 	const struct lyd_node *dnode;
 };
@@ -440,7 +645,7 @@ struct nb_config_change {
 
 /* Northbound configuration transaction. */
 struct nb_transaction {
-	enum nb_client client;
+	struct nb_context *context;
 	char comment[80];
 	struct nb_config *config;
 	struct nb_config_cbs changes;
@@ -454,11 +659,37 @@ typedef int (*nb_oper_data_cb)(const struct lys_node *snode,
 /* Iterate over direct child nodes only. */
 #define NB_OPER_DATA_ITER_NORECURSE 0x0001
 
+/* Hooks. */
 DECLARE_HOOK(nb_notification_send, (const char *xpath, struct list *arguments),
 	     (xpath, arguments))
+DECLARE_HOOK(nb_client_debug_config_write, (struct vty *vty), (vty))
+DECLARE_HOOK(nb_client_debug_set_all, (uint32_t flags, bool set), (flags, set))
 
-extern int debug_northbound;
+/* Northbound debugging records */
+extern struct debug nb_dbg_cbs_config;
+extern struct debug nb_dbg_cbs_state;
+extern struct debug nb_dbg_cbs_rpc;
+extern struct debug nb_dbg_notif;
+extern struct debug nb_dbg_events;
+
+/* Global running configuration. */
 extern struct nb_config *running_config;
+
+/* Wrappers for the northbound callbacks. */
+extern struct yang_data *nb_callback_get_elem(const struct nb_node *nb_node,
+					      const char *xpath,
+					      const void *list_entry);
+extern const void *nb_callback_get_next(const struct nb_node *nb_node,
+					const void *parent_list_entry,
+					const void *list_entry);
+extern int nb_callback_get_keys(const struct nb_node *nb_node,
+				const void *list_entry,
+				struct yang_list_keys *keys);
+extern const void *nb_callback_lookup_entry(const struct nb_node *nb_node,
+					    const void *parent_list_entry,
+					    const struct yang_list_keys *keys);
+extern int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
+			   const struct list *input, struct list *output);
 
 /*
  * Create a northbound node for all YANG schema nodes.
@@ -612,24 +843,35 @@ extern int nb_candidate_update(struct nb_config *candidate);
  * WARNING: the candidate can be modified as part of the validation process
  * (e.g. add default nodes).
  *
+ * context
+ *    Context of the northbound transaction.
+ *
  * candidate
  *    Candidate configuration to validate.
+ *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
  *
  * Returns:
  *    NB_OK on success, NB_ERR_VALIDATION otherwise.
  */
-extern int nb_candidate_validate(struct nb_config *candidate);
+extern int nb_candidate_validate(struct nb_context *context,
+				 struct nb_config *candidate, char *errmsg,
+				 size_t errmsg_len);
 
 /*
  * Create a new configuration transaction but do not commit it yet. Only
  * validate the candidate and prepare all resources required to apply the
  * configuration changes.
  *
+ * context
+ *    Context of the northbound transaction.
+ *
  * candidate
  *    Candidate configuration to commit.
- *
- * client
- *    Northbound client performing the commit.
  *
  * comment
  *    Optional comment describing the commit.
@@ -639,6 +881,12 @@ extern int nb_candidate_validate(struct nb_config *candidate);
  *    successfully. In this case, it must be either aborted using
  *    nb_candidate_commit_abort() or committed using
  *    nb_candidate_commit_apply().
+ *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
  *
  * Returns:
  *    - NB_OK on success.
@@ -650,10 +898,11 @@ extern int nb_candidate_validate(struct nb_config *candidate);
  *      the candidate configuration.
  *    - NB_ERR for other errors.
  */
-extern int nb_candidate_commit_prepare(struct nb_config *candidate,
-				       enum nb_client client,
+extern int nb_candidate_commit_prepare(struct nb_context *context,
+				       struct nb_config *candidate,
 				       const char *comment,
-				       struct nb_transaction **transaction);
+				       struct nb_transaction **transaction,
+				       char *errmsg, size_t errmsg_len);
 
 /*
  * Abort a previously created configuration transaction, releasing all resources
@@ -661,8 +910,15 @@ extern int nb_candidate_commit_prepare(struct nb_config *candidate,
  *
  * transaction
  *    Candidate configuration to abort. It's consumed by this function.
+ *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
  */
-extern void nb_candidate_commit_abort(struct nb_transaction *transaction);
+extern void nb_candidate_commit_abort(struct nb_transaction *transaction,
+				      char *errmsg, size_t errmsg_len);
 
 /*
  * Commit a previously created configuration transaction.
@@ -676,10 +932,17 @@ extern void nb_candidate_commit_abort(struct nb_transaction *transaction);
  *
  * transaction_id
  *    Optional output parameter providing the ID of the committed transaction.
+ *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
  */
 extern void nb_candidate_commit_apply(struct nb_transaction *transaction,
 				      bool save_transaction,
-				      uint32_t *transaction_id);
+				      uint32_t *transaction_id, char *errmsg,
+				      size_t errmsg_len);
 
 /*
  * Create a new transaction to commit a candidate configuration. This is a
@@ -689,12 +952,12 @@ extern void nb_candidate_commit_apply(struct nb_transaction *transaction,
  * take into account the results of the preparation phase of multiple managed
  * entities.
  *
+ * context
+ *    Context of the northbound transaction.
+ *
  * candidate
  *    Candidate configuration to commit. It's preserved regardless if the commit
  *    operation fails or not.
- *
- * client
- *    Northbound client performing the commit.
  *
  * save_transaction
  *    Specify whether the transaction should be recorded in the transactions log
@@ -706,6 +969,12 @@ extern void nb_candidate_commit_apply(struct nb_transaction *transaction,
  * transaction_id
  *    Optional output parameter providing the ID of the committed transaction.
  *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
+ *
  * Returns:
  *    - NB_OK on success.
  *    - NB_ERR_NO_CHANGES when the candidate is identical to the running
@@ -716,12 +985,59 @@ extern void nb_candidate_commit_apply(struct nb_transaction *transaction,
  *      the candidate configuration.
  *    - NB_ERR for other errors.
  */
-extern int nb_candidate_commit(struct nb_config *candidate,
-			       enum nb_client client, bool save_transaction,
-			       const char *comment, uint32_t *transaction_id);
+extern int nb_candidate_commit(struct nb_context *context,
+			       struct nb_config *candidate,
+			       bool save_transaction, const char *comment,
+			       uint32_t *transaction_id, char *errmsg,
+			       size_t errmsg_len);
 
 /*
- * Iterate over operetional data.
+ * Lock the running configuration.
+ *
+ * client
+ *    Northbound client.
+ *
+ * user
+ *    Northbound user (can be NULL).
+ *
+ * Returns:
+ *    0 on success, -1 when the running configuration is already locked.
+ */
+extern int nb_running_lock(enum nb_client client, const void *user);
+
+/*
+ * Unlock the running configuration.
+ *
+ * client
+ *    Northbound client.
+ *
+ * user
+ *    Northbound user (can be NULL).
+ *
+ * Returns:
+ *    0 on success, -1 when the running configuration is already unlocked or
+ *    locked by another client/user.
+ */
+extern int nb_running_unlock(enum nb_client client, const void *user);
+
+/*
+ * Check if the running configuration is locked or not for the given
+ * client/user.
+ *
+ * client
+ *    Northbound client.
+ *
+ * user
+ *    Northbound user (can be NULL).
+ *
+ * Returns:
+ *    0 if the running configuration is unlocked or if the client/user owns the
+ *    lock, -1 otherwise.
+ */
+extern int nb_running_lock_check(enum nb_client client, const void *user);
+
+/*
+ * Iterate over operational data.
  *
  * xpath
  *    Data path of the YANG data we want to iterate over.
@@ -777,6 +1093,100 @@ extern bool nb_operation_is_valid(enum nb_operation operation,
 extern int nb_notification_send(const char *xpath, struct list *arguments);
 
 /*
+ * Associate a user pointer to a configuration node.
+ *
+ * This should be called by northbound 'create' callbacks in the NB_EV_APPLY
+ * phase only.
+ *
+ * dnode
+ *    libyang data node - only its XPath is used.
+ *
+ * entry
+ *    Arbitrary user-specified pointer.
+ */
+extern void nb_running_set_entry(const struct lyd_node *dnode, void *entry);
+
+/*
+ * Move an entire tree of user pointer nodes.
+ *
+ * Suppose we have xpath A/B/C/D, with user pointers associated to C and D. We
+ * need to move B to be under Z, so the new xpath is Z/B/C/D. Because user
+ * pointers are indexed with their absolute path, We need to move all user
+ * pointers at and below B to their new absolute paths; this function does
+ * that.
+ *
+ * xpath_from
+ *    base xpath of tree to move (A/B)
+ *
+ * xpath_to
+ *    base xpath of new location of tree (Z/B)
+ */
+extern void nb_running_move_tree(const char *xpath_from, const char *xpath_to);
+
+/*
+ * Unset the user pointer associated to a configuration node.
+ *
+ * This should be called by northbound 'destroy' callbacks in the NB_EV_APPLY
+ * phase only.
+ *
+ * dnode
+ *    libyang data node - only its XPath is used.
+ *
+ * Returns:
+ *    The user pointer that was unset.
+ */
+extern void *nb_running_unset_entry(const struct lyd_node *dnode);
+
+/*
+ * Find the user pointer (if any) associated to a configuration node.
+ *
+ * The XPath associated to the configuration node can be provided directly or
+ * indirectly through a libyang data node.
+ *
+ * If an user point is not found, this function follows the parent nodes in the
+ * running configuration until an user pointer is found or until the root node
+ * is reached.
+ *
+ * dnode
+ *    libyang data node - only its XPath is used (can be NULL if 'xpath' is
+ *    provided).
+ *
+ * xpath
+ *    XPath of the configuration node (can be NULL if 'dnode' is provided).
+ *
+ * abort_if_not_found
+ *    When set to true, abort the program if no user pointer is found.
+ *
+ *    As a rule of thumb, this parameter should be set to true in the following
+ *    scenarios:
+ *    - Calling this function from any northbound configuration callback during
+ *      the NB_EV_APPLY phase.
+ *    - Calling this function from a 'delete' northbound configuration callback
+ *      during any phase.
+ *
+ *    In both the above cases, the given configuration node should contain an
+ *    user pointer except when there's a bug in the code, in which case it's
+ *    better to abort the program right away and eliminate the need for
+ *    unnecessary NULL checks.
+ *
+ *    In all other cases, this parameter should be set to false and the caller
+ *    should check if the function returned NULL or not.
+ *
+ * Returns:
+ *    User pointer if found, NULL otherwise.
+ */
+extern void *nb_running_get_entry(const struct lyd_node *dnode,
+				  const char *xpath, bool abort_if_not_found);
+
+/*
+ * Same as 'nb_running_get_entry', but doesn't search within parent nodes
+ * recursively if an user point is not found.
+ */
+extern void *nb_running_get_entry_non_rec(const struct lyd_node *dnode,
+					  const char *xpath,
+					  bool abort_if_not_found);
+
+/*
  * Return a human-readable string representing a northbound event.
  *
  * event
@@ -829,14 +1239,22 @@ extern const char *nb_client_name(enum nb_client client);
  *
  * nmodules
  *    Size of the modules array.
+ *
+ * db_enabled
+ *    Set this to record the transactions in the transaction log.
  */
-extern void nb_init(struct thread_master *tm, const struct frr_yang_module_info *modules[],
-		    size_t nmodules);
+extern void nb_init(struct thread_master *tm,
+		    const struct frr_yang_module_info *const modules[],
+		    size_t nmodules, bool db_enabled);
 
 /*
  * Finish the northbound layer gracefully. Should be called only when the daemon
  * is exiting.
  */
 extern void nb_terminate(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _FRR_NORTHBOUND_H_ */

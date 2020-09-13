@@ -1,5 +1,7 @@
-OpenWRT
+OpenWrt
 =======
+
+General info about OpenWrt buildsystem: `link <https://openwrt.org/docs/guide-developer/build-system/start>`_.
 
 Prepare build environment
 -------------------------
@@ -9,20 +11,20 @@ For Debian based distributions, run:
 ::
 
     sudo apt-get install git build-essential libssl-dev libncurses5-dev \
-       unzip gawk zlib1g-dev subversion mercurial
+       unzip zlib1g-dev subversion mercurial
 
 For other environments, instructions can be found in the
 `official documentation
-<https://wiki.openwrt.org/doc/howto/buildroot.exigence#examples_of_package_installations>`_.
+<https://openwrt.org/docs/guide-developer/build-system/install-buildsystem#examples_of_package_installations>`_.
 
 
-Get OpenWRT Sources (from Git)
+Get OpenWrt Sources (from Git)
 ------------------------------
 
 .. note::
-   The OpenWRT build will fail if you run it as root. So take care to run it as a nonprivileged user.
+   The OpenWrt build will fail if you run it as root. So take care to run it as a nonprivileged user.
 
-Clone the OpenWRT sources and retrieve the package feeds
+Clone the OpenWrt sources and retrieve the package feeds
 
 ::
 
@@ -30,21 +32,15 @@ Clone the OpenWRT sources and retrieve the package feeds
     cd openwrt
     ./scripts/feeds update -a
     ./scripts/feeds install -a
-    cd feeds/routing
-    git fetch origin pull/319/head
-    git read-tree --prefix=frr/ -u FETCH_HEAD:frr
-    cd ../../package/feeds/routing/
-    ln -sv ../../../feeds/routing/frr .
-    cd ../../..
 
-Configure OpenWRT for your target and select the needed FRR packages in Network -> Routing and Redirection -> frr,
+Configure OpenWrt for your target and select the needed FRR packages in Network -> Routing and Redirection -> frr,
 exit and save
 
 ::
 
     make menuconfig
 
-Then, to compile either a complete OpenWRT image, or the FRR packages, run:
+Then, to compile either a complete OpenWrt image, or the FRR packages, run:
 
 ::
 
@@ -54,19 +50,25 @@ It may be possible that on first build ``make package/frr/compile`` not
 to work and it may be needed to run a ``make`` for the entire build
 environment. Add ``V=s`` to get more debugging output.
 
+More information about OpenWrt buildsystem can be found `here
+<https://openwrt.org/docs/guide-developer/build-system/use-buildsystem>`_.
+
 Work with sources
 -----------------
 
-To update to a newer version, or change other options, you need to edit the ``feeds/routing/frr/Makefile``.
+To update to a newer version, or change other options, you need to edit the ``feeds/packages/frr/Makefile``.
+
+More information about working with patches in OpenWrt buildsystem can be found `here
+<https://openwrt.org/docs/guide-developer/build-system/use-patches-with-buildsystem>`_.
 
 Usage
 -----
 
 Edit ``/usr/sbin/frr.init`` and add/remove the daemons name in section
-``DAEMONS=`` or don't install unneded packages For example: zebra bgpd ldpd
+``DAEMONS=`` or don't install unneeded packages For example: zebra bgpd ldpd
 isisd nhrpd ospfd ospf6d pimd ripd ripngd
 
-Enable the serivce
+Enable the service
 ^^^^^^^^^^^^^^^^^^
 
 -  ``service frr enable``
