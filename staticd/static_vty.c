@@ -68,7 +68,6 @@ static int static_route_leak(struct vty *vty, const char *svrf,
 	char buf_src_prefix[PREFIX_STRLEN];
 	char buf_nh_type[PREFIX_STRLEN];
 	char buf_tag[PREFIX_STRLEN];
-	char buf_tableid[PREFIX_STRLEN];
 	uint8_t label_stack_id = 0;
 	const char *buf_gate_str;
 	uint8_t distance = ZEBRA_STATIC_DISTANCE_DEFAULT;
@@ -162,14 +161,14 @@ static int static_route_leak(struct vty *vty, const char *svrf,
 				 "frr-staticd:staticd", "staticd", svrf,
 				 buf_prefix,
 				 yang_afi_safi_value2identity(afi, safi),
-				 buf_src_prefix, distance);
+				 buf_src_prefix, table_id, distance);
 		else
 			snprintf(xpath_prefix, sizeof(xpath_prefix),
 				 FRR_STATIC_ROUTE_INFO_KEY_XPATH,
 				 "frr-staticd:staticd", "staticd", svrf,
 				 buf_prefix,
 				 yang_afi_safi_value2identity(afi, safi),
-				 distance);
+				 table_id, distance);
 
 		nb_cli_enqueue_change(vty, xpath_prefix, NB_OP_CREATE, NULL);
 
@@ -180,12 +179,6 @@ static int static_route_leak(struct vty *vty, const char *svrf,
 			sizeof(ab_xpath));
 		nb_cli_enqueue_change(vty, ab_xpath, NB_OP_MODIFY, buf_tag);
 
-		/* Table-Id processing */
-		snprintf(buf_tableid, sizeof(buf_tableid), "%u", table_id);
-		strlcpy(ab_xpath, xpath_prefix, sizeof(ab_xpath));
-		strlcat(ab_xpath, FRR_STATIC_ROUTE_PATH_TABLEID_XPATH,
-			sizeof(ab_xpath));
-		nb_cli_enqueue_change(vty, ab_xpath, NB_OP_MODIFY, buf_tableid);
 		/* nexthop processing */
 
 		snprintf(ab_xpath, sizeof(ab_xpath),
@@ -289,16 +282,16 @@ static int static_route_leak(struct vty *vty, const char *svrf,
 				 "frr-staticd:staticd", "staticd", svrf,
 				 buf_prefix,
 				 yang_afi_safi_value2identity(afi, safi),
-				 buf_src_prefix, distance, buf_nh_type, nh_svrf,
-				 buf_gate_str, ifname);
+				 buf_src_prefix, table_id, distance,
+				 buf_nh_type, nh_svrf, buf_gate_str, ifname);
 		else
 			snprintf(ab_xpath, sizeof(ab_xpath),
 				 FRR_DEL_S_ROUTE_NH_KEY_XPATH,
 				 "frr-staticd:staticd", "staticd", svrf,
 				 buf_prefix,
 				 yang_afi_safi_value2identity(afi, safi),
-				 distance, buf_nh_type, nh_svrf, buf_gate_str,
-				 ifname);
+				 table_id, distance, buf_nh_type, nh_svrf,
+				 buf_gate_str, ifname);
 
 		dnode = yang_dnode_get(vty->candidate_config->dnode, ab_xpath);
 		if (!dnode)
@@ -365,8 +358,7 @@ int static_config(struct vty *vty, struct static_vrf *svrf, afi_t afi,
 
 				switch (nh->type) {
 				case STATIC_IPV4_GATEWAY:
-					vty_out(vty, " %s",
-						inet_ntoa(nh->addr.ipv4));
+					vty_out(vty, " %pI4", &nh->addr.ipv4);
 					break;
 				case STATIC_IPV6_GATEWAY:
 					vty_out(vty, " %s",
@@ -500,12 +492,6 @@ DEFPY_YANG(ip_route_blackhole,
       "Table to configure\n"
       "The table number to configure\n")
 {
-	if (table_str && vrf && !vrf_is_backend_netns()) {
-		vty_out(vty,
-			"%% table param only available when running on netns-based vrfs\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
 	return static_route(vty, AFI_IP, SAFI_UNICAST, no, prefix,
 			    mask_str, NULL, NULL, NULL, flag, tag_str,
 			    distance_str, vrf, label, table_str);
@@ -819,12 +805,6 @@ DEFPY_YANG(ipv6_route_blackhole,
       "Table to configure\n"
       "The table number to configure\n")
 {
-	if (table_str && vrf && !vrf_is_backend_netns()) {
-		vty_out(vty,
-			"%% table param only available when running on netns-based vrfs\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
 	return static_route(vty, AFI_IP6, SAFI_UNICAST, no, prefix_str,
 			    NULL, from_str, NULL, NULL, flag, tag_str,
 			    distance_str, vrf, label, table_str);
@@ -1111,19 +1091,17 @@ DEFPY_YANG(ipv6_route_vrf,
 				 ifname, flag, tag_str, distance_str, label,
 				 table_str, false, color_str);
 }
-DEFPY_YANG(debug_staticd,
-      debug_staticd_cmd,
-      "[no] debug static [{events$events}]",
-      NO_STR
-      DEBUG_STR
-      STATICD_STR
-      "Debug events\n")
+DEFPY_YANG(debug_staticd, debug_staticd_cmd,
+	   "[no] debug static [{events$events|route$route}]",
+	   NO_STR DEBUG_STR STATICD_STR
+	   "Debug events\n"
+	   "Debug route\n")
 {
 	/* If no specific category, change all */
 	if (strmatch(argv[argc - 1]->text, "static"))
-		static_debug_set(vty->node, !no, true);
+		static_debug_set(vty->node, !no, true, true);
 	else
-		static_debug_set(vty->node, !no, !!events);
+		static_debug_set(vty->node, !no, !!events, !!route);
 
 	return CMD_SUCCESS;
 }
@@ -1169,7 +1147,7 @@ void static_vty_init(void)
 	install_element(CONFIG_NODE, &ipv6_route_cmd);
 	install_element(VRF_NODE, &ipv6_route_vrf_cmd);
 
-	install_element(VIEW_NODE, &show_debugging_static_cmd);
-	install_element(VIEW_NODE, &debug_staticd_cmd);
+	install_element(ENABLE_NODE, &show_debugging_static_cmd);
+	install_element(ENABLE_NODE, &debug_staticd_cmd);
 	install_element(CONFIG_NODE, &debug_staticd_cmd);
 }

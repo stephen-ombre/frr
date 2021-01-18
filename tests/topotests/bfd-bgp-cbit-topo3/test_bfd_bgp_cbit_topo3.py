@@ -21,7 +21,7 @@
 #
 
 """
-test_bfd_bgp_cbit_topo3.py: Test the FRR/Quagga BFD daemon with multihop and BGP
+test_bfd_bgp_cbit_topo3.py: Test the FRR BFD daemon with multihop and BGP
 unnumbered.
 """
 
@@ -64,7 +64,7 @@ class BFDTopo(Topo):
         switch.add_link(tgen.gears["r2"])
         switch.add_link(tgen.gears["r3"])
 
-
+@pytest.mark.bfd
 def setup_module(mod):
     "Sets up the pytest environment"
     tgen = Topogen(BFDTopo, mod.__name__)
@@ -72,9 +72,10 @@ def setup_module(mod):
 
     router_list = tgen.routers()
 
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
-            TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname)),
+            TopoRouter.RD_ZEBRA,
+            os.path.join(CWD, "{}/zebra.conf".format(rname)),
         )
         router.load_config(
             TopoRouter.RD_BFD, os.path.join(CWD, "{}/bfdd.conf".format(rname))

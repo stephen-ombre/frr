@@ -33,6 +33,7 @@
 #include "isisd/isis_sr.h"
 #include "isis_flags.h"
 #include "isis_lsp.h"
+#include "isis_lfa.h"
 #include "isis_memory.h"
 #include "qobj.h"
 #include "ldp_sync.h"
@@ -130,6 +131,7 @@ struct isis_area {
 	struct thread *t_tick; /* LSP walker */
 	struct thread *t_lsp_refresh[ISIS_LEVELS];
 	struct timeval last_lsp_refresh_event[ISIS_LEVELS];
+	struct thread *t_rlfa_rib_update;
 	/* t_lsp_refresh is used in two ways:
 	 * a) regular refresh of LSPs
 	 * b) (possibly throttled) updates to LSPs
@@ -188,6 +190,18 @@ struct isis_area {
 	struct isis_sr_db srdb;
 	int ipv6_circuits;
 	bool purge_originator;
+	/* SPF prefix priorities. */
+	struct spf_prefix_priority_acl
+		spf_prefix_priorities[SPF_PREFIX_PRIO_MAX];
+	/* Fast Re-Route information. */
+	size_t lfa_protected_links[ISIS_LEVELS];
+	size_t lfa_load_sharing[ISIS_LEVELS];
+	enum spf_prefix_priority lfa_priority_limit[ISIS_LEVELS];
+	struct lfa_tiebreaker_tree_head lfa_tiebreakers[ISIS_LEVELS];
+	char *rlfa_plist_name[ISIS_LEVELS];
+	struct prefix_list *rlfa_plist[ISIS_LEVELS];
+	size_t rlfa_protected_links[ISIS_LEVELS];
+	size_t tilfa_protected_links[ISIS_LEVELS];
 	/* Counters */
 	uint32_t circuit_state_changes;
 	struct isis_redist redist_settings[REDIST_PROTOCOL_COUNT]
@@ -229,6 +243,8 @@ struct isis_area *isis_area_lookup_by_vrf(const char *area_tag,
 					  const char *vrf_name);
 int isis_area_get(struct vty *vty, const char *area_tag);
 void isis_area_destroy(struct isis_area *area);
+void isis_filter_update(struct access_list *access);
+void isis_prefix_list_update(struct prefix_list *plist);
 void print_debug(struct vty *, int, int);
 struct isis_lsp *lsp_for_arg(struct lspdb_head *head, const char *argv,
 			     struct isis *isis);
@@ -278,6 +294,7 @@ extern unsigned long debug_bfd;
 extern unsigned long debug_tx_queue;
 extern unsigned long debug_sr;
 extern unsigned long debug_ldp_sync;
+extern unsigned long debug_lfa;
 
 #define DEBUG_ADJ_PACKETS                (1<<0)
 #define DEBUG_SNP_PACKETS                (1<<1)
@@ -292,7 +309,8 @@ extern unsigned long debug_ldp_sync;
 #define DEBUG_BFD                        (1<<10)
 #define DEBUG_TX_QUEUE                   (1<<11)
 #define DEBUG_SR                         (1<<12)
-#define DEBUG_LDP_SYNC (1 << 13)
+#define DEBUG_LDP_SYNC                   (1<<13)
+#define DEBUG_LFA                        (1<<14)
 
 /* Debug related macro. */
 #define IS_DEBUG_ADJ_PACKETS (debug_adj_pkt & DEBUG_ADJ_PACKETS)
@@ -309,6 +327,7 @@ extern unsigned long debug_ldp_sync;
 #define IS_DEBUG_TX_QUEUE (debug_tx_queue & DEBUG_TX_QUEUE)
 #define IS_DEBUG_SR (debug_sr & DEBUG_SR)
 #define IS_DEBUG_LDP_SYNC (debug_ldp_sync & DEBUG_LDP_SYNC)
+#define IS_DEBUG_LFA (debug_lfa & DEBUG_LFA)
 
 #define lsp_debug(...)                                                         \
 	do {                                                                   \

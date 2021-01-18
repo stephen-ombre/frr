@@ -288,7 +288,7 @@ Route Map Set Command
 
    Subtract the BGP local preference from an existing `local_pref`.
 
-.. index:: [no] set distance DISTANCE
+.. index:: set distance DISTANCE
 .. clicmd:: [no] set distance DISTANCE
 
    Set the Administrative distance to DISTANCE to use for the route.
@@ -299,10 +299,13 @@ Route Map Set Command
 
    Set the route's weight.
 
-.. index:: set metric METRIC
-.. clicmd:: set metric METRIC
+.. index:: set metric <[+|-](1-4294967295)|rtt|+rtt|-rtt>
+.. clicmd:: [no] set metric <[+|-](1-4294967295)|rtt|+rtt|-rtt>
 
-   Set the BGP attribute MED.
+   Set the BGP attribute MED to a specific value. Use `+`/`-` to add or subtract
+   the specified value to/from the MED. Use `rtt` to set the MED to the round
+   trip time or `+rtt`/`-rtt` to add/subtract the round trip time to/from the
+   MED.
 
 .. index:: set as-path prepend AS_PATH
 .. clicmd:: set as-path prepend AS_PATH
@@ -384,7 +387,7 @@ Route Map Optimization Command
    of all the prefixes in all the prefix-lists that are included in the
    match rule of all the sequences of a route-map.
 
-.. index:: no route-map optimization
+.. index:: route-map optimization
 .. clicmd:: no route-map optimization
 
    Disable the route-map processing optimization.

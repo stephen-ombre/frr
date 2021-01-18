@@ -104,7 +104,7 @@ The following commands are independent of a specific cache server.
 .. index:: rpki polling_period (1-3600)
 .. clicmd:: rpki polling_period (1-3600)
 
-.. index:: no rpki polling_period
+.. index:: rpki polling_period
 .. clicmd:: no rpki polling_period
 
    Set the number of seconds the router waits until the router asks the cache
@@ -117,7 +117,7 @@ The following commands are independent of a specific cache server.
 .. index:: rpki cache (A.B.C.D|WORD) PORT [SSH_USERNAME] [SSH_PRIVKEY_PATH] [SSH_PUBKEY_PATH] [KNOWN_HOSTS_PATH] PREFERENCE
 .. clicmd:: rpki cache (A.B.C.D|WORD) PORT [SSH_USERNAME] [SSH_PRIVKEY_PATH] [SSH_PUBKEY_PATH] [KNOWN_HOSTS_PATH] PREFERENCE
 
-.. index:: no rpki cache (A.B.C.D|WORD) [PORT] PREFERENCE
+.. index:: rpki cache (A.B.C.D|WORD) [PORT] PREFERENCE
 .. clicmd:: no rpki cache (A.B.C.D|WORD) [PORT] PREFERENCE
 
    Add a cache server to the socket. By default, the connection between router
@@ -157,7 +157,7 @@ Validating BGP Updates
 .. index:: match rpki notfound|invalid|valid
 .. clicmd:: match rpki notfound|invalid|valid
 
-.. index:: no match rpki notfound|invalid|valid
+.. index:: match rpki notfound|invalid|valid
 .. clicmd:: no match rpki notfound|invalid|valid
 
     Create a clause for a route map to match prefixes with the specified RPKI
@@ -190,7 +190,7 @@ Debugging
 .. index:: debug rpki
 .. clicmd:: debug rpki
 
-.. index:: no debug rpki
+.. index:: debug rpki
 .. clicmd:: no debug rpki
 
    Enable or disable debugging output for RPKI.
@@ -271,5 +271,5 @@ RPKI Configuration Example
    route-map rpki permit 40
    !
 
-.. [Securing-BGP] Geoff Huston, Randy Bush: Securing BGP, In: The Internet Protocol Journal, Volume 14, No. 2, 2011. <http://www.cisco.com/web/about/ac123/ac147/archived_issues/ipj_14-2/142_bgp.html>
-.. [Resource-Certification] Geoff Huston: Resource Certification, In: The Internet Protocol Journal, Volume 12, No.1, 2009. <http://www.cisco.com/web/about/ac123/ac147/archived_issues/ipj_12-1/121_resource.html>
+.. [Securing-BGP] Geoff Huston, Randy Bush: Securing BGP, In: The Internet Protocol Journal, Volume 14, No. 2, 2011. <https://www.cisco.com/c/dam/en_us/about/ac123/ac147/archived_issues/ipj_14-2/ipj_14-2.pdf>
+.. [Resource-Certification] Geoff Huston: Resource Certification, In: The Internet Protocol Journal, Volume 12, No.1, 2009. <https://www.cisco.com/c/dam/en_us/about/ac123/ac147/archived_issues/ipj_12-1/ipj_12-1.pdf>

@@ -145,6 +145,15 @@ enum node_type {
 	PROTOCOL_NODE,		 /* protocol filtering node */
 	MPLS_NODE,		 /* MPLS config node */
 	PW_NODE,		 /* Pseudowire config node */
+	SEGMENT_ROUTING_NODE,	 /* Segment routing root node */
+	SR_TRAFFIC_ENG_NODE,	 /* SR Traffic Engineering node */
+	SR_SEGMENT_LIST_NODE,	 /* SR segment list config node */
+	SR_POLICY_NODE,		 /* SR policy config node */
+	SR_CANDIDATE_DYN_NODE,	 /* SR dynamic candidate path config node */
+	PCEP_NODE,	 	 /* PCEP node */
+	PCEP_PCE_CONFIG_NODE,	 /* PCE shared configuration node */
+	PCEP_PCE_NODE,		 /* PCE configuration node */
+	PCEP_PCC_NODE,		 /* PCC configuration node */
 	VTY_NODE,		 /* Vty node. */
 	FPM_NODE,		 /* Dataplane FPM node. */
 	LINK_PARAMS_NODE,	/* Link-parameters node */
@@ -437,12 +446,6 @@ struct cmd_node {
 #define NEIGHBOR_ADDR_STR2 "Neighbor address\nNeighbor IPv6 address\nInterface name or neighbor tag\n"
 #define NEIGHBOR_ADDR_STR3 "Neighbor address\nIPv6 address\nInterface name\n"
 
-/* Daemons lists */
-#define DAEMONS_STR                                                            \
-	"For the zebra daemon\nFor the rip daemon\nFor the ripng daemon\nFor the ospf daemon\nFor the ospfv6 daemon\nFor the bgp daemon\nFor the isis daemon\nFor the pbr daemon\nFor the fabricd daemon\nFor the pim daemon\nFor the static daemon\nFor the sharpd daemon\nFor the vrrpd daemon\nFor the ldpd daemon\n"
-#define DAEMONS_LIST                                                           \
-	"<zebra|ripd|ripngd|ospfd|ospf6d|bgpd|isisd|pbrd|fabricd|pimd|staticd|sharpd|vrrpd|ldpd>"
-
 /* Graceful Restart cli help strings */
 #define GR_CMD "Global Graceful Restart command\n"
 #define NO_GR_CMD "Undo Global Graceful Restart command\n"
@@ -457,6 +460,25 @@ struct cmd_node {
 #define NO_GR_NEIGHBOR_DISABLE_CMD "Undo Graceful Restart Disable command for a neighbor\n"
 #define GR_NEIGHBOR_HELPER_CMD "Graceful Restart Helper command for a neighbor\n"
 #define NO_GR_NEIGHBOR_HELPER_CMD "Undo Graceful Restart Helper command for a neighbor\n"
+
+/* EVPN help Strings */
+#define EVPN_RT_HELP_STR "EVPN route information\n"
+#define EVPN_RT_DIST_HELP_STR "Route Distinguisher\n"
+#define EVPN_ASN_IP_HELP_STR "ASN:XX or A.B.C.D:XX\n"
+#define EVPN_TYPE_HELP_STR "Specify Route type\n"
+#define EVPN_TYPE_1_HELP_STR "EAD (Type-1) route\n"
+#define EVPN_TYPE_2_HELP_STR "MAC-IP (Type-2) route\n"
+#define EVPN_TYPE_3_HELP_STR "Multicast (Type-3) route\n"
+#define EVPN_TYPE_4_HELP_STR "Ethernet Segment (Type-4) route\n"
+#define EVPN_TYPE_5_HELP_STR "Prefix (Type-5) route\n"
+#define EVPN_TYPE_ALL_LIST "<ead|1|macip|2|multicast|3|es|4|prefix|5>"
+#define EVPN_TYPE_ALL_LIST_HELP_STR                                            \
+	EVPN_TYPE_1_HELP_STR EVPN_TYPE_1_HELP_STR                              \
+	EVPN_TYPE_2_HELP_STR EVPN_TYPE_2_HELP_STR                              \
+	EVPN_TYPE_3_HELP_STR EVPN_TYPE_3_HELP_STR                              \
+	EVPN_TYPE_4_HELP_STR EVPN_TYPE_4_HELP_STR                              \
+	EVPN_TYPE_5_HELP_STR EVPN_TYPE_5_HELP_STR
+
 
 /* Prototypes. */
 extern void install_node(struct cmd_node *node);
@@ -517,7 +539,9 @@ extern int cmd_execute_command(vector, struct vty *,
 			       const struct cmd_element **, int);
 extern int cmd_execute_command_strict(vector, struct vty *,
 				      const struct cmd_element **);
-extern void cmd_init(int);
+extern void cmd_init(int terminal);
+extern void cmd_init_config_callbacks(void (*start_config_cb)(void),
+				      void (*end_config_cb)(void));
 extern void cmd_terminate(void);
 extern void cmd_exit(struct vty *vty);
 extern int cmd_list_cmds(struct vty *vty, int do_permute);

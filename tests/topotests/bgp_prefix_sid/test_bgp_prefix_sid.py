@@ -75,7 +75,7 @@ def setup_module(module):
 
     logger.info("starting exaBGP on peer1")
     peer_list = tgen.exabgp_peers()
-    for pname, peer in peer_list.iteritems():
+    for pname, peer in peer_list.items():
         peer_dir = os.path.join(CWD, pname)
         env_file = os.path.join(CWD, "exabgp.env")
         logger.info("Running ExaBGP peer")
@@ -101,7 +101,11 @@ def test_r1_receive_and_advertise_prefix_sid_type1():
             "prefix": prefix,
             "advertisedTo": {"10.0.0.101": {}, "10.0.0.102": {}},
             "paths": [
-                {"valid": True, "remoteLabel": remoteLabel, "labelIndex": labelIndex,}
+                {
+                    "valid": True,
+                    "remoteLabel": remoteLabel,
+                    "labelIndex": labelIndex,
+                }
             ],
         }
         return topotest.json_cmp(output, expected)

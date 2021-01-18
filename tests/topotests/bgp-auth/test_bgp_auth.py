@@ -217,7 +217,7 @@ def setup_module(mod):
     router_list = tgen.routers()
 
     # For all registred routers, load the zebra configuration file
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -270,10 +270,10 @@ def peer_name(rtr, prefix, vrf):
 
 def print_diag(vrf):
     "print failure disagnostics"
-    
+
     tgen = get_topogen()
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         print(rname + ":")
         print(router.vtysh_cmd("show run"))
         print(router.vtysh_cmd("show ip route {}".format(vrf_str(vrf))))
@@ -285,7 +285,7 @@ def configure(conf_file):
 
     tgen = get_topogen()
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         with open(
             os.path.join(CWD, "{}/{}").format(router.name, conf_file), "r+"
         ) as cfg:
@@ -321,7 +321,7 @@ def clear_ospf(vrf=""):
 
     tgen = get_topogen()
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         if vrf == "":
             router.vtysh_cmd("conf t\nno router ospf")
         else:
@@ -330,7 +330,7 @@ def clear_ospf(vrf=""):
 
 def check_neigh_state(router, peer, state, vrf=""):
     "check BGP neighbor state on a router"
-    
+
     count = 0
     matched = False
     neigh_output = ""

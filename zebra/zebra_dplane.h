@@ -152,6 +152,9 @@ enum dplane_op_e {
 
 	/* Link layer address discovery */
 	DPLANE_OP_NEIGH_DISCOVER,
+
+	/* bridge port update */
+	DPLANE_OP_BR_PORT_UPDATE,
 };
 
 /*
@@ -184,6 +187,8 @@ enum dplane_op_e {
 #define DPLANE_NEIGH_SET_STATIC   (1 << 2)
 #define DPLANE_NEIGH_SET_INACTIVE (1 << 3)
 
+#define DPLANE_BR_PORT_NON_DF (1 << 0)
+
 /* Enable system route notifications */
 void dplane_enable_sys_route_notifs(void);
 
@@ -199,6 +204,9 @@ void dplane_enable_sys_route_notifs(void);
  */
 TAILQ_HEAD(dplane_ctx_q, zebra_dplane_ctx);
 
+/* Declare a type for (optional) extended interface info objects. */
+TAILQ_HEAD(dplane_intf_extra_q, dplane_intf_extra);
+
 /* Allocate a context object */
 struct zebra_dplane_ctx *dplane_ctx_alloc(void);
 
@@ -207,6 +215,15 @@ struct zebra_dplane_ctx *dplane_ctx_alloc(void);
  * freed.
  */
 void dplane_ctx_reset(struct zebra_dplane_ctx *ctx);
+
+/*
+ * Allow zebra code to walk the queue of pending contexts, evaluate each one
+ * using a callback function. The caller can supply an optional void* arg also.
+ * If the function returns 'true', the context will be dequeued and freed
+ * without being processed.
+ */
+int dplane_clean_ctx_queue(bool (*context_cb)(struct zebra_dplane_ctx *ctx,
+					      void *arg), void *val);
 
 /* Return a dataplane results context block after use; the caller's pointer will
  * be cleared.
@@ -308,6 +325,21 @@ const struct nexthop_group *dplane_ctx_get_ng(
 const struct nexthop_group *dplane_ctx_get_old_ng(
 	const struct zebra_dplane_ctx *ctx);
 
+/* Optional extra info about interfaces in nexthops - a plugin must enable
+ * this extra info.
+ */
+const struct dplane_intf_extra *
+dplane_ctx_get_intf_extra(const struct zebra_dplane_ctx *ctx);
+
+const struct dplane_intf_extra *
+dplane_ctx_intf_extra_next(const struct zebra_dplane_ctx *ctx,
+			   const struct dplane_intf_extra *ptr);
+
+vrf_id_t dplane_intf_extra_get_vrfid(const struct dplane_intf_extra *ptr);
+uint32_t dplane_intf_extra_get_ifindex(const struct dplane_intf_extra *ptr);
+uint32_t dplane_intf_extra_get_flags(const struct dplane_intf_extra *ptr);
+uint32_t dplane_intf_extra_get_status(const struct dplane_intf_extra *ptr);
+
 /* Backup nexthop information (list of nexthops) if present. */
 const struct nexthop_group *
 dplane_ctx_get_backup_ng(const struct zebra_dplane_ctx *ctx);
@@ -316,6 +348,7 @@ dplane_ctx_get_old_backup_ng(const struct zebra_dplane_ctx *ctx);
 
 /* Accessors for nexthop information */
 uint32_t dplane_ctx_get_nhe_id(const struct zebra_dplane_ctx *ctx);
+uint32_t dplane_ctx_get_old_nhe_id(const struct zebra_dplane_ctx *ctx);
 afi_t dplane_ctx_get_nhe_afi(const struct zebra_dplane_ctx *ctx);
 vrf_id_t dplane_ctx_get_nhe_vrf_id(const struct zebra_dplane_ctx *ctx);
 int dplane_ctx_get_nhe_type(const struct zebra_dplane_ctx *ctx);
@@ -423,6 +456,7 @@ uint32_t dplane_ctx_neigh_get_update_flags(const struct zebra_dplane_ctx *ctx);
 int dplane_ctx_rule_get_sock(const struct zebra_dplane_ctx *ctx);
 int dplane_ctx_rule_get_unique(const struct zebra_dplane_ctx *ctx);
 int dplane_ctx_rule_get_seq(const struct zebra_dplane_ctx *ctx);
+const char *dplane_ctx_rule_get_ifname(const struct zebra_dplane_ctx *ctx);
 uint32_t dplane_ctx_rule_get_priority(const struct zebra_dplane_ctx *ctx);
 uint32_t dplane_ctx_rule_get_old_priority(const struct zebra_dplane_ctx *ctx);
 uint32_t dplane_ctx_rule_get_table(const struct zebra_dplane_ctx *ctx);
@@ -441,6 +475,15 @@ const struct prefix *
 dplane_ctx_rule_get_dst_ip(const struct zebra_dplane_ctx *ctx);
 const struct prefix *
 dplane_ctx_rule_get_old_dst_ip(const struct zebra_dplane_ctx *ctx);
+
+/* Accessors for bridge port information */
+uint32_t dplane_ctx_get_br_port_flags(const struct zebra_dplane_ctx *ctx);
+uint32_t
+dplane_ctx_get_br_port_sph_filter_cnt(const struct zebra_dplane_ctx *ctx);
+const struct in_addr *
+dplane_ctx_get_br_port_sph_filters(const struct zebra_dplane_ctx *ctx);
+uint32_t
+dplane_ctx_get_br_port_backup_nhg_id(const struct zebra_dplane_ctx *ctx);
 
 /* Namespace info - esp. for netlink communication */
 const struct zebra_dplane_info *dplane_ctx_get_ns(
@@ -477,6 +520,12 @@ enum zebra_dplane_result dplane_route_notif_update(
 	enum dplane_op_e op,
 	struct zebra_dplane_ctx *ctx);
 
+/*
+ * Enqueue bridge port changes for the dataplane.
+ */
+enum zebra_dplane_result dplane_br_port_update(
+	const struct interface *ifp, bool non_df, uint32_t sph_filter_cnt,
+	const struct in_addr *sph_filters, uint32_t backup_nhg_id);
 
 /* Forward ref of nhg_hash_entry */
 struct nhg_hash_entry;
@@ -714,12 +763,21 @@ struct zebra_dplane_ctx *dplane_provider_dequeue_in_ctx(
 int dplane_provider_dequeue_in_list(struct zebra_dplane_provider *prov,
 				    struct dplane_ctx_q *listp);
 
+/* Current completed work queue length */
+uint32_t dplane_provider_out_ctx_queue_len(struct zebra_dplane_provider *prov);
+
 /* Enqueue completed work, maintain associated counter and locking */
 void dplane_provider_enqueue_out_ctx(struct zebra_dplane_provider *prov,
 				     struct zebra_dplane_ctx *ctx);
 
 /* Enqueue a context directly to zebra main. */
 void dplane_provider_enqueue_to_zebra(struct zebra_dplane_ctx *ctx);
+
+/* Enable collection of extra info about interfaces in route updates;
+ * this allows a provider/plugin to see some extra info in route update
+ * context objects.
+ */
+void dplane_enable_intf_extra_info(void);
 
 /*
  * Initialize the dataplane modules at zebra startup. This is currently called

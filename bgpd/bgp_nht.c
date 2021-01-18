@@ -31,6 +31,7 @@
 #include "nexthop.h"
 #include "vrf.h"
 #include "filter.h"
+#include "nexthop_group.h"
 
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_table.h"
@@ -72,7 +73,7 @@ static void bgp_unlink_nexthop_check(struct bgp_nexthop_cache *bnc)
 	if (LIST_EMPTY(&(bnc->paths)) && !bnc->nht_info) {
 		if (BGP_DEBUG(nht, NHT)) {
 			char buf[PREFIX2STR_BUFFER];
-			zlog_debug("bgp_unlink_nexthop: freeing bnc %s(%u)(%s)",
+			zlog_debug("%s: freeing bnc %s(%u)(%s)", __func__,
 				   bnc_str(bnc, buf, PREFIX2STR_BUFFER),
 				   bnc->srte_color, bnc->bgp->name_pretty);
 		}
@@ -315,15 +316,12 @@ static void bgp_process_nexthop_update(struct bgp_nexthop_cache *bnc,
 	bnc->change_flags = 0;
 
 	/* debug print the input */
-	if (BGP_DEBUG(nht, NHT)) {
-		char buf[PREFIX2STR_BUFFER];
-		prefix2str(&nhr->prefix, buf, sizeof(buf));
+	if (BGP_DEBUG(nht, NHT))
 		zlog_debug(
-			"%s(%u): Rcvd NH update %s(%u) - metric %d/%d #nhops %d/%d flags 0x%x",
-			bnc->bgp->name_pretty, bnc->bgp->vrf_id, buf,
+			"%s(%u): Rcvd NH update %pFX(%u) - metric %d/%d #nhops %d/%d flags 0x%x",
+			bnc->bgp->name_pretty, bnc->bgp->vrf_id, &nhr->prefix,
 			bnc->srte_color, nhr->metric, bnc->metric,
 			nhr->nexthop_num, bnc->nexthop_num, bnc->flags);
-	}
 
 	if (nhr->metric != bnc->metric)
 		bnc->change_flags |= BGP_NEXTHOP_METRIC_CHANGED;
@@ -441,9 +439,8 @@ void bgp_parse_nexthop_update(int command, vrf_id_t vrf_id)
 	}
 
 	if (!zapi_nexthop_update_decode(zclient->ibuf, &nhr)) {
-		if (BGP_DEBUG(nht, NHT))
-			zlog_debug("%s[%s]: Failure to decode nexthop update",
-				   __PRETTY_FUNCTION__, bgp->name_pretty);
+		zlog_err("%s[%s]: Failure to decode nexthop update",
+			 __PRETTY_FUNCTION__, bgp->name_pretty);
 		return;
 	}
 
@@ -455,14 +452,10 @@ void bgp_parse_nexthop_update(int command, vrf_id_t vrf_id)
 
 	bnc = bnc_find(tree, &nhr.prefix, nhr.srte_color);
 	if (!bnc) {
-		if (BGP_DEBUG(nht, NHT)) {
-			char buf[PREFIX2STR_BUFFER];
-
-			prefix2str(&nhr.prefix, buf, sizeof(buf));
+		if (BGP_DEBUG(nht, NHT))
 			zlog_debug(
-				"parse nexthop update(%s(%u)(%s)): bnc info not found",
-				buf, nhr.srte_color, bgp->name_pretty);
-		}
+				"parse nexthop update(%pFX(%u)(%s)): bnc info not found",
+				&nhr.prefix, nhr.srte_color, bgp->name_pretty);
 		return;
 	}
 
@@ -632,7 +625,7 @@ static void sendmsg_zebra_rnh(struct bgp_nexthop_cache *bnc, int command)
 	ret = zclient_send_rnh(zclient, command, &bnc->prefix, exact_match,
 			       bnc->bgp->vrf_id);
 	/* TBD: handle the failure */
-	if (ret < 0)
+	if (ret == ZCLIENT_SEND_FAILURE)
 		flog_warn(EC_BGP_ZEBRA_SEND,
 			  "sendmsg_nexthop: zclient_send_message() failed");
 
@@ -758,7 +751,7 @@ static void evaluate_paths(struct bgp_nexthop_cache *bnc)
 				    path->sub_type, path->attr, dest)) {
 				if (BGP_DEBUG(nht, NHT))
 					zlog_debug(
-						"%s: prefix %pRN (vrf %s), ignoring path due to martian or self-next-hop",
+						"%s: prefix %pBD (vrf %s), ignoring path due to martian or self-next-hop",
 						__func__, dest, bgp_path->name);
 			} else
 				bnc_is_valid_nexthop =
@@ -772,12 +765,12 @@ static void evaluate_paths(struct bgp_nexthop_cache *bnc)
 				prefix_rd2str((struct prefix_rd *)bgp_dest_get_prefix(dest->pdest),
 					buf1, sizeof(buf1));
 				zlog_debug(
-					"... eval path %d/%d %pRN RD %s %s flags 0x%x",
+					"... eval path %d/%d %pBD RD %s %s flags 0x%x",
 					afi, safi, dest, buf1,
 					bgp_path->name_pretty, path->flags);
 			} else
 				zlog_debug(
-					"... eval path %d/%d %pRN %s flags 0x%x",
+					"... eval path %d/%d %pBD %s flags 0x%x",
 					afi, safi, dest, bgp_path->name_pretty,
 					path->flags);
 		}
@@ -846,7 +839,7 @@ static void evaluate_paths(struct bgp_nexthop_cache *bnc)
 					"%s: Updating peer (%s(%s)) status with NHT",
 					__func__, peer->host,
 					peer->bgp->name_pretty);
-			bgp_fsm_event_update(peer, valid_nexthops);
+			bgp_fsm_nht_update(peer, !!valid_nexthops);
 			SET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);
 		}
 	}
@@ -973,4 +966,84 @@ void bgp_nht_dereg_enhe_cap_intfs(struct peer *peer)
 		zclient_send_interface_radv_req(zclient, nhop->vrf_id, ifp, 0,
 						0);
 	}
+}
+
+/****************************************************************************
+ * L3 NHGs are used for fast failover of nexthops in the dplane. These are
+ * the APIs for allocating L3 NHG ids. Management of the L3 NHG itself is
+ * left to the application using it.
+ * PS: Currently EVPN host routes is the only app using L3 NHG for fast
+ * failover of remote ES links.
+ ***************************************************************************/
+static bitfield_t bgp_nh_id_bitmap;
+static uint32_t bgp_l3nhg_start;
+
+/* XXX - currently we do nothing on the callbacks */
+static void bgp_l3nhg_add_cb(const char *name)
+{
+}
+static void bgp_l3nhg_add_nexthop_cb(const struct nexthop_group_cmd *nhgc,
+				     const struct nexthop *nhop)
+{
+}
+static void bgp_l3nhg_del_nexthop_cb(const struct nexthop_group_cmd *nhgc,
+				     const struct nexthop *nhop)
+{
+}
+static void bgp_l3nhg_del_cb(const char *name)
+{
+}
+
+static void bgp_l3nhg_zebra_init(void)
+{
+	static bool bgp_l3nhg_zebra_inited;
+	if (bgp_l3nhg_zebra_inited)
+		return;
+
+	bgp_l3nhg_zebra_inited = true;
+	bgp_l3nhg_start = zclient_get_nhg_start(ZEBRA_ROUTE_BGP);
+	nexthop_group_init(bgp_l3nhg_add_cb, bgp_l3nhg_add_nexthop_cb,
+			   bgp_l3nhg_del_nexthop_cb, bgp_l3nhg_del_cb);
+}
+
+
+#define min(A, B) ((A) < (B) ? (A) : (B))
+void bgp_l3nhg_init(void)
+{
+	uint32_t id_max;
+
+	id_max = min(ZEBRA_NHG_PROTO_SPACING - 1, 16 * 1024);
+	bf_init(bgp_nh_id_bitmap, id_max);
+	bf_assign_zero_index(bgp_nh_id_bitmap);
+
+	if (BGP_DEBUG(nht, NHT) || BGP_DEBUG(evpn_mh, EVPN_MH_ES))
+		zlog_debug("bgp l3_nhg range %u - %u", bgp_l3nhg_start + 1,
+			   bgp_l3nhg_start + id_max);
+}
+
+void bgp_l3nhg_finish(void)
+{
+	bf_free(bgp_nh_id_bitmap);
+}
+
+uint32_t bgp_l3nhg_id_alloc(void)
+{
+	uint32_t nhg_id = 0;
+
+	bgp_l3nhg_zebra_init();
+	bf_assign_index(bgp_nh_id_bitmap, nhg_id);
+	if (nhg_id)
+		nhg_id += bgp_l3nhg_start;
+
+	return nhg_id;
+}
+
+void bgp_l3nhg_id_free(uint32_t nhg_id)
+{
+	if (!nhg_id || (nhg_id <= bgp_l3nhg_start))
+		return;
+
+	nhg_id -= bgp_l3nhg_start;
+
+	bf_release_index(bgp_nh_id_bitmap, nhg_id);
 }

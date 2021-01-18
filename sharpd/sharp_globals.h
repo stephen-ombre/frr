@@ -31,6 +31,7 @@ struct sharp_routes {
 	/* The nexthop info we are using for installation */
 	struct nexthop nhop;
 	struct nexthop backup_nhop;
+	uint32_t nhgid;
 	struct nexthop_group nhop_group;
 	struct nexthop_group backup_nhop_group;
 
@@ -44,6 +45,8 @@ struct sharp_routes {
 
 	struct timeval t_start;
 	struct timeval t_end;
+
+	char opaque[ZAPI_MESSAGE_OPAQUE_LENGTH];
 };
 
 struct sharp_global {

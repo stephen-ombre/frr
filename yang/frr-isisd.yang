@@ -15,6 +15,14 @@ module frr-isisd {
     prefix frr-interface;
   }
 
+  import frr-vrf {
+    prefix frr-vrf;
+  }
+
+  import frr-route-map {
+    prefix frr-route-map;
+  }
+
   import frr-route-types {
     prefix frr-route-types;
   }
@@ -236,13 +244,19 @@ module frr-isisd {
     }
   }
 
+  typedef access-list-ref {
+    type string;
+  }
+
+  typedef prefix-list-ref {
+    type string;
+  }
+
   grouping redistribute-attributes {
     description
       "Common optional attributes of any redistribute entry.";
     leaf route-map {
-      type string {
-        length "1..max";
-      }
+      type frr-route-map:route-map-ref;
       description
         "Applies the conditions of the specified route-map to routes that
          are redistributed into this routing instance.";
@@ -330,6 +344,153 @@ module frr-isisd {
     }
   }
 
+  grouping global-config-lfa {
+    container lfa {
+      description
+        "LFA configuration.";
+
+      leaf load-sharing {
+        type boolean;
+        default "true";
+        description
+          "Load share prefixes across multiple backups.";
+      }
+      leaf priority-limit {
+        type enumeration {
+          enum "critical" {
+            value 0;
+            description
+              "Compute for critical priority prefixes only.";
+          }
+          enum "high" {
+            value 1;
+            description
+              "Compute for critical & high priority prefixes.";
+          }
+          enum "medium" {
+            value 2;
+            description
+              "Compute for critical, high & medium priority prefixes.";
+          }
+        }
+        description
+          "Limit backup computation up to the prefix priority.";
+      }
+      list tiebreaker {
+        key "index";
+        unique "type";
+        description
+          "Configure tiebreaker for multiple backups.";
+        leaf index {
+          type uint8 {
+            range "1..255";
+          }
+          description
+            "Preference order among tiebreakers.";
+        }
+        leaf type {
+          type enumeration {
+            enum "downstream" {
+              value 0;
+              description
+                "Prefer backup path via downstream node.";
+            }
+            enum "lowest-backup-metric" {
+              value 1;
+              description
+                "Prefer backup path with lowest total metric.";
+            }
+            enum "node-protecting" {
+              value 2;
+              description
+                "Prefer node protecting backup path.";
+            }
+          }
+          mandatory true;
+          description
+            "Tiebreaker type.";
+        }
+      }
+    }
+  }
+
+  grouping global-config-remote-lfa {
+    container remote-lfa {
+      description
+        "Remote LFA configuration.";
+
+      leaf prefix-list {
+        type prefix-list-ref;
+        description
+          "Filter PQ node router ID based on prefix list.";
+      }
+    }
+  }
+
+  grouping interface-config-lfa {
+    container lfa {
+      description
+        "LFA configuration.";
+      leaf enable {
+        type boolean;
+        default false;
+        description
+          "Enables LFA computation.";
+      }
+      leaf-list exclude-interface {
+        type frr-interface:interface-ref;
+        description
+          "Exclude an interface from computation.";
+      }
+    }
+  }
+
+  grouping interface-config-remote-lfa {
+    container remote-lfa {
+      description
+        "Remote LFA configuration.";
+
+      leaf enable {
+        type boolean;
+        default false;
+        description
+          "Enables remote LFA computation using LDP tunnels.";
+        must ". = 'false' or ../../lfa/enable = 'true'" {
+          error-message
+            "Remote LFA depends on classic LFA being configured in the interface.";
+        }
+
+      }
+      leaf maximum-metric {
+        type uint32 {
+          range "1..16777215";
+        }
+        description
+          "Limit remote LFA node selection within the metric.";
+      }
+    }
+  }
+
+  grouping interface-config-ti-lfa {
+    container ti-lfa {
+      description
+        "TI-LFA configuration.";
+      leaf enable {
+        type boolean;
+        default false;
+        description
+          "Enables TI-LFA computation.";
+      }
+      leaf node-protection {
+        type boolean;
+        must ". = 'false' or ../enable = 'true'";
+        default false;
+        description
+          "Node protection is provided by the alternate.";
+      }
+    }
+  }
+
   grouping interface-config {
     description
       "Interface configuration grouping";
@@ -341,7 +502,7 @@ module frr-isisd {
     }
 
     leaf vrf {
-      type string;
+      type frr-vrf:vrf-ref;
       default "default";
       description
         "VRF NAME.";
@@ -632,6 +793,32 @@ module frr-isisd {
       }
     }
 
+    container fast-reroute {
+      description
+        "Interface IP Fast-reroute configuration.";
+      container level-1 {
+        description
+          "Level-1 IP Fast-reroute configuration.";
+        must "./lfa/enable = 'false' or ./ti-lfa/enable = 'false'" {
+          error-message
+            "Can't enable both classic LFA and TI-LFA in the same interface.";
+        }
+        uses interface-config-lfa;
+        uses interface-config-remote-lfa;
+        uses interface-config-ti-lfa;
+      }
+      container level-2 {
+        description
+          "Level-2 IP Fast-reroute configuration.";
+        must "./lfa/enable = 'false' or ./ti-lfa/enable = 'false'" {
+          error-message
+            "Can't enable both classic LFA and TI-LFA in the same interface.";
+        }
+        uses interface-config-lfa;
+        uses interface-config-remote-lfa;
+        uses interface-config-ti-lfa;
+      }
+    }
   }
 
   grouping adjacency-state {
@@ -830,7 +1017,7 @@ module frr-isisd {
       }
 
       leaf vrf {
-        type string;
+        type frr-vrf:vrf-ref;
         description
           "VRF NAME.";
       }
@@ -1055,6 +1242,42 @@ module frr-isisd {
               "Minimum time between consecutive level-2 SPFs.";
           }
         }
+
+        container prefix-priorities {
+          description
+            "SPF Prefix Priority configuration";
+
+          container critical {
+            description
+              "Critical prefix priority";
+            leaf access-list-name {
+              type access-list-ref;
+              description
+                "Access List to determine prefixes for
+                 this priority";
+            }
+          }
+          container high {
+            description
+              "High prefix priority";
+            leaf access-list-name {
+              type access-list-ref;
+              description
+                "Access List to determine prefixes for
+                 this priority";
+            }
+          }
+          container medium {
+            description
+              "Medium prefix priority";
+            leaf access-list-name {
+              type access-list-ref;
+              description
+                "Access List to determine prefixes for
+                 this priority";
+            }
+          }
+        }
       }
 
       container area-password {
@@ -1209,6 +1432,23 @@ module frr-isisd {
         }
       }
 
+      container fast-reroute {
+        description
+          "IP Fast-reroute configuration.";
+        container level-1 {
+          description
+            "Level-1 IP Fast-reroute configuration.";
+          uses global-config-lfa;
+          uses global-config-remote-lfa;
+        }
+        container level-2 {
+          description
+            "Level-2 IP Fast-reroute configuration.";
+          uses global-config-lfa;
+          uses global-config-remote-lfa;
+        }
+      }
+
       leaf log-adjacency-changes {
         type boolean;
         default "false";
@@ -1340,6 +1580,12 @@ module frr-isisd {
               default "php";
               description
                 "Configure last hop behavior.";
+            }
+            leaf n-flag-clear {
+              type boolean;
+              default "false";
+              description
+                "Not a node SID";
             }
           }
         }

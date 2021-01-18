@@ -129,7 +129,7 @@ def setup_module(mod):
     router_list = tgen.routers()
 
     # For all registered routers, load the zebra configuration file
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -162,9 +162,9 @@ def router_compare_json_output(rname, command, reference):
     filename = "{}/{}/{}".format(CWD, rname, reference)
     expected = json.loads(open(filename).read())
 
-    # Run test function until we get an result. Wait at most 80 seconds.
+    # Run test function until we get an result.
     test_func = partial(topotest.router_json_cmp, tgen.gears[rname], command, expected)
-    _, diff = topotest.run_and_expect(test_func, None, count=160, wait=0.5)
+    _, diff = topotest.run_and_expect(test_func, None, count=320, wait=0.5)
     assertmsg = '"{}" JSON output mismatches the expected result'.format(rname)
     assert diff is None, assertmsg
 
@@ -264,6 +264,7 @@ def test_ldp_pseudowires():
             rname, "show l2vpn atom vc json", "show_l2vpn_vc.ref"
         )
 
+
 def test_ldp_igp_sync():
     logger.info("Test: verify LDP igp-sync")
     tgen = get_topogen()
@@ -276,6 +277,7 @@ def test_ldp_igp_sync():
         router_compare_json_output(
             rname, "show mpls ldp igp-sync json", "show_ldp_igp_sync.ref"
         )
+
 
 def test_ospf_ldp_sync():
     logger.info("Test: verify OSPF igp-sync")
@@ -317,18 +319,25 @@ def test_r1_eth1_shutdown():
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show mpls ldp igp-sync json", "show_ldp_igp_sync_r1_eth1_shutdown.ref"
+            rname,
+            "show mpls ldp igp-sync json",
+            "show_ldp_igp_sync_r1_eth1_shutdown.ref",
         )
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show ip ospf mpls ldp-sync json", "show_ospf_ldp_sync_r1_eth1_shutdown.ref"
+            rname,
+            "show ip ospf mpls ldp-sync json",
+            "show_ospf_ldp_sync_r1_eth1_shutdown.ref",
         )
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show ip ospf interface json", "show_ip_ospf_interface_r1_eth1_shutdown.ref"
+            rname,
+            "show ip ospf interface json",
+            "show_ip_ospf_interface_r1_eth1_shutdown.ref",
         )
+
 
 def test_r1_eth1_no_shutdown():
     logger.info("Test: verify behaviour after r1-eth1 is no shutdown")
@@ -358,6 +367,7 @@ def test_r1_eth1_no_shutdown():
             rname, "show ip ospf interface json", "show_ip_ospf_interface.ref"
         )
 
+
 def test_r2_eth1_shutdown():
     logger.info("Test: verify behaviour after r2-eth1 is shutdown")
     tgen = get_topogen()
@@ -373,18 +383,25 @@ def test_r2_eth1_shutdown():
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show mpls ldp igp-sync json", "show_ldp_igp_sync_r1_eth1_shutdown.ref"
+            rname,
+            "show mpls ldp igp-sync json",
+            "show_ldp_igp_sync_r1_eth1_shutdown.ref",
         )
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show ip ospf mpls ldp-sync json", "show_ospf_ldp_sync_r2_eth1_shutdown.ref"
+            rname,
+            "show ip ospf mpls ldp-sync json",
+            "show_ospf_ldp_sync_r2_eth1_shutdown.ref",
         )
 
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show ip ospf interface json", "show_ip_ospf_interface_r2_eth1_shutdown.ref"
+            rname,
+            "show ip ospf interface json",
+            "show_ip_ospf_interface_r2_eth1_shutdown.ref",
         )
+
 
 def test_r2_eth1_no_shutdown():
     logger.info("Test: verify behaviour after r2-eth1 is no shutdown")
@@ -413,6 +430,7 @@ def test_r2_eth1_no_shutdown():
         router_compare_json_output(
             rname, "show ip ospf interface json", "show_ip_ospf_interface.ref"
         )
+
 
 # Memory leak test template
 def test_memory_leak():

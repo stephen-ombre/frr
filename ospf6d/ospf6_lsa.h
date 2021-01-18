@@ -20,6 +20,7 @@
 
 #ifndef OSPF6_LSA_H
 #define OSPF6_LSA_H
+#include "ospf6_top.h"
 
 /* Debug option */
 #define OSPF6_LSA_DEBUG           0x01
@@ -156,46 +157,36 @@ extern vector ospf6_lsa_handler_vector;
 /* addr is (struct prefix *) */
 #define CONTINUE_IF_ADDRESS_LINKLOCAL(debug, addr)                             \
 	if (IN6_IS_ADDR_LINKLOCAL(&(addr)->u.prefix6)) {                       \
-		char buf[PREFIX2STR_BUFFER];                                   \
-		prefix2str(addr, buf, sizeof(buf));                            \
 		if (debug)                                                     \
-			zlog_debug("Filter out Linklocal: %s", buf);           \
+			zlog_debug("Filter out Linklocal: %pFX", addr);        \
 		continue;                                                      \
 	}
 
 #define CONTINUE_IF_ADDRESS_UNSPECIFIED(debug, addr)                           \
 	if (IN6_IS_ADDR_UNSPECIFIED(&(addr)->u.prefix6)) {                     \
-		char buf[PREFIX2STR_BUFFER];                                   \
-		prefix2str(addr, buf, sizeof(buf));                            \
 		if (debug)                                                     \
-			zlog_debug("Filter out Unspecified: %s", buf);         \
+			zlog_debug("Filter out Unspecified: %pFX", addr);      \
 		continue;                                                      \
 	}
 
 #define CONTINUE_IF_ADDRESS_LOOPBACK(debug, addr)                              \
 	if (IN6_IS_ADDR_LOOPBACK(&(addr)->u.prefix6)) {                        \
-		char buf[PREFIX2STR_BUFFER];                                   \
-		prefix2str(addr, buf, sizeof(buf));                            \
 		if (debug)                                                     \
-			zlog_debug("Filter out Loopback: %s", buf);            \
+			zlog_debug("Filter out Loopback: %pFX", addr);         \
 		continue;                                                      \
 	}
 
 #define CONTINUE_IF_ADDRESS_V4COMPAT(debug, addr)                              \
 	if (IN6_IS_ADDR_V4COMPAT(&(addr)->u.prefix6)) {                        \
-		char buf[PREFIX2STR_BUFFER];                                   \
-		prefix2str(addr, buf, sizeof(buf));                            \
 		if (debug)                                                     \
-			zlog_debug("Filter out V4Compat: %s", buf);            \
+			zlog_debug("Filter out V4Compat: %pFX", addr);         \
 		continue;                                                      \
 	}
 
 #define CONTINUE_IF_ADDRESS_V4MAPPED(debug, addr)                              \
 	if (IN6_IS_ADDR_V4MAPPED(&(addr)->u.prefix6)) {                        \
-		char buf[PREFIX2STR_BUFFER];                                   \
-		prefix2str(addr, buf, sizeof(buf));                            \
 		if (debug)                                                     \
-			zlog_debug("Filter out V4Mapped: %s", buf);            \
+			zlog_debug("Filter out V4Mapped: %pFX", addr);         \
 		continue;                                                      \
 	}
 
@@ -226,8 +217,8 @@ ospf6_lsa_create_headeronly(struct ospf6_lsa_header *header);
 extern void ospf6_lsa_delete(struct ospf6_lsa *lsa);
 extern struct ospf6_lsa *ospf6_lsa_copy(struct ospf6_lsa *);
 
-extern void ospf6_lsa_lock(struct ospf6_lsa *);
-extern struct ospf6_lsa *ospf6_lsa_unlock(struct ospf6_lsa *);
+extern struct ospf6_lsa *ospf6_lsa_lock(struct ospf6_lsa *lsa);
+extern struct ospf6_lsa *ospf6_lsa_unlock(struct ospf6_lsa *lsa);
 
 extern int ospf6_lsa_expire(struct thread *);
 extern int ospf6_lsa_refresh(struct thread *);
@@ -246,6 +237,6 @@ extern void ospf6_lsa_terminate(void);
 extern int config_write_ospf6_debug_lsa(struct vty *vty);
 extern void install_element_ospf6_debug_lsa(void);
 extern void ospf6_lsa_age_set(struct ospf6_lsa *lsa);
-extern void ospf6_flush_self_originated_lsas_now(void);
-
+extern void ospf6_flush_self_originated_lsas_now(struct ospf6 *ospf6);
+extern struct ospf6 *ospf6_get_by_lsdb(struct ospf6_lsa *lsa);
 #endif /* OSPF6_LSA_H */

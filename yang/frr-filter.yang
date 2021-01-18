@@ -154,21 +154,33 @@ module frr-filter {
                 }
               }
               case cisco {
-                leaf host {
-                  description "Host to match";
-                  type inet:ipv4-address;
-                }
-                leaf network {
-                  description "Network to match";
-                  type inet:ipv4-prefix;
-                }
-                leaf source-any {
-                  /*
-                   * Was `any`, however it conflicts with `any` leaf
-                   * outside this choice.
-                   */
-                  description "Match any";
-                  type empty;
+                choice standard-value {
+                  description "Source value to match";
+
+                  leaf host {
+                    description "Host to match";
+                    type inet:ipv4-address;
+                  }
+                  container network {
+                    leaf address {
+                      mandatory true;
+                      description "Network address part.";
+                      type inet:ipv4-address;
+                    }
+                    leaf mask {
+                      mandatory true;
+                      description "Network mask/wildcard part.";
+                      type inet:ipv4-address;
+                    }
+                  }
+                  leaf source-any {
+                    /*
+                     * Was `any`, however it conflicts with `any` leaf
+                     * outside this choice.
+                     */
+                    description "Match any";
+                    type empty;
+                  }
                 }
 
                 choice extended-value {
@@ -178,9 +190,17 @@ module frr-filter {
                     description "Host to match";
                     type inet:ipv4-address;
                   }
-                  leaf destination-network {
-                    description "Network to match";
-                    type inet:ipv4-prefix;
+                  container destination-network {
+                    leaf address {
+                      mandatory true;
+                      description "Network address part.";
+                      type inet:ipv4-address;
+                    }
+                    leaf mask {
+                      mandatory true;
+                      description "Network mask/wildcard part.";
+                      type inet:ipv4-address;
+                    }
                   }
                   leaf destination-any {
                     description "Match any";

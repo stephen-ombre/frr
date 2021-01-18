@@ -470,7 +470,7 @@ if_hello_timer(struct thread *thread)
 static void
 if_start_hello_timer(struct iface_af *ia)
 {
-	THREAD_TIMER_OFF(ia->hello_timer);
+	thread_cancel(&ia->hello_timer);
 	ia->hello_timer = NULL;
 	thread_add_timer(master, if_hello_timer, ia, if_get_hello_interval(ia),
 			 &ia->hello_timer);
@@ -479,7 +479,7 @@ if_start_hello_timer(struct iface_af *ia)
 static void
 if_stop_hello_timer(struct iface_af *ia)
 {
-	THREAD_TIMER_OFF(ia->hello_timer);
+	thread_cancel(&ia->hello_timer);
 }
 
 struct ctl_iface *
@@ -578,15 +578,15 @@ if_join_ipv4_group(struct iface *iface, struct in_addr *addr)
 {
 	struct in_addr		 if_addr;
 
-	log_debug("%s: interface %s addr %s", __func__, iface->name,
-	    inet_ntoa(*addr));
+	log_debug("%s: interface %s addr %pI4", __func__, iface->name,
+	    addr);
 
 	if_addr.s_addr = if_get_ipv4_addr(iface);
 
 	if (setsockopt_ipv4_multicast(global.ipv4.ldp_disc_socket,
 	    IP_ADD_MEMBERSHIP, if_addr, addr->s_addr, iface->ifindex) < 0) {
-		log_warn("%s: error IP_ADD_MEMBERSHIP, interface %s address %s",
-		     __func__, iface->name, inet_ntoa(*addr));
+		log_warn("%s: error IP_ADD_MEMBERSHIP, interface %s address %pI4",
+		     __func__, iface->name, addr);
 		return (-1);
 	}
 	return (0);
@@ -597,14 +597,14 @@ if_leave_ipv4_group(struct iface *iface, struct in_addr *addr)
 {
 	struct in_addr		 if_addr;
 
-	log_debug("%s: interface %s addr %s", __func__, iface->name,
-	    inet_ntoa(*addr));
+	log_debug("%s: interface %s addr %pI4", __func__, iface->name,
+	    addr);
 
 	if_addr.s_addr = if_get_ipv4_addr(iface);
 
 	if (setsockopt_ipv4_multicast(global.ipv4.ldp_disc_socket,
 	    IP_DROP_MEMBERSHIP, if_addr, addr->s_addr, iface->ifindex) < 0) {
-		log_warn("%s: error IP_DROP_MEMBERSHIP, interface %s address %s", __func__, iface->name, inet_ntoa(*addr));
+		log_warn("%s: error IP_DROP_MEMBERSHIP, interface %s address %pI4", __func__, iface->name, addr);
 		return (-1);
 	}
 
@@ -753,8 +753,7 @@ static void start_wait_for_ldp_sync_timer(struct iface *iface)
 	if (iface->ldp_sync.wait_for_sync_timer)
 		return;
 
-	THREAD_TIMER_OFF(iface->ldp_sync.wait_for_sync_timer);
-	iface->ldp_sync.wait_for_sync_timer = NULL;
+	THREAD_OFF(iface->ldp_sync.wait_for_sync_timer);
 	thread_add_timer(master, iface_wait_for_ldp_sync_timer, iface,
 			if_get_wait_for_sync_interval(),
 			&iface->ldp_sync.wait_for_sync_timer);
@@ -762,8 +761,7 @@ static void start_wait_for_ldp_sync_timer(struct iface *iface)
 
 static void stop_wait_for_ldp_sync_timer(struct iface *iface)
 {
-	THREAD_TIMER_OFF(iface->ldp_sync.wait_for_sync_timer);
-	iface->ldp_sync.wait_for_sync_timer = NULL;
+	THREAD_OFF(iface->ldp_sync.wait_for_sync_timer);
 }
 
 static int
@@ -828,14 +826,14 @@ ldp_sync_fsm_adj_event(struct adj *adj, enum ldp_sync_event event)
 	}
 
 	debug_evt_ldp_sync("%s: event %s, "
-		"adj iface %s (%d) lsr-id %s "
-		"source address %s transport address %s",
-		__func__, ldp_sync_event_names[event],
-		adj->source.link.ia->iface->name,
-		adj->source.link.ia->iface->ifindex,
-		inet_ntoa(adj->lsr_id),
-		log_addr(adj_get_af(adj), &adj->source.link.src_addr),
-		log_addr(adj_get_af(adj), &adj->trans_addr));
+			   "adj iface %s (%d) lsr-id %pI4 "
+			   "source address %s transport address %s",
+			   __func__, ldp_sync_event_names[event],
+			   adj->source.link.ia->iface->name,
+			   adj->source.link.ia->iface->ifindex,
+			   &adj->lsr_id,
+			   log_addr(adj_get_af(adj), &adj->source.link.src_addr),
+			   log_addr(adj_get_af(adj), &adj->trans_addr));
 
 	return ldp_sync_fsm(iface, event);
 }
@@ -861,9 +859,9 @@ ldp_sync_fsm_nbr_event(struct nbr *nbr, enum ldp_sync_event event)
 			 */
 			continue;
 
-		debug_evt_ldp_sync("%s: event %s, iface %s, lsr-id %s",
+		debug_evt_ldp_sync("%s: event %s, iface %s, lsr-id %pI4",
 			__func__, ldp_sync_event_names[event],
-			iface->name, inet_ntoa(nbr->id));
+			iface->name, &nbr->id);
 
 		ldp_sync_fsm(iface, event);
 	}

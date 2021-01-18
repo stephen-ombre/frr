@@ -73,12 +73,9 @@ static int ospf_router_id_update_zebra(ZAPI_CALLBACK_ARGS)
 	struct prefix router_id;
 	zebra_router_id_update_read(zclient->ibuf, &router_id);
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE)) {
-		char buf[PREFIX2STR_BUFFER];
-		prefix2str(&router_id, buf, sizeof(buf));
-		zlog_debug("Zebra rcvd: router id update %s vrf %s id %u", buf,
-			   ospf_vrf_id_to_name(vrf_id), vrf_id);
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE))
+		zlog_debug("Zebra rcvd: router id update %pFX vrf %s id %u",
+			   &router_id, ospf_vrf_id_to_name(vrf_id), vrf_id);
 
 	ospf = ospf_lookup_by_vrf_id(vrf_id);
 
@@ -86,15 +83,11 @@ static int ospf_router_id_update_zebra(ZAPI_CALLBACK_ARGS)
 		ospf->router_id_zebra = router_id.u.prefix4;
 		ospf_router_id_update(ospf);
 	} else {
-		if (IS_DEBUG_OSPF_EVENT) {
-			char buf[PREFIX2STR_BUFFER];
-
-			prefix2str(&router_id, buf, sizeof(buf));
+		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"%s: ospf instance not found for vrf %s id %u router_id %s",
+				"%s: ospf instance not found for vrf %s id %u router_id %pFX",
 				__func__, ospf_vrf_id_to_name(vrf_id), vrf_id,
-				buf);
-		}
+				&router_id);
 	}
 	return 0;
 }
@@ -110,13 +103,10 @@ static int ospf_interface_address_add(ZAPI_CALLBACK_ARGS)
 	if (c == NULL)
 		return 0;
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE)) {
-		char buf[PREFIX2STR_BUFFER];
-		prefix2str(c->address, buf, sizeof(buf));
-		zlog_debug("Zebra: interface %s address add %s vrf %s id %u",
-			   c->ifp->name, buf, ospf_vrf_id_to_name(vrf_id),
-			   vrf_id);
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE))
+		zlog_debug("Zebra: interface %s address add %pFX vrf %s id %u",
+			   c->ifp->name, c->address,
+			   ospf_vrf_id_to_name(vrf_id), vrf_id);
 
 	ospf = ospf_lookup_by_vrf_id(vrf_id);
 	if (!ospf)
@@ -142,12 +132,9 @@ static int ospf_interface_address_delete(ZAPI_CALLBACK_ARGS)
 	if (c == NULL)
 		return 0;
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE)) {
-		char buf[PREFIX2STR_BUFFER];
-		prefix2str(c->address, buf, sizeof(buf));
-		zlog_debug("Zebra: interface %s address delete %s",
-			   c->ifp->name, buf);
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_INTERFACE))
+		zlog_debug("Zebra: interface %s address delete %pFX",
+			   c->ifp->name, c->address);
 
 	ifp = c->ifp;
 	p = *c->address;
@@ -279,17 +266,14 @@ void ospf_zebra_add(struct ospf *ospf, struct prefix_ipv4 *p,
 		count++;
 
 		if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-			char buf[2][PREFIX2STR_BUFFER];
 			struct interface *ifp;
 
 			ifp = if_lookup_by_index(path->ifindex, ospf->vrf_id);
 
 			zlog_debug(
-				"Zebra: Route add %s nexthop %s, ifindex=%d %s",
-				prefix2str(p, buf[0], sizeof(buf[0])),
-			        inet_ntop(AF_INET, &path->nexthop,
-					  buf[1], sizeof(buf[1])),
-				path->ifindex, ifp ? ifp->name : " ");
+				"Zebra: Route add %pFX nexthop %pI4, ifindex=%d %s",
+				p, &path->nexthop, path->ifindex,
+				ifp ? ifp->name : " ");
 		}
 	}
 	api.nexthop_num = count;
@@ -309,11 +293,8 @@ void ospf_zebra_delete(struct ospf *ospf, struct prefix_ipv4 *p,
 	api.safi = SAFI_UNICAST;
 	memcpy(&api.prefix, p, sizeof(*p));
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-		char buf[PREFIX2STR_BUFFER];
-		zlog_debug("Zebra: Route delete %s",
-			   prefix2str(p, buf, sizeof(buf)));
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
+		zlog_debug("Zebra: Route delete %pFX", p);
 
 	zclient_route_send(ZEBRA_ROUTE_DELETE, zclient, &api);
 }
@@ -332,11 +313,8 @@ void ospf_zebra_add_discard(struct ospf *ospf, struct prefix_ipv4 *p)
 
 	zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api);
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-		char buf[PREFIX2STR_BUFFER];
-		zlog_debug("Zebra: Route add discard %s",
-			   prefix2str(p, buf, sizeof(buf)));
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
+		zlog_debug("Zebra: Route add discard %pFX", p);
 }
 
 void ospf_zebra_delete_discard(struct ospf *ospf, struct prefix_ipv4 *p)
@@ -353,11 +331,8 @@ void ospf_zebra_delete_discard(struct ospf *ospf, struct prefix_ipv4 *p)
 
 	zclient_route_send(ZEBRA_ROUTE_DELETE, zclient, &api);
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-		char buf[PREFIX2STR_BUFFER];
-		zlog_debug("Zebra: Route delete discard %s",
-			   prefix2str(p, buf, sizeof(buf)));
-	}
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
+		zlog_debug("Zebra: Route delete discard %pFX", p);
 }
 
 struct ospf_external *ospf_external_lookup(struct ospf *ospf, uint8_t type,
@@ -433,8 +408,8 @@ bool ospf_external_default_routemap_apply_walk(struct ospf *ospf,
 
 	if (ret && ei) {
 		if (IS_DEBUG_OSPF_DEFAULT_INFO)
-			zlog_debug("Default originate routemap permit ei: %s",
-				   inet_ntoa(ei->p.prefix));
+			zlog_debug("Default originate routemap permit ei: %pI4",
+				   &ei->p.prefix);
 		return true;
 	}
 
@@ -488,7 +463,7 @@ static int ospf_external_lsa_default_routemap_timer(struct thread *thread)
 	if (ret && !lsa)
 		ospf_external_lsa_originate(ospf, default_ei);
 	else if (ret && lsa && IS_LSA_MAXAGE(lsa))
-		ospf_external_lsa_refresh(ospf, lsa, default_ei, true);
+		ospf_external_lsa_refresh(ospf, lsa, default_ei, true, false);
 	else if (!ret && lsa)
 		ospf_external_lsa_flush(ospf, DEFAULT_ROUTE, &default_ei->p, 0);
 
@@ -875,8 +850,8 @@ static int ospf_external_lsa_originate_check(struct ospf *ospf,
 	/* If prefix is multicast, then do not originate LSA. */
 	if (IN_MULTICAST(htonl(ei->p.prefix.s_addr))) {
 		zlog_info(
-			"LSA[Type5:%s]: Not originate AS-external-LSA, Prefix belongs multicast",
-			inet_ntoa(ei->p.prefix));
+			"LSA[Type5:%pI4]: Not originate AS-external-LSA, Prefix belongs multicast",
+			&ei->p.prefix);
 		return 0;
 	}
 
@@ -927,8 +902,7 @@ int ospf_external_info_apply_default_routemap(struct ospf *ospf,
 	if (red && ROUTEMAP_NAME(red)) {
 		route_map_result_t ret;
 
-		ret = route_map_apply(ROUTEMAP(red), (struct prefix *)p,
-				      RMAP_OSPF, ei);
+		ret = route_map_apply(ROUTEMAP(red), (struct prefix *)p, ei);
 
 		if (ret == RMAP_DENYMATCH) {
 			ei->route_map_set = save_values;
@@ -968,16 +942,16 @@ static bool ospf_external_lsa_default_routemap_apply(struct ospf *ospf,
 	}
 
 	if (IS_DEBUG_OSPF_DEFAULT_INFO)
-		zlog_debug("Apply default originate routemap on ei: %s cmd: %d",
-			   inet_ntoa(ei->p.prefix), cmd);
+		zlog_debug("Apply default originate routemap on ei: %pI4 cmd: %d",
+			   &ei->p.prefix, cmd);
 
 	ret = ospf_external_info_apply_default_routemap(ospf, ei, default_ei);
 
 	/* If deny then nothing to be done both in add and del case. */
 	if (!ret) {
 		if (IS_DEBUG_OSPF_DEFAULT_INFO)
-			zlog_debug("Default originte routemap deny for ei: %s",
-				   inet_ntoa(ei->p.prefix));
+			zlog_debug("Default originte routemap deny for ei: %pI4",
+				   &ei->p.prefix);
 		return false;
 	}
 
@@ -989,7 +963,7 @@ static bool ospf_external_lsa_default_routemap_apply(struct ospf *ospf,
 		/* If permit and default already advertise then return. */
 		if (lsa && !IS_LSA_MAXAGE(lsa)) {
 			if (IS_DEBUG_OSPF_DEFAULT_INFO)
-				zlog_debug("Defult lsa already originated");
+				zlog_debug("Default lsa already originated");
 			return true;
 		}
 
@@ -998,7 +972,8 @@ static bool ospf_external_lsa_default_routemap_apply(struct ospf *ospf,
 
 		if (lsa && IS_LSA_MAXAGE(lsa))
 			/* Refresh lsa.*/
-			ospf_external_lsa_refresh(ospf, lsa, default_ei, true);
+			ospf_external_lsa_refresh(ospf, lsa, default_ei, true,
+						  false);
 		else
 			/* If permit and default not advertised then advertise.
 			 */
@@ -1015,8 +990,8 @@ static bool ospf_external_lsa_default_routemap_apply(struct ospf *ospf,
 
 		if (IS_DEBUG_OSPF_DEFAULT_INFO)
 			zlog_debug(
-				"Running default route-map again as ei: %s deleted",
-				inet_ntoa(ei->p.prefix));
+				"Running default route-map again as ei: %pI4 deleted",
+				&ei->p.prefix);
 		/*
 		 * if this route delete was permitted then we need to check
 		 * there are any other external info which can still trigger
@@ -1061,13 +1036,10 @@ int ospf_redistribute_check(struct ospf *ospf, struct external_info *ei,
 		if (DISTRIBUTE_LIST(ospf, type))
 			if (access_list_apply(DISTRIBUTE_LIST(ospf, type), p)
 			    == FILTER_DENY) {
-				if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-					char buf[PREFIX2STR_BUFFER];
+				if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
 					zlog_debug(
-						"Redistribute[%s]: %s filtered by distribute-list.",
-						ospf_redist_string(type),
-						prefix2str(p, buf, sizeof(buf)));
-				}
+						"Redistribute[%s]: %pFX filtered by distribute-list.",
+						ospf_redist_string(type), p);
 				return 0;
 			}
 
@@ -1083,18 +1055,14 @@ int ospf_redistribute_check(struct ospf *ospf, struct external_info *ei,
 	if (red && ROUTEMAP_NAME(red)) {
 		route_map_result_t ret;
 
-		ret = route_map_apply(ROUTEMAP(red), (struct prefix *)p,
-				      RMAP_OSPF, ei);
+		ret = route_map_apply(ROUTEMAP(red), (struct prefix *)p, ei);
 
 		if (ret == RMAP_DENYMATCH) {
 			ei->route_map_set = save_values;
-			if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-				char buf[PREFIX2STR_BUFFER];
+			if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
 				zlog_debug(
-					"Redistribute[%s]: %s filtered by route-map.",
-					ospf_redist_string(type),
-					prefix2str(p, buf, sizeof(buf)));
-			}
+					"Redistribute[%s]: %pFX filtered by route-map.",
+					ospf_redist_string(type), p);
 			return 0;
 		}
 
@@ -1171,14 +1139,10 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 	if (is_prefix_default(&p))
 		rt_type = DEFAULT_ROUTE;
 
-	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE)) {
-		char buf_prefix[PREFIX_STRLEN];
-		prefix2str(&api.prefix, buf_prefix, sizeof(buf_prefix));
-
-		zlog_debug("%s: cmd %s from client %s: vrf_id %d, p %s",
+	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
+		zlog_debug("%s: cmd %s from client %s: vrf_id %d, p %pFX",
 			   __func__, zserv_command_string(cmd),
-			   zebra_route_string(api.type), vrf_id, buf_prefix);
-	}
+			   zebra_route_string(api.type), vrf_id, &api.prefix);
 
 	if (cmd == ZEBRA_REDISTRIBUTE_ROUTE_ADD) {
 		/* XXX|HACK|TODO|FIXME:
@@ -1215,24 +1179,100 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 				if (is_prefix_default(&p))
 					ospf_external_lsa_refresh_default(ospf);
 				else {
-					struct ospf_lsa *current;
+					struct ospf_external_aggr_rt *aggr;
+					struct as_external_lsa *al;
+					struct ospf_lsa *lsa = NULL;
+					struct in_addr mask;
 
-					current = ospf_external_info_find_lsa(
-						ospf, &ei->p);
-					if (!current)
-						ospf_external_lsa_originate(
-							ospf, ei);
-					else {
+					aggr = ospf_external_aggr_match(ospf,
+									&ei->p);
+
+					if (aggr) {
+						/* Check the AS-external-LSA
+						 * should be originated.
+						 */
+						if (!ospf_redistribute_check(
+							    ospf, ei, NULL))
+							return 0;
+
 						if (IS_DEBUG_OSPF(
-							    zebra,
-							    ZEBRA_REDISTRIBUTE))
+							    lsa,
+							    EXTNL_LSA_AGGR))
 							zlog_debug(
-								"ospf_zebra_read_route() : %s refreshing LSA",
-								inet_ntoa(
-									p.prefix));
-						ospf_external_lsa_refresh(
-							ospf, current, ei,
-							LSA_REFRESH_FORCE);
+								"%s: Send Aggreate LSA (%pI4/%d)",
+								__func__,
+								&aggr->p.prefix,
+								aggr->p.prefixlen);
+
+						ospf_originate_summary_lsa(
+							ospf, aggr, ei);
+
+						/* Handling the case where the
+						 * external route prefix
+						 * and aggegate prefix is same
+						 * If same dont flush the
+						 * originated
+						 * external LSA.
+						 */
+						if (prefix_same(
+							    (struct prefix
+								     *)&aggr->p,
+							    (struct prefix *)&ei
+								    ->p))
+							return 0;
+
+						lsa = ospf_external_info_find_lsa(
+							ospf, &ei->p);
+
+						if (lsa) {
+							al = (struct
+							      as_external_lsa *)
+								     lsa->data;
+							masklen2ip(
+								ei->p.prefixlen,
+								&mask);
+
+							if (mask.s_addr
+							    != al->mask.s_addr)
+								return 0;
+
+							ospf_external_lsa_flush(
+								ospf, ei->type,
+								&ei->p, 0);
+						}
+					} else {
+						struct ospf_lsa *current;
+
+						current =
+							ospf_external_info_find_lsa(
+								ospf, &ei->p);
+						if (!current) {
+							/* Check the
+							 * AS-external-LSA
+							 * should be
+							 * originated.
+							 */
+							if (!ospf_redistribute_check(
+								    ospf, ei,
+								    NULL))
+								return 0;
+
+							ospf_external_lsa_originate(
+								ospf, ei);
+						} else {
+							if (IS_DEBUG_OSPF(
+								    zebra,
+								    ZEBRA_REDISTRIBUTE))
+								zlog_debug(
+									"%s: %pI4 refreshing LSA",
+									__func__,
+									&p.prefix);
+							ospf_external_lsa_refresh(
+								ospf, current,
+								ei,
+								LSA_REFRESH_FORCE,
+								false);
+						}
 					}
 				}
 			}
@@ -1246,21 +1286,36 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 
 	} else /* if (cmd == ZEBRA_REDISTRIBUTE_ROUTE_DEL) */
 	{
-		/*
-		 * Check if default-information originate is
-		 * with some routemap prefix/access list match.
-		 * Apply before ei is deleted.
-		 */
+		struct ospf_external_aggr_rt *aggr;
+
 		ei = ospf_external_info_lookup(ospf, rt_type, api.instance, &p);
-		if (ei)
+		if (ei == NULL)
+			return 0;
+		else
+			/*
+			 * Check if default-information originate i
+			 * with some routemap prefix/access list match.
+			 * Apply before ei is deleted.
+			 */
 			ospf_external_lsa_default_routemap_apply(ospf, ei, cmd);
 
-		ospf_external_info_delete(ospf, rt_type, api.instance, p);
-		if (is_prefix_default(&p))
-			ospf_external_lsa_refresh_default(ospf);
-		else
-			ospf_external_lsa_flush(ospf, rt_type, &p,
-						ifindex /*, nexthop */);
+		aggr = ospf_external_aggr_match(ospf, &ei->p);
+
+		if (aggr && (ei->aggr_route == aggr)) {
+			ospf_unlink_ei_from_aggr(ospf, aggr, ei);
+
+			ospf_external_info_delete(ospf, rt_type, api.instance,
+						  p);
+		} else {
+			ospf_external_info_delete(ospf, rt_type, api.instance,
+						  p);
+
+			if (is_prefix_default(&p))
+				ospf_external_lsa_refresh_default(ospf);
+			else
+				ospf_external_lsa_flush(ospf, rt_type, &p,
+							ifindex /*, nexthop */);
+		}
 	}
 
 
@@ -1352,22 +1407,80 @@ static int ospf_distribute_list_update_timer(struct thread *thread)
 				if ((ei = rn->info) != NULL) {
 					if (is_prefix_default(&ei->p))
 						default_refresh = 1;
-					else if (
-						(lsa = ospf_external_info_find_lsa(
-							 ospf, &ei->p))) {
-						if (!CHECK_FLAG(
-							    lsa->flags,
-							    OSPF_LSA_IN_MAXAGE))
+					else {
+						struct ospf_external_aggr_rt
+							*aggr;
+						aggr = ospf_external_aggr_match(
+							ospf, &ei->p);
+						if (aggr) {
+							/* Check the
+							 * AS-external-LSA
+							 * should be originated.
+							 */
+							if (!ospf_redistribute_check(
+								    ospf, ei,
+								    NULL)) {
+
+								ospf_unlink_ei_from_aggr(
+									ospf,
+									aggr,
+									ei);
+								continue;
+							}
+
+							if (IS_DEBUG_OSPF(
+								    lsa,
+								    EXTNL_LSA_AGGR))
+								zlog_debug(
+									"%s: Send Aggregate LSA (%pI4/%d)",
+									__func__,
+									&aggr->p.prefix,
+									aggr->p.prefixlen);
+
+							/* Originate Aggregate
+							 * LSA
+							 */
+							ospf_originate_summary_lsa(
+								ospf, aggr, ei);
+						} else if (
+							(lsa = ospf_external_info_find_lsa(
+								 ospf,
+								 &ei->p))) {
+							int force =
+								LSA_REFRESH_IF_CHANGED;
+							/* If this is a MaxAge
+							 * LSA, we need to
+							 * force refresh it
+							 * because distribute
+							 * settings might have
+							 * changed and now,
+							 * this LSA needs to be
+							 * originated, not be
+							 * removed.
+							 * If we don't force
+							 * refresh it, it will
+							 * remain a MaxAge LSA
+							 * because it will look
+							 * like it hasn't
+							 * changed. Neighbors
+							 * will not receive
+							 * updates for this LSA.
+							 */
+							if (IS_LSA_MAXAGE(lsa))
+								force = LSA_REFRESH_FORCE;
+
 							ospf_external_lsa_refresh(
 								ospf, lsa, ei,
-								LSA_REFRESH_IF_CHANGED);
-						else
-							ospf_external_lsa_refresh(
-								ospf, lsa, ei,
-								LSA_REFRESH_FORCE);
-					} else
-						ospf_external_lsa_originate(
-							ospf, ei);
+								force, false);
+						} else {
+							if (!ospf_redistribute_check(
+								    ospf, ei,
+								    NULL))
+								continue;
+							ospf_external_lsa_originate(
+								ospf, ei);
+						}
+					}
 				}
 		}
 	}
@@ -1802,7 +1915,7 @@ int ospf_zebra_label_manager_connect(void)
 	set_nonblocking(zclient_sync->sock);
 
 	/* Send hello to notify zebra this is a synchronous client */
-	if (zclient_send_hello(zclient_sync) < 0) {
+	if (zclient_send_hello(zclient_sync) == ZCLIENT_SEND_FAILURE) {
 		zlog_warn("%s: failed sending hello for synchronous zclient!",
 			  __func__);
 		close(zclient_sync->sock);
@@ -1843,7 +1956,6 @@ static int ospf_opaque_msg_handler(ZAPI_CALLBACK_ARGS)
 	struct zapi_opaque_msg info;
 	struct ldp_igp_sync_if_state state;
 	struct ldp_igp_sync_announce announce;
-	struct ldp_igp_sync_hello hello;
 	int ret = 0;
 
 	s = zclient->ibuf;
@@ -1860,15 +1972,25 @@ static int ospf_opaque_msg_handler(ZAPI_CALLBACK_ARGS)
 		STREAM_GET(&announce, s, sizeof(announce));
 		ret = ospf_ldp_sync_announce_update(announce);
 		break;
-	case LDP_IGP_SYNC_HELLO_UPDATE:
-		STREAM_GET(&hello, s, sizeof(hello));
-		ret = ospf_ldp_sync_hello_update(hello);
-		break;
 	default:
 		break;
 	}
 
 stream_failure:
+
+	return ret;
+}
+
+static int ospf_zebra_client_close_notify(ZAPI_CALLBACK_ARGS)
+{
+	int ret = 0;
+
+	struct zapi_client_close_info info;
+
+	if (zapi_client_close_notify_decode(zclient->ibuf, &info) < 0)
+		return -1;
+
+	ospf_ldp_sync_handle_client_close(&info);
 
 	return ret;
 }
@@ -1908,6 +2030,8 @@ void ospf_zebra_init(struct thread_master *master, unsigned short instance)
 	prefix_list_delete_hook(ospf_prefix_list_update);
 
 	zclient->opaque_msg_handler = ospf_opaque_msg_handler;
+
+	zclient->zebra_client_close_notify = ospf_zebra_client_close_notify;
 }
 
 void ospf_zebra_send_arp(const struct interface *ifp, const struct prefix *p)

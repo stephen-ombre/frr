@@ -22,10 +22,13 @@
 
 #include <zebra.h>
 
+#include "printfrr.h"
 #include "northbound.h"
 #include "linklist.h"
 #include "log.h"
 #include "bfd.h"
+#include "filter.h"
+#include "plist.h"
 #include "spf_backoff.h"
 #include "lib_errors.h"
 #include "vrf.h"
@@ -43,11 +46,13 @@
 #include "isisd/isis_csm.h"
 #include "isisd/isis_adjacency.h"
 #include "isisd/isis_spf.h"
+#include "isisd/isis_spf_private.h"
 #include "isisd/isis_te.h"
 #include "isisd/isis_memory.h"
 #include "isisd/isis_mt.h"
 #include "isisd/isis_redist.h"
 #include "isisd/isis_ldp_sync.h"
+#include "isisd/isis_dr.h"
 
 extern struct zclient *zclient;
 
@@ -80,16 +85,18 @@ int isis_instance_create(struct nb_cb_create_args *args)
 int isis_instance_destroy(struct nb_cb_destroy_args *args)
 {
 	struct isis_area *area;
+	vrf_id_t vrf_id;
 
 	if (args->event != NB_EV_APPLY)
 		return NB_OK;
 	area = nb_running_unset_entry(args->dnode);
-	isis_area_destroy(area);
+	vrf_id = area->isis->vrf_id;
 
 	/* remove ldp-sync config */
-	if (area->isis->vrf_id == VRF_DEFAULT)
+	if (vrf_id == VRF_DEFAULT)
 		isis_ldp_sync_gbl_exit(true);
 
+	isis_area_destroy(area);
 	return NB_OK;
 }
 
@@ -208,6 +215,9 @@ int isis_instance_area_address_destroy(struct nb_cb_destroy_args *args)
 	uint8_t buff[255];
 	struct isis_area *area;
 	const char *net_title;
+	struct listnode *cnode;
+	struct isis_circuit *circuit;
+	int lvl;
 
 	if (args->event != NB_EV_APPLY)
 		return NB_OK;
@@ -231,6 +241,11 @@ int isis_instance_area_address_destroy(struct nb_cb_destroy_args *args)
 	 * Last area address - reset the SystemID for this router
 	 */
 	if (listcount(area->area_addrs) == 0) {
+		for (ALL_LIST_ELEMENTS_RO(area->circuit_list, cnode, circuit))
+			for (lvl = IS_LEVEL_1; lvl <= IS_LEVEL_2; ++lvl) {
+				if (circuit->u.bc.is_dr[lvl - 1])
+					isis_dr_resign(circuit, lvl);
+			}
 		memset(area->isis->sysid, 0, ISIS_SYS_ID_LEN);
 		area->isis->sysid_set = 0;
 		if (IS_DEBUG_EVENTS)
@@ -617,6 +632,145 @@ int isis_instance_spf_minimum_interval_level_2_modify(
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
 	area->min_spf_interval[1] = yang_dnode_get_uint16(args->dnode, NULL);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-isisd:isis/instance/spf/prefix-priorities/critical/access-list-name
+ */
+int isis_instance_spf_prefix_priorities_critical_access_list_name_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *acl_name;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	acl_name = yang_dnode_get_string(args->dnode, NULL);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_CRITICAL];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->name = XSTRDUP(MTYPE_ISIS_ACL_NAME, acl_name);
+	ppa->list_v4 = access_list_lookup(AFI_IP, acl_name);
+	ppa->list_v6 = access_list_lookup(AFI_IP6, acl_name);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_spf_prefix_priorities_critical_access_list_name_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_CRITICAL];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->list_v4 = NULL;
+	ppa->list_v6 = NULL;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/spf/prefix-priorities/high/access-list-name
+ */
+int isis_instance_spf_prefix_priorities_high_access_list_name_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *acl_name;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	acl_name = yang_dnode_get_string(args->dnode, NULL);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_HIGH];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->name = XSTRDUP(MTYPE_ISIS_ACL_NAME, acl_name);
+	ppa->list_v4 = access_list_lookup(AFI_IP, acl_name);
+	ppa->list_v6 = access_list_lookup(AFI_IP6, acl_name);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_spf_prefix_priorities_high_access_list_name_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_HIGH];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->list_v4 = NULL;
+	ppa->list_v6 = NULL;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/spf/prefix-priorities/medium/access-list-name
+ */
+int isis_instance_spf_prefix_priorities_medium_access_list_name_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *acl_name;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	acl_name = yang_dnode_get_string(args->dnode, NULL);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_MEDIUM];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->name = XSTRDUP(MTYPE_ISIS_ACL_NAME, acl_name);
+	ppa->list_v4 = access_list_lookup(AFI_IP, acl_name);
+	ppa->list_v6 = access_list_lookup(AFI_IP6, acl_name);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_spf_prefix_priorities_medium_access_list_name_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct spf_prefix_priority_acl *ppa;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+
+	ppa = &area->spf_prefix_priorities[SPF_PREFIX_PRIO_MEDIUM];
+	XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	ppa->list_v4 = NULL;
+	ppa->list_v6 = NULL;
+	lsp_regenerate_schedule(area, area->is_type, 0);
 
 	return NB_OK;
 }
@@ -1286,6 +1440,307 @@ int isis_instance_multi_topology_ipv6_dstsrc_overload_modify(
 }
 
 /*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-1/lfa/load-sharing
+ */
+int isis_instance_fast_reroute_level_1_lfa_load_sharing_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_load_sharing[0] = yang_dnode_get_bool(args->dnode, NULL);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-1/lfa/priority-limit
+ */
+int isis_instance_fast_reroute_level_1_lfa_priority_limit_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_priority_limit[0] = yang_dnode_get_enum(args->dnode, NULL);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_1_lfa_priority_limit_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_priority_limit[0] = SPF_PREFIX_PRIO_LOW;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-1/lfa/tiebreaker
+ */
+int isis_instance_fast_reroute_level_1_lfa_tiebreaker_create(
+	struct nb_cb_create_args *args)
+{
+	struct isis_area *area;
+	uint8_t index;
+	enum lfa_tiebreaker_type type;
+	struct lfa_tiebreaker *tie_b;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	index = yang_dnode_get_uint8(args->dnode, "./index");
+	type = yang_dnode_get_enum(args->dnode, "./type");
+
+	tie_b = isis_lfa_tiebreaker_add(area, ISIS_LEVEL1, index, type);
+	nb_running_set_entry(args->dnode, tie_b);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_1_lfa_tiebreaker_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct lfa_tiebreaker *tie_b;
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	tie_b = nb_running_unset_entry(args->dnode);
+	area = tie_b->area;
+	isis_lfa_tiebreaker_delete(area, ISIS_LEVEL1, tie_b);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-1/lfa/tiebreaker/type
+ */
+int isis_instance_fast_reroute_level_1_lfa_tiebreaker_type_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct lfa_tiebreaker *tie_b;
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	tie_b = nb_running_get_entry(args->dnode, NULL, true);
+	area = tie_b->area;
+	tie_b->type = yang_dnode_get_enum(args->dnode, NULL);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-1/remote-lfa/prefix-list
+ */
+int isis_instance_fast_reroute_level_1_remote_lfa_prefix_list_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *plist_name;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	plist_name = yang_dnode_get_string(args->dnode, NULL);
+
+	area->rlfa_plist_name[0] = XSTRDUP(MTYPE_ISIS_PLIST_NAME, plist_name);
+	area->rlfa_plist[0] = prefix_list_lookup(AFI_IP, plist_name);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_1_remote_lfa_prefix_list_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+
+	XFREE(MTYPE_ISIS_PLIST_NAME, area->rlfa_plist_name[0]);
+	area->rlfa_plist[0] = NULL;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-2/lfa/load-sharing
+ */
+int isis_instance_fast_reroute_level_2_lfa_load_sharing_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_load_sharing[1] = yang_dnode_get_bool(args->dnode, NULL);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-2/lfa/priority-limit
+ */
+int isis_instance_fast_reroute_level_2_lfa_priority_limit_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_priority_limit[1] = yang_dnode_get_enum(args->dnode, NULL);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_2_lfa_priority_limit_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->lfa_priority_limit[1] = SPF_PREFIX_PRIO_LOW;
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-2/lfa/tiebreaker
+ */
+int isis_instance_fast_reroute_level_2_lfa_tiebreaker_create(
+	struct nb_cb_create_args *args)
+{
+	struct isis_area *area;
+	uint8_t index;
+	enum lfa_tiebreaker_type type;
+	struct lfa_tiebreaker *tie_b;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	index = yang_dnode_get_uint8(args->dnode, "./index");
+	type = yang_dnode_get_enum(args->dnode, "./type");
+
+	tie_b = isis_lfa_tiebreaker_add(area, ISIS_LEVEL2, index, type);
+	nb_running_set_entry(args->dnode, tie_b);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_2_lfa_tiebreaker_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct lfa_tiebreaker *tie_b;
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	tie_b = nb_running_unset_entry(args->dnode);
+	area = tie_b->area;
+	isis_lfa_tiebreaker_delete(area, ISIS_LEVEL2, tie_b);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-2/lfa/tiebreaker/type
+ */
+int isis_instance_fast_reroute_level_2_lfa_tiebreaker_type_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct lfa_tiebreaker *tie_b;
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	tie_b = nb_running_get_entry(args->dnode, NULL, true);
+	area = tie_b->area;
+	tie_b->type = yang_dnode_get_enum(args->dnode, NULL);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/fast-reroute/level-2/remote-lfa/prefix-list
+ */
+int isis_instance_fast_reroute_level_2_remote_lfa_prefix_list_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *plist_name;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	plist_name = yang_dnode_get_string(args->dnode, NULL);
+
+	area->rlfa_plist_name[1] = XSTRDUP(MTYPE_ISIS_PLIST_NAME, plist_name);
+	area->rlfa_plist[1] = prefix_list_lookup(AFI_IP, plist_name);
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int isis_instance_fast_reroute_level_2_remote_lfa_prefix_list_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+
+	XFREE(MTYPE_ISIS_PLIST_NAME, area->rlfa_plist_name[1]);
+	area->rlfa_plist[1] = NULL;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
  * XPath: /frr-isisd:isis/instance/log-adjacency-changes
  */
 int isis_instance_log_adjacency_changes_modify(struct nb_cb_modify_args *args)
@@ -1479,7 +1934,8 @@ int isis_instance_segment_routing_srgb_pre_validate(
 
 	/* Check that the block size does not exceed 65535 */
 	if ((srgb_ubound - srgb_lbound + 1) > 65535) {
-		zlog_warn(
+		snprintf(
+			args->errmsg, args->errmsg_len,
 			"New SR Global Block (%u/%u) exceed the limit of 65535",
 			srgb_lbound, srgb_ubound);
 		return NB_ERR_VALIDATION;
@@ -1487,7 +1943,8 @@ int isis_instance_segment_routing_srgb_pre_validate(
 
 	/* Validate SRGB against SRLB */
 	if (!((srgb_ubound < srlb_lbound) || (srgb_lbound > srlb_ubound))) {
-		zlog_warn(
+		snprintf(
+			args->errmsg, args->errmsg_len,
 			"New SR Global Block (%u/%u) conflict with Local Block (%u/%u)",
 			srgb_lbound, srgb_ubound, srlb_lbound, srlb_ubound);
 		return NB_ERR_VALIDATION;
@@ -1520,8 +1977,8 @@ int isis_instance_segment_routing_srgb_lower_bound_modify(
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if (!IS_MPLS_UNRESERVED_LABEL(lower_bound)) {
-			zlog_warn("Invalid SRGB lower bound: %u",
-				  lower_bound);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Invalid SRGB lower bound: %u", lower_bound);
 			return NB_ERR_VALIDATION;
 		}
 		break;
@@ -1545,8 +2002,8 @@ int isis_instance_segment_routing_srgb_upper_bound_modify(
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if (!IS_MPLS_UNRESERVED_LABEL(upper_bound)) {
-			zlog_warn("Invalid SRGB upper bound: %u",
-				  upper_bound);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Invalid SRGB upper bound: %u", upper_bound);
 			return NB_ERR_VALIDATION;
 		}
 		break;
@@ -1577,15 +2034,16 @@ int isis_instance_segment_routing_srlb_pre_validate(
 
 	/* Check that the block size does not exceed 65535 */
 	if ((srlb_ubound - srlb_lbound + 1) > 65535) {
-		zlog_warn(
-			"New SR Local Block (%u/%u) exceed the limit of 65535",
-			srlb_lbound, srlb_ubound);
+		snprintf(args->errmsg, args->errmsg_len,
+			 "New SR Local Block (%u/%u) exceed the limit of 65535",
+			 srlb_lbound, srlb_ubound);
 		return NB_ERR_VALIDATION;
 	}
 
 	/* Validate SRLB against SRGB */
 	if (!((srlb_ubound < srgb_lbound) || (srlb_lbound > srgb_ubound))) {
-		zlog_warn(
+		snprintf(
+			args->errmsg, args->errmsg_len,
 			"New SR Local Block (%u/%u) conflict with Global Block (%u/%u)",
 			srlb_lbound, srlb_ubound, srgb_lbound, srgb_ubound);
 		return NB_ERR_VALIDATION;
@@ -1618,8 +2076,8 @@ int isis_instance_segment_routing_srlb_lower_bound_modify(
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if (!IS_MPLS_UNRESERVED_LABEL(lower_bound)) {
-			zlog_warn("Invalid SRLB lower bound: %u",
-				  lower_bound);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Invalid SRLB lower bound: %u", lower_bound);
 			return NB_ERR_VALIDATION;
 		}
 		break;
@@ -1643,8 +2101,8 @@ int isis_instance_segment_routing_srlb_upper_bound_modify(
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if (!IS_MPLS_UNRESERVED_LABEL(upper_bound)) {
-			zlog_warn("Invalid SRLB upper bound: %u",
-				  upper_bound);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Invalid SRLB upper bound: %u", upper_bound);
 			return NB_ERR_VALIDATION;
 		}
 		break;
@@ -1736,12 +2194,17 @@ int isis_instance_segment_routing_prefix_sid_map_prefix_sid_destroy(
 int isis_instance_segment_routing_prefix_sid_map_prefix_sid_pre_validate(
 	struct nb_cb_pre_validate_args *args)
 {
+	const struct lyd_node *area_dnode;
+	struct isis_area *area;
+	struct prefix prefix;
 	uint32_t srgb_lbound;
 	uint32_t srgb_ubound;
 	uint32_t srgb_range;
 	uint32_t sid;
 	enum sr_sid_value_type sid_type;
+	struct isis_prefix_sid psid = {};
 
+	yang_dnode_get_prefix(&prefix, args->dnode, "./prefix");
 	srgb_lbound = yang_dnode_get_uint32(args->dnode,
 					    "../../srgb/lower-bound");
 	srgb_ubound = yang_dnode_get_uint32(args->dnode,
@@ -1749,21 +2212,65 @@ int isis_instance_segment_routing_prefix_sid_map_prefix_sid_pre_validate(
 	sid = yang_dnode_get_uint32(args->dnode, "./sid-value");
 	sid_type = yang_dnode_get_enum(args->dnode, "./sid-value-type");
 
+	/* Check for invalid indexes/labels. */
 	srgb_range = srgb_ubound - srgb_lbound + 1;
+	psid.value = sid;
 	switch (sid_type) {
 	case SR_SID_VALUE_TYPE_INDEX:
 		if (sid >= srgb_range) {
-			zlog_warn("SID index %u falls outside local SRGB range",
-				  sid);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "SID index %u falls outside local SRGB range",
+				 sid);
 			return NB_ERR_VALIDATION;
 		}
 		break;
 	case SR_SID_VALUE_TYPE_ABSOLUTE:
 		if (!IS_MPLS_UNRESERVED_LABEL(sid)) {
-			zlog_warn("Invalid absolute SID %u", sid);
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Invalid absolute SID %u", sid);
 			return NB_ERR_VALIDATION;
 		}
+		SET_FLAG(psid.flags, ISIS_PREFIX_SID_VALUE);
+		SET_FLAG(psid.flags, ISIS_PREFIX_SID_LOCAL);
 		break;
+	}
+
+	/* Check for Prefix-SID collisions. */
+	area_dnode = yang_dnode_get_parent(args->dnode, "instance");
+	area = nb_running_get_entry(area_dnode, NULL, false);
+	if (area) {
+		for (int tree = SPFTREE_IPV4; tree < SPFTREE_COUNT; tree++) {
+			for (int level = ISIS_LEVEL1; level <= ISIS_LEVEL2;
+			     level++) {
+				struct isis_spftree *spftree;
+				struct isis_vertex *vertex_psid;
+
+				if (!(area->is_type & level))
+					continue;
+				spftree = area->spftree[tree][level - 1];
+				if (!spftree)
+					continue;
+
+				vertex_psid = isis_spf_prefix_sid_lookup(
+					spftree, &psid);
+				if (vertex_psid
+				    && !prefix_same(&vertex_psid->N.ip.p.dest,
+						    &prefix)) {
+					snprintfrr(
+						args->errmsg, args->errmsg_len,
+						"Prefix-SID collision detected, SID %s %u is already in use by prefix %pFX (L%u)",
+						CHECK_FLAG(
+							psid.flags,
+							ISIS_PREFIX_SID_VALUE)
+							? "label"
+							: "index",
+						psid.value,
+						&vertex_psid->N.ip.p.dest,
+						level);
+					return NB_ERR_VALIDATION;
+				}
+			}
+		}
 	}
 
 	return NB_OK;
@@ -1835,6 +2342,23 @@ int isis_instance_segment_routing_prefix_sid_map_prefix_sid_last_hop_behavior_mo
 }
 
 /*
+ * XPath: /frr-isisd:isis/instance/segment-routing/prefix-sid-map/prefix-sid/n-flag-clear
+ */
+int isis_instance_segment_routing_prefix_sid_map_prefix_sid_n_flag_clear_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct sr_prefix_cfg *pcfg;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	pcfg = nb_running_get_entry(args->dnode, NULL, true);
+	pcfg->n_flag_clear = yang_dnode_get_bool(args->dnode, NULL);
+
+	return NB_OK;
+}
+
+/*
  * XPath: /frr-isisd:isis/instance/mpls/ldp-sync
  */
 int isis_instance_mpls_ldp_sync_create(struct nb_cb_create_args *args)
@@ -1843,22 +2367,32 @@ int isis_instance_mpls_ldp_sync_create(struct nb_cb_create_args *args)
 	struct listnode *node;
 	struct isis_circuit *circuit;
 	struct interface *ifp;
-	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
+	struct vrf *vrf;
+	struct isis *isis;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		if (isis == NULL)
+		area = nb_running_get_entry(args->dnode, NULL, false);
+		if (area == NULL || area->isis == NULL)
 			return NB_ERR_VALIDATION;
+
+		if (area->isis->vrf_id != VRF_DEFAULT) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "LDP-Sync only runs on Default VRF");
+			return NB_ERR_VALIDATION;
+		}
 		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
+		area = nb_running_get_entry(args->dnode, NULL, true);
+		isis = area->isis;
+		vrf = vrf_lookup_by_id(isis->vrf_id);
+
 		/* register with opaque client to recv LDP-IGP Sync msgs */
 		zclient_register_opaque(zclient, LDP_IGP_SYNC_IF_STATE_UPDATE);
 		zclient_register_opaque(zclient, LDP_IGP_SYNC_ANNOUNCE_UPDATE);
-		zclient_register_opaque(zclient, LDP_IGP_SYNC_HELLO_UPDATE);
 
 		if (!CHECK_FLAG(isis->ldp_sync_cmd.flags,
 				LDP_SYNC_FLAG_ENABLE)) {
@@ -1902,19 +2436,29 @@ int isis_instance_mpls_ldp_sync_holddown_modify(struct nb_cb_modify_args *args)
 	struct listnode *node;
 	struct isis_circuit *circuit;
 	struct interface *ifp;
-	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
+	struct vrf *vrf;
 	uint16_t holddown = LDP_IGP_SYNC_HOLDDOWN_DEFAULT;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
+	struct isis *isis;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		if (isis == NULL)
+		area = nb_running_get_entry(args->dnode, NULL, false);
+		if (area == NULL || area->isis == NULL)
 			return NB_ERR_VALIDATION;
+
+		if (area->isis->vrf_id != VRF_DEFAULT) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "LDP-Sync only runs on Default VRF");
+			return NB_ERR_VALIDATION;
+		}
 		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
+		area = nb_running_get_entry(args->dnode, NULL, true);
+		isis = area->isis;
+		vrf = vrf_lookup_by_id(isis->vrf_id);
 		holddown = yang_dnode_get_uint16(args->dnode, NULL);
 
 		if (holddown == LDP_IGP_SYNC_HOLDDOWN_DEFAULT)
@@ -2052,7 +2596,6 @@ int lib_interface_isis_area_tag_modify(struct nb_cb_modify_args *args)
 	struct interface *ifp;
 	struct vrf *vrf;
 	const char *area_tag, *ifname, *vrfname;
-	struct isis *isis = NULL;
 
 	if (args->event == NB_EV_VALIDATE) {
 		/* libyang doesn't like relative paths across module boundaries
@@ -2068,11 +2611,7 @@ int lib_interface_isis_area_tag_modify(struct nb_cb_modify_args *args)
 		if (!ifp)
 			return NB_OK;
 
-		isis = isis_lookup_by_vrfid(ifp->vrf_id);
-		if (isis == NULL)
-			return NB_ERR_VALIDATION;
-
-		circuit = circuit_lookup_by_ifp(ifp, isis->init_circ_list);
+		circuit = circuit_scan_by_ifp(ifp);
 		area_tag = yang_dnode_get_string(args->dnode, NULL);
 		if (circuit && circuit->area && circuit->area->area_tag
 		    && strcmp(circuit->area->area_tag, area_tag)) {
@@ -2112,11 +2651,11 @@ int lib_interface_isis_vrf_modify(struct nb_cb_modify_args *args)
 
 		vrf_name = yang_dnode_get_string(args->dnode, NULL);
 		circuit = circuit_scan_by_ifp(ifp);
-		if (circuit && circuit->area && circuit->area->isis
-		    && strcmp(circuit->area->isis->name, vrf_name)) {
+		if (circuit && circuit->area && circuit->isis
+		    && strcmp(circuit->isis->name, vrf_name)) {
 			snprintf(args->errmsg, args->errmsg_len,
 				 "ISIS circuit is already defined on vrf  %s",
-				 circuit->area->isis->name);
+				 circuit->isis->name);
 			return NB_ERR_VALIDATION;
 		}
 	}
@@ -2774,23 +3313,31 @@ int lib_interface_isis_mpls_ldp_sync_modify(struct nb_cb_modify_args *args)
 	struct isis_circuit *circuit;
 	struct ldp_sync_info *ldp_sync_info;
 	bool ldp_sync_enable;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
+	struct isis *isis;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		if (isis == NULL)
+		circuit = nb_running_get_entry(args->dnode, NULL, false);
+		if (circuit == NULL || circuit->area == NULL)
 			return NB_ERR_VALIDATION;
-		break;
 
+		if (circuit->isis->vrf_id != VRF_DEFAULT) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "LDP-Sync only runs on Default VRF");
+			return NB_ERR_VALIDATION;
+		}
+		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
 		circuit = nb_running_get_entry(args->dnode, NULL, true);
 		ldp_sync_enable = yang_dnode_get_bool(args->dnode, NULL);
+		isis = circuit->isis;
 
 		if (circuit->ldp_sync_info == NULL)
 			isis_ldp_sync_if_init(circuit, isis);
+		assert(circuit->ldp_sync_info != NULL);
 		ldp_sync_info = circuit->ldp_sync_info;
 
 		if (ldp_sync_enable) {
@@ -2817,8 +3364,7 @@ int lib_interface_isis_mpls_ldp_sync_modify(struct nb_cb_modify_args *args)
 			SET_FLAG(ldp_sync_info->flags, LDP_SYNC_FLAG_IF_CONFIG);
 			ldp_sync_info->enabled = LDP_IGP_SYNC_DEFAULT;
 			ldp_sync_info->state = LDP_IGP_SYNC_STATE_NOT_REQUIRED;
-			THREAD_TIMER_OFF(ldp_sync_info->t_holddown);
-			ldp_sync_info->t_holddown = NULL;
+			THREAD_OFF(ldp_sync_info->t_holddown);
 			isis_ldp_sync_set_if_metric(circuit, true);
 		}
 		break;
@@ -2834,23 +3380,31 @@ int lib_interface_isis_mpls_holddown_modify(struct nb_cb_modify_args *args)
 	struct isis_circuit *circuit;
 	struct ldp_sync_info *ldp_sync_info;
 	uint16_t holddown;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
+	struct isis *isis;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		if (isis == NULL)
+		circuit = nb_running_get_entry(args->dnode, NULL, false);
+		if (circuit == NULL || circuit->area == NULL)
 			return NB_ERR_VALIDATION;
-		break;
 
+		if (circuit->isis->vrf_id != VRF_DEFAULT) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "LDP-Sync only runs on Default VRF");
+			return NB_ERR_VALIDATION;
+		}
+		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
 		circuit = nb_running_get_entry(args->dnode, NULL, true);
 		holddown = yang_dnode_get_uint16(args->dnode, NULL);
+		isis = circuit->isis;
 
 		if (circuit->ldp_sync_info == NULL)
 			isis_ldp_sync_if_init(circuit, isis);
+		assert(circuit->ldp_sync_info != NULL);
 		ldp_sync_info = circuit->ldp_sync_info;
 
 		SET_FLAG(ldp_sync_info->flags, LDP_SYNC_FLAG_HOLDDOWN);
@@ -2864,22 +3418,27 @@ int lib_interface_isis_mpls_holddown_destroy(struct nb_cb_destroy_args *args)
 {
 	struct isis_circuit *circuit;
 	struct ldp_sync_info *ldp_sync_info;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
+	struct isis *isis;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		if (isis == NULL)
-			return NB_ERR_VALIDATION;
-		circuit = nb_running_get_entry(args->dnode, NULL, true);
-		if (circuit->ldp_sync_info == NULL)
+		circuit = nb_running_get_entry(args->dnode, NULL, false);
+		if (circuit == NULL || circuit->ldp_sync_info == NULL
+		    || circuit->area == NULL)
 			return NB_ERR_VALIDATION;
 
+		if (circuit->isis->vrf_id != VRF_DEFAULT) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "LDP-Sync only runs on Default VRF");
+			return NB_ERR_VALIDATION;
+		}
 		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
 		circuit = nb_running_get_entry(args->dnode, NULL, true);
+		isis = circuit->isis;
 		ldp_sync_info = circuit->ldp_sync_info;
 		UNSET_FLAG(ldp_sync_info->flags, LDP_SYNC_FLAG_HOLDDOWN);
 
@@ -2890,5 +3449,388 @@ int lib_interface_isis_mpls_holddown_destroy(struct nb_cb_destroy_args *args)
 			ldp_sync_info->holddown = LDP_IGP_SYNC_HOLDDOWN_DEFAULT;
 		break;
 	}
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_1_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->lfa_protection[0] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->lfa_protection[0])
+		circuit->area->lfa_protected_links[0]++;
+	else {
+		assert(circuit->area->lfa_protected_links[0] > 0);
+		circuit->area->lfa_protected_links[0]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/lfa/exclude-interface
+ */
+int lib_interface_isis_fast_reroute_level_1_lfa_exclude_interface_create(
+	struct nb_cb_create_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+	const char *exclude_ifname;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	exclude_ifname = yang_dnode_get_string(args->dnode, NULL);
+
+	isis_lfa_excluded_iface_add(circuit, ISIS_LEVEL1, exclude_ifname);
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int lib_interface_isis_fast_reroute_level_1_lfa_exclude_interface_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+	const char *exclude_ifname;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	exclude_ifname = yang_dnode_get_string(args->dnode, NULL);
+
+	isis_lfa_excluded_iface_delete(circuit, ISIS_LEVEL1, exclude_ifname);
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/remote-lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_1_remote_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_protection[0] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->rlfa_protection[0])
+		circuit->area->rlfa_protected_links[0]++;
+	else {
+		assert(circuit->area->rlfa_protected_links[0] > 0);
+		circuit->area->rlfa_protected_links[0]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/remote-lfa/maximum-metric
+ */
+int lib_interface_isis_fast_reroute_level_1_remote_lfa_maximum_metric_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_max_metric[0] = yang_dnode_get_uint32(args->dnode, NULL);
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int lib_interface_isis_fast_reroute_level_1_remote_lfa_maximum_metric_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_max_metric[0] = 0;
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/ti-lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_1_ti_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->tilfa_protection[0] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->tilfa_protection[0])
+		circuit->area->tilfa_protected_links[0]++;
+	else {
+		assert(circuit->area->tilfa_protected_links[0] > 0);
+		circuit->area->tilfa_protected_links[0]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/ti-lfa/node-protection
+ */
+int lib_interface_isis_fast_reroute_level_1_ti_lfa_node_protection_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->tilfa_node_protection[0] =
+		yang_dnode_get_bool(args->dnode, NULL);
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_2_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->lfa_protection[1] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->lfa_protection[1])
+		circuit->area->lfa_protected_links[1]++;
+	else {
+		assert(circuit->area->lfa_protected_links[1] > 0);
+		circuit->area->lfa_protected_links[1]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/lfa/exclude-interface
+ */
+int lib_interface_isis_fast_reroute_level_2_lfa_exclude_interface_create(
+	struct nb_cb_create_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+	const char *exclude_ifname;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	exclude_ifname = yang_dnode_get_string(args->dnode, NULL);
+
+	isis_lfa_excluded_iface_add(circuit, ISIS_LEVEL2, exclude_ifname);
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int lib_interface_isis_fast_reroute_level_2_lfa_exclude_interface_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+	const char *exclude_ifname;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	exclude_ifname = yang_dnode_get_string(args->dnode, NULL);
+
+	isis_lfa_excluded_iface_delete(circuit, ISIS_LEVEL2, exclude_ifname);
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/remote-lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_2_remote_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_protection[1] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->rlfa_protection[1])
+		circuit->area->rlfa_protected_links[1]++;
+	else {
+		assert(circuit->area->rlfa_protected_links[1] > 0);
+		circuit->area->rlfa_protected_links[1]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/remote-lfa/maximum-metric
+ */
+int lib_interface_isis_fast_reroute_level_2_remote_lfa_maximum_metric_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_max_metric[1] = yang_dnode_get_uint32(args->dnode, NULL);
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+int lib_interface_isis_fast_reroute_level_2_remote_lfa_maximum_metric_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->rlfa_max_metric[1] = 0;
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/ti-lfa/enable
+ */
+int lib_interface_isis_fast_reroute_level_2_ti_lfa_enable_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->tilfa_protection[1] = yang_dnode_get_bool(args->dnode, NULL);
+	if (circuit->tilfa_protection[1])
+		circuit->area->tilfa_protected_links[1]++;
+	else {
+		assert(circuit->area->tilfa_protected_links[1] > 0);
+		circuit->area->tilfa_protected_links[1]--;
+	}
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath:
+ * /frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/ti-lfa/node-protection
+ */
+int lib_interface_isis_fast_reroute_level_2_ti_lfa_node_protection_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	struct isis_circuit *circuit;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	circuit = nb_running_get_entry(args->dnode, NULL, true);
+	circuit->tilfa_node_protection[1] =
+		yang_dnode_get_bool(args->dnode, NULL);
+
+	area = circuit->area;
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
 	return NB_OK;
 }

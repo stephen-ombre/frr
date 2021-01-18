@@ -45,6 +45,7 @@
 #include "defaults.h"
 
 DEFINE_HOOK(frr_late_init, (struct thread_master * tm), (tm))
+DEFINE_HOOK(frr_very_late_init, (struct thread_master * tm), (tm))
 DEFINE_KOOH(frr_early_fini, (), ())
 DEFINE_KOOH(frr_fini, (), ())
 
@@ -98,6 +99,7 @@ static void opt_extend(const struct optspec *os)
 #define OPTION_TCLI      1005
 #define OPTION_DB_FILE   1006
 #define OPTION_LOGGING   1007
+#define OPTION_LIMIT_FDS 1008
 
 static const struct option lo_always[] = {
 	{"help", no_argument, NULL, 'h'},
@@ -112,6 +114,7 @@ static const struct option lo_always[] = {
 	{"log-level", required_argument, NULL, OPTION_LOGLEVEL},
 	{"tcli", no_argument, NULL, OPTION_TCLI},
 	{"command-log-always", no_argument, NULL, OPTION_LOGGING},
+	{"limit-fds", required_argument, NULL, OPTION_LIMIT_FDS},
 	{NULL}};
 static const struct optspec os_always = {
 	"hvdM:F:N:",
@@ -125,7 +128,8 @@ static const struct optspec os_always = {
 	"      --moduledir    Override modules directory\n"
 	"      --log          Set Logging to stdout, syslog, or file:<name>\n"
 	"      --log-level    Set Logging Level to use, debug, info, warn, etc\n"
-	"      --tcli         Use transaction-based CLI\n",
+	"      --tcli         Use transaction-based CLI\n"
+	"      --limit-fds    Limit number of fds supported\n",
 	lo_always};
 
 
@@ -551,6 +555,9 @@ static int frr_opt(int opt)
 	case OPTION_LOGGING:
 		di->log_always = true;
 		break;
+	case OPTION_LIMIT_FDS:
+		di->limit_fds = strtoul(optarg, &err, 0);
+		break;
 	default:
 		return 1;
 	}
@@ -738,6 +745,11 @@ enum frr_cli_mode frr_get_cli_mode(void)
 	return di ? di->cli_mode : FRR_CLI_CLASSIC;
 }
 
+uint32_t frr_get_fd_limit(void)
+{
+	return di ? di->limit_fds : 0;
+}
+
 static int rcvd_signal = 0;
 
 static void rcv_signal(int signum)
@@ -912,6 +924,8 @@ static int frr_config_read_in(struct thread *t)
 				"%s: failed to read configuration file: %s (%s)",
 				__func__, nb_err_name(ret), errmsg);
 	}
+
+	hook_call(frr_very_late_init, master);
 
 	return 0;
 }

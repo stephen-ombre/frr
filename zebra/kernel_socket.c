@@ -80,12 +80,6 @@ extern struct zebra_privs_t zserv_privs;
 #define ROUNDUP(a)	RT_ROUNDUP(a)
 #endif /* defined(RT_ROUNDUP) */
 
-#if defined(SUNOS_5)
-/* Solaris has struct sockaddr_in[6] definitions at 16 / 32 bytes size,
- * so the whole concept doesn't really apply. */
-#define ROUNDUP(a)      (a)
-#endif
-
 /*
  * If ROUNDUP has not yet been defined in terms of platform-provided
  * defines, attempt to cope with heuristics.
@@ -547,18 +541,6 @@ int ifm_read(struct if_msghdr *ifm)
 	 */
 	cp = (void *)(ifm + 1);
 
-#ifdef SUNOS_5
-	/*
-	 * XXX This behavior should be narrowed to only the kernel versions
-	 * for which the structures returned do not match the headers.
-	 *
-	 * if_msghdr_t on 64 bit kernels in Solaris 9 and earlier versions
-	 * is 12 bytes larger than the 32 bit version.
-	 */
-	if (((struct sockaddr *)cp)->sa_family == AF_UNSPEC)
-		cp += 12;
-#endif
-
 	/* Look up for RTA_IFP and skip others. */
 	for (maskbit = 1; maskbit; maskbit <<= 1) {
 		if ((maskbit & ifm->ifm_addrs) == 0)
@@ -865,6 +847,7 @@ int ifam_read(struct ifa_msghdr *ifam)
 {
 	struct interface *ifp = NULL;
 	union sockunion addr, mask, brd;
+	bool dest_same = false;
 	char ifname[INTERFACE_NAMSIZ];
 	short ifnlen = 0;
 	char isalias = 0;
@@ -891,6 +874,10 @@ int ifam_read(struct ifa_msghdr *ifam)
 	   rely upon the interface type. */
 	if (if_is_pointopoint(ifp))
 		SET_FLAG(flags, ZEBRA_IFA_PEER);
+	else {
+		if (memcmp(&addr, &brd, sizeof(addr)) == 0)
+			dest_same = true;
+	}
 
 #if 0
   /* it might seem cute to grab the interface metric here, however
@@ -907,13 +894,14 @@ int ifam_read(struct ifa_msghdr *ifam)
 		if (ifam->ifam_type == RTM_NEWADDR)
 			connected_add_ipv4(ifp, flags, &addr.sin.sin_addr,
 					   ip_masklen(mask.sin.sin_addr),
-					   &brd.sin.sin_addr,
+					   dest_same ? NULL : &brd.sin.sin_addr,
 					   (isalias ? ifname : NULL),
 					   METRIC_MAX);
 		else
 			connected_delete_ipv4(ifp, flags, &addr.sin.sin_addr,
 					      ip_masklen(mask.sin.sin_addr),
-					      &brd.sin.sin_addr);
+					      dest_same ? NULL
+							: &brd.sin.sin_addr);
 		break;
 	case AF_INET6:
 		/* Unset interface index from link-local address when IPv6 stack
@@ -939,23 +927,6 @@ int ifam_read(struct ifa_msghdr *ifam)
 
 	/* Check interface flag for implicit up of the interface. */
 	if_refresh(ifp);
-
-#ifdef SUNOS_5
-	/* In addition to lacking IFANNOUNCE, on SUNOS IFF_UP is strange.
-	 * See comments for SUNOS_5 in interface.c::if_flags_mangle.
-	 *
-	 * Here we take care of case where the real IFF_UP was previously
-	 * unset (as kept in struct zebra_if.primary_state) and the mangled
-	 * IFF_UP (ie IFF_UP set || listcount(connected) has now transitioned
-	 * to unset due to the lost non-primary address having DELADDR'd.
-	 *
-	 * we must delete the interface, because in between here and next
-	 * event for this interface-name the administrator could unplumb
-	 * and replumb the interface.
-	 */
-	if (!if_is_up(ifp))
-		if_delete_update(ifp);
-#endif /* SUNOS_5 */
 
 	return 0;
 }
@@ -1030,7 +1001,7 @@ static int rtm_read_mesg(struct rt_msghdr *rtm, union sockunion *dest,
 void rtm_read(struct rt_msghdr *rtm)
 {
 	int flags;
-	uint8_t zebra_flags;
+	uint32_t zebra_flags;
 	union sockunion dest, mask, gate;
 	char ifname[INTERFACE_NAMSIZ + 1];
 	short ifnlen = 0;
@@ -1136,7 +1107,7 @@ void rtm_read(struct rt_msghdr *rtm)
 	if (rtm->rtm_type == RTM_CHANGE)
 		rib_delete(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL,
 			   0, zebra_flags, &p, NULL, NULL, 0, RT_TABLE_MAIN, 0,
-			   0, true, false);
+			   0, true);
 	if (rtm->rtm_type == RTM_GET || rtm->rtm_type == RTM_ADD
 	    || rtm->rtm_type == RTM_CHANGE)
 		rib_add(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL, 0,
@@ -1145,7 +1116,7 @@ void rtm_read(struct rt_msghdr *rtm)
 	else
 		rib_delete(afi, SAFI_UNICAST, VRF_DEFAULT, ZEBRA_ROUTE_KERNEL,
 			   0, zebra_flags, &p, NULL, &nh, 0, RT_TABLE_MAIN, 0,
-			   0, true, false);
+			   0, true);
 }
 
 /* Interface function for the kernel routing table updates.  Support
@@ -1369,12 +1340,26 @@ static int kernel_read(struct thread *thread)
 
 	nbytes = read(sock, &buf, sizeof(buf));
 
-	if (nbytes <= 0) {
-		if (nbytes < 0 && errno != EWOULDBLOCK && errno != EAGAIN)
+	if (nbytes < 0) {
+		if (errno == ENOBUFS) {
+			flog_err(EC_ZEBRA_RECVMSG_OVERRUN,
+				 "routing socket overrun: %s",
+				 safe_strerror(errno));
+			/*
+			 *  In this case we are screwed.
+			 *  There is no good way to
+			 *  recover zebra at this point.
+			 */
+			exit(-1);
+		}
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
 			flog_err_sys(EC_LIB_SOCKET, "routing socket error: %s",
 				     safe_strerror(errno));
 		return 0;
 	}
+
+	if (nbytes == 0)
+		return 0;
 
 	thread_add_read(zrouter.master, kernel_read, NULL, sock, NULL);
 
@@ -1440,6 +1425,15 @@ static void routing_socket(struct zebra_ns *zns)
 			     "Can't init kernel dataplane routing socket");
 		return;
 	}
+
+#ifdef SO_RERROR
+	/* Allow reporting of route(4) buffer overflow errors */
+	int n = 1;
+
+	if (setsockopt(routing_sock, SOL_SOCKET, SO_RERROR, &n, sizeof(n)) < 0)
+		flog_err_sys(EC_LIB_SOCKET,
+			     "Can't set SO_RERROR on routing socket");
+#endif
 
 	/* XXX: Socket should be NONBLOCK, however as we currently
 	 * discard failed writes, this will lead to inconsistencies.

@@ -73,7 +73,7 @@ def setup_module(mod):
     tgen.start_topology()
 
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -131,7 +131,7 @@ def test_zebra_kernel_override():
     logger.info("Test kernel override with a better admin distance")
     tgen = get_topogen()
     if tgen.routers_have_failure():
-        ptyest.skip("skipped because of preview test failure")
+        pytest.skip("skipped because of previous test failure")
 
     r1 = tgen.gears["r1"]
     r1.vtysh_cmd("conf\nip route 4.5.1.0/24 192.168.216.3")

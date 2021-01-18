@@ -115,21 +115,6 @@ static int64_t acl_zebra_get_seq(struct access_list *acl, const char *action,
 }
 
 /*
- * Helper function to concatenate address with mask in Cisco style.
- */
-static void concat_addr_mask_v4(const char *addr, const char *mask, char *dst,
-				size_t dstlen)
-{
-	struct in_addr ia;
-	int plen;
-
-	assert(inet_pton(AF_INET, mask, &ia) == 1);
-	ia.s_addr = ~ia.s_addr;
-	plen = ip_masklen(ia);
-	snprintf(dst, dstlen, "%s/%d", addr, plen);
-}
-
-/*
  * Helper function to generate a sequence number for legacy commands.
  */
 static int acl_get_seq_cb(const struct lyd_node *dnode, void *arg)
@@ -177,9 +162,34 @@ DEFPY_YANG(
 	"Wildcard bits\n")
 {
 	int64_t sseq;
-	char ipmask[64];
+	struct acl_dup_args ada = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		ada.ada_type = "ipv4";
+		ada.ada_name = name;
+		if (host_str && mask_str == NULL) {
+			ada.ada_xpath[0] = "./host";
+			ada.ada_value[0] = host_str;
+		} else if (host_str && mask_str) {
+			ada.ada_xpath[0] = "./network/address";
+			ada.ada_value[0] = host_str;
+			ada.ada_xpath[1] = "./network/mask";
+			ada.ada_value[1] = mask_str;
+		} else {
+			ada.ada_xpath[0] = "./source-any";
+			ada.ada_value[0] = "true";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (acl_is_dup(vty->candidate_config->dnode, &ada))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the access-list first, so we can generate sequence if
@@ -203,8 +213,10 @@ DEFPY_YANG(
 	if (host_str != NULL && mask_str == NULL) {
 		nb_cli_enqueue_change(vty, "./host", NB_OP_MODIFY, host_str);
 	} else if (host_str != NULL && mask_str != NULL) {
-		concat_addr_mask_v4(host_str, mask_str, ipmask, sizeof(ipmask));
-		nb_cli_enqueue_change(vty, "./network", NB_OP_MODIFY, ipmask);
+		nb_cli_enqueue_change(vty, "./network/address", NB_OP_MODIFY,
+				      host_str);
+		nb_cli_enqueue_change(vty, "./network/mask", NB_OP_MODIFY,
+				      mask_str);
 	} else {
 		nb_cli_enqueue_change(vty, "./source-any", NB_OP_CREATE, NULL);
 	}
@@ -284,10 +296,57 @@ DEFPY_YANG(
 	"Destination address to match\n"
 	"Any destination host\n")
 {
+	int idx = 0;
 	int64_t sseq;
-	char ipmask[64], ipmask_dst[64];
+	struct acl_dup_args ada = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		ada.ada_type = "ipv4";
+		ada.ada_name = name;
+		if (src_str && src_mask_str == NULL) {
+			ada.ada_xpath[idx] = "./host";
+			ada.ada_value[idx] = src_str;
+			idx++;
+		} else if (src_str && src_mask_str) {
+			ada.ada_xpath[idx] = "./network/address";
+			ada.ada_value[idx] = src_str;
+			idx++;
+			ada.ada_xpath[idx] = "./network/mask";
+			ada.ada_value[idx] = src_mask_str;
+			idx++;
+		} else {
+			ada.ada_xpath[idx] = "./source-any";
+			ada.ada_value[idx] = "true";
+			idx++;
+		}
+
+		if (dst_str && dst_mask_str == NULL) {
+			ada.ada_xpath[idx] = "./destination-host";
+			ada.ada_value[idx] = dst_str;
+			idx++;
+		} else if (dst_str && dst_mask_str) {
+			ada.ada_xpath[idx] = "./destination-network/address";
+			ada.ada_value[idx] = dst_str;
+			idx++;
+			ada.ada_xpath[idx] = "./destination-network/mask";
+			ada.ada_value[idx] = dst_mask_str;
+			idx++;
+		} else {
+			ada.ada_xpath[idx] = "./destination-any";
+			ada.ada_value[idx] = "true";
+			idx++;
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (acl_is_dup(vty->candidate_config->dnode, &ada))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the access-list first, so we can generate sequence if
@@ -311,9 +370,10 @@ DEFPY_YANG(
 	if (src_str != NULL && src_mask_str == NULL) {
 		nb_cli_enqueue_change(vty, "./host", NB_OP_MODIFY, src_str);
 	} else if (src_str != NULL && src_mask_str != NULL) {
-		concat_addr_mask_v4(src_str, src_mask_str, ipmask,
-				    sizeof(ipmask));
-		nb_cli_enqueue_change(vty, "./network", NB_OP_MODIFY, ipmask);
+		nb_cli_enqueue_change(vty, "./network/address", NB_OP_MODIFY,
+				      src_str);
+		nb_cli_enqueue_change(vty, "./network/mask", NB_OP_MODIFY,
+				      src_mask_str);
 	} else {
 		nb_cli_enqueue_change(vty, "./source-any", NB_OP_CREATE, NULL);
 	}
@@ -322,10 +382,10 @@ DEFPY_YANG(
 		nb_cli_enqueue_change(vty, "./destination-host", NB_OP_MODIFY,
 				      dst_str);
 	} else if (dst_str != NULL && dst_mask_str != NULL) {
-		concat_addr_mask_v4(dst_str, dst_mask_str, ipmask_dst,
-				    sizeof(ipmask_dst));
-		nb_cli_enqueue_change(vty, "./destination-network",
-				      NB_OP_MODIFY, ipmask_dst);
+		nb_cli_enqueue_change(vty, "./destination-network/address",
+				      NB_OP_MODIFY, dst_str);
+		nb_cli_enqueue_change(vty, "./destination-network/mask",
+				      NB_OP_MODIFY, dst_mask_str);
 	} else {
 		nb_cli_enqueue_change(vty, "./destination-any", NB_OP_CREATE,
 				      NULL);
@@ -433,8 +493,34 @@ DEFPY_YANG(
 	"Match any IPv4\n")
 {
 	int64_t sseq;
+	struct acl_dup_args ada = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		ada.ada_type = "ipv4";
+		ada.ada_name = name;
+
+		if (prefix_str) {
+			ada.ada_xpath[0] = "./ipv4-prefix";
+			ada.ada_value[0] = prefix_str;
+			if (exact) {
+				ada.ada_xpath[1] = "./ipv4-exact-match";
+				ada.ada_value[1] = "true";
+			}
+		} else {
+			ada.ada_xpath[0] = "./any";
+			ada.ada_value[0] = "true";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (acl_is_dup(vty->candidate_config->dnode, &ada))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the access-list first, so we can generate sequence if
@@ -604,8 +690,34 @@ DEFPY_YANG(
 	"Match any IPv6\n")
 {
 	int64_t sseq;
+	struct acl_dup_args ada = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		ada.ada_type = "ipv6";
+		ada.ada_name = name;
+
+		if (prefix_str) {
+			ada.ada_xpath[0] = "./ipv6-prefix";
+			ada.ada_value[0] = prefix_str;
+			if (exact) {
+				ada.ada_xpath[1] = "./ipv6-exact-match";
+				ada.ada_value[1] = "true";
+			}
+		} else {
+			ada.ada_xpath[0] = "./any";
+			ada.ada_value[0] = "true";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (acl_is_dup(vty->candidate_config->dnode, &ada))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the access-list first, so we can generate sequence if
@@ -779,8 +891,30 @@ DEFPY_YANG(
 	"Match any MAC address\n")
 {
 	int64_t sseq;
+	struct acl_dup_args ada = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		ada.ada_type = "mac";
+		ada.ada_name = name;
+
+		if (mac_str) {
+			ada.ada_xpath[0] = "./mac";
+			ada.ada_value[0] = mac_str;
+		} else {
+			ada.ada_xpath[0] = "./any";
+			ada.ada_value[0] = "true";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (acl_is_dup(vty->candidate_config->dnode, &ada))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the access-list first, so we can generate sequence if
@@ -947,7 +1081,7 @@ void access_list_show(struct vty *vty, struct lyd_node *dnode,
 	bool is_exact = false;
 	bool cisco_style = false;
 	bool cisco_extended = false;
-	struct in_addr mask;
+	struct in_addr addr, mask;
 	char macstr[PREFIX2STR_BUFFER];
 
 	is_any = yang_dnode_exists(dnode, "./any");
@@ -957,11 +1091,12 @@ void access_list_show(struct vty *vty, struct lyd_node *dnode,
 			break;
 
 		if (yang_dnode_exists(dnode, "./host")
-		    || yang_dnode_exists(dnode, "./network")
+		    || yang_dnode_exists(dnode, "./network/address")
 		    || yang_dnode_exists(dnode, "./source-any")) {
 			cisco_style = true;
 			if (yang_dnode_exists(dnode, "./destination-host")
-			    || yang_dnode_exists(dnode, "./destination-network")
+			    || yang_dnode_exists(
+				    dnode, "./destination-network/address")
 			    || yang_dnode_exists(dnode, "./destination-any"))
 				cisco_extended = true;
 		} else {
@@ -998,9 +1133,9 @@ void access_list_show(struct vty *vty, struct lyd_node *dnode,
 			vty_out(vty, " ip");
 
 		if (yang_dnode_exists(dnode, "./network")) {
-			yang_dnode_get_prefix(&p, dnode, "./network");
-			masklen2ip(p.prefixlen, &mask);
-			vty_out(vty, " %pI4 %pI4", &p.u.prefix4, &mask);
+			yang_dnode_get_ipv4(&addr, dnode, "./network/address");
+			yang_dnode_get_ipv4(&mask, dnode, "./network/mask");
+			vty_out(vty, " %pI4 %pI4", &addr, &mask);
 		} else if (yang_dnode_exists(dnode, "./host")) {
 			if (cisco_extended)
 				vty_out(vty, " host");
@@ -1018,10 +1153,11 @@ void access_list_show(struct vty *vty, struct lyd_node *dnode,
 
 		/* Handle destination address. */
 		if (yang_dnode_exists(dnode, "./destination-network")) {
-			yang_dnode_get_prefix(&p, dnode,
-					      "./destination-network");
-			masklen2ip(p.prefixlen, &mask);
-			vty_out(vty, " %pI4 %pI4", &p.u.prefix4, &mask);
+			yang_dnode_get_ipv4(&addr, dnode,
+					    "./destination-network/address");
+			yang_dnode_get_ipv4(&mask, dnode,
+					    "./destination-network/mask");
+			vty_out(vty, " %pI4 %pI4", &addr, &mask);
 		} else if (yang_dnode_exists(dnode, "./destination-host"))
 			vty_out(vty, " host %s",
 				yang_dnode_get_string(dnode,
@@ -1183,8 +1319,43 @@ DEFPY_YANG(
 	"Maximum prefix length\n")
 {
 	int64_t sseq;
+	int arg_idx = 0;
+	struct plist_dup_args pda = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		pda.pda_type = "ipv4";
+		pda.pda_name = name;
+		if (prefix_str) {
+			pda.pda_xpath[arg_idx] = "./ipv4-prefix";
+			pda.pda_value[arg_idx] = prefix_str;
+			arg_idx++;
+			if (ge_str) {
+				pda.pda_xpath[arg_idx] =
+					"./ipv4-prefix-length-greater-or-equal";
+				pda.pda_value[arg_idx] = ge_str;
+				arg_idx++;
+			}
+			if (le_str) {
+				pda.pda_xpath[arg_idx] =
+					"./ipv4-prefix-length-lesser-or-equal";
+				pda.pda_value[arg_idx] = le_str;
+				arg_idx++;
+			}
+		} else {
+			pda.pda_xpath[0] = "./any";
+			pda.pda_value[0] = "";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (plist_is_dup(vty->candidate_config->dnode, &pda))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the prefix-list first, so we can generate sequence if
@@ -1343,8 +1514,43 @@ DEFPY_YANG(
 	"Minimum prefix length\n")
 {
 	int64_t sseq;
+	int arg_idx = 0;
+	struct plist_dup_args pda = {};
 	char xpath[XPATH_MAXLEN];
 	char xpath_entry[XPATH_MAXLEN + 128];
+
+	/*
+	 * Backward compatibility: don't complain about duplicated values,
+	 * just silently accept.
+	 */
+	if (seq_str == NULL) {
+		pda.pda_type = "ipv6";
+		pda.pda_name = name;
+		if (prefix_str) {
+			pda.pda_xpath[arg_idx] = "./ipv6-prefix";
+			pda.pda_value[arg_idx] = prefix_str;
+			arg_idx++;
+			if (ge_str) {
+				pda.pda_xpath[arg_idx] =
+					"./ipv6-prefix-length-greater-or-equal";
+				pda.pda_value[arg_idx] = ge_str;
+				arg_idx++;
+			}
+			if (le_str) {
+				pda.pda_xpath[arg_idx] =
+					"./ipv6-prefix-length-lesser-or-equal";
+				pda.pda_value[arg_idx] = le_str;
+				arg_idx++;
+			}
+		} else {
+			pda.pda_xpath[0] = "./any";
+			pda.pda_value[0] = "";
+		}
+
+		/* Duplicated entry without sequence, just quit. */
+		if (plist_is_dup(vty->candidate_config->dnode, &pda))
+			return CMD_SUCCESS;
+	}
 
 	/*
 	 * Create the prefix-list first, so we can generate sequence if

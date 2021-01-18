@@ -80,14 +80,14 @@ class PIMTopo(Topo):
         sw.add_link(tgen.gears["r1"])
         sw.add_link(tgen.gears["r3"])
 
-
+@pytest.mark.pim
 def setup_module(mod):
     "Sets up the pytest environment"
     tgen = Topogen(PIMTopo, mod.__name__)
     tgen.start_topology()
 
     # For all registered routers, load the zebra configuration file
-    for rname, router in tgen.routers().iteritems():
+    for rname, router in tgen.routers().items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )

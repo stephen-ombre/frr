@@ -31,8 +31,11 @@ From Source
 
 Building FRR from source is the best way to ensure you have the latest features
 and bug fixes. Details for each supported platform, including dependency
-package listings, permissions, and other gotchas, are in the developer's
-documentation. This section provides a brief overview on the process.
+package listings, permissions, and other gotchas, are in the `developer's
+documentation
+<http://docs.frrouting.org/projects/dev-guide/en/latest/building.html>`_. This
+section provides a brief overview on the process.
+
 
 Getting the Source
 ^^^^^^^^^^^^^^^^^^
@@ -273,15 +276,15 @@ options from the list below.
    With this option, we provide a way to strip out these characters for APK dev
    package builds.
 
-..option:: --disable-version-build-config
+.. option:: --disable-version-build-config
 
    Remove the "configuerd with" field that has all of the build configuration
    arguments when reporting the version string in `show version` command.
 
-..option:: --with-pkg-extra-version=VER
+.. option:: --with-pkg-extra-version=VER
    Add extra version field, for packagers/distributions
 
-..option::  --with-pkg-git-version
+.. option::  --with-pkg-git-version
 
    Add git information to MOTD and build version string
 
@@ -355,6 +358,10 @@ options from the list below.
 
    Turn on the usage of PCRE Posix libs for regex functionality.
 
+.. option:: --enable-rpath
+
+   Set hardcoded rpaths in the executable [default=yes].
+
 You may specify any combination of the above options to the configure
 script. By default, the executables are placed in :file:`/usr/local/sbin`
 and the configuration files in :file:`/usr/local/etc`. The :file:`/usr/local/`
@@ -379,6 +386,10 @@ options to the configuration script.
 
    Look for YANG modules in `dir` [`prefix`/share/yang]. Note that the FRR
    YANG modules will be installed here.
+
+.. option:: --with-vici-socket <path>
+
+   Set StrongSWAN vici interface socket path [/var/run/charon.vici].
 
 Python dependency, documentation and tests
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

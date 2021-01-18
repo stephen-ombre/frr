@@ -47,6 +47,7 @@
 #include "sharp_zebra.h"
 #include "sharp_vty.h"
 #include "sharp_globals.h"
+#include "sharp_nht.h"
 
 DEFINE_MGROUP(SHARPD, "sharpd")
 
@@ -138,6 +139,16 @@ static void sharp_global_init(void)
 	sg.nhs = list_new();
 }
 
+static void sharp_start_configuration(void)
+{
+	zlog_debug("Configuration has started to be read");
+}
+
+static void sharp_end_configuration(void)
+{
+	zlog_debug("Configuration has finished being read");
+}
+
 int main(int argc, char **argv, char **envp)
 {
 	frr_preinit(&sharpd_di, argc, argv);
@@ -162,9 +173,11 @@ int main(int argc, char **argv, char **envp)
 
 	master = frr_init();
 
+	cmd_init_config_callbacks(sharp_start_configuration,
+				  sharp_end_configuration);
 	sharp_global_init();
 
-	nexthop_group_init(NULL, NULL, NULL, NULL);
+	sharp_nhgroup_init();
 	vrf_init(NULL, NULL, NULL, NULL, NULL);
 
 	sharp_zebra_init();

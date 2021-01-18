@@ -290,7 +290,7 @@ void vnc_direct_bgp_add_route_ce(struct bgp *bgp, struct agg_node *rn,
 		info.peer = peer;
 		info.attr = &hattr;
 		ret = route_map_apply(bgp->rfapi_cfg->routemap_export_bgp,
-				      prefix, RMAP_BGP, &info);
+				      prefix, &info);
 		if (ret == RMAP_DENYMATCH) {
 			bgp_attr_flush(&hattr);
 			return;
@@ -1033,7 +1033,7 @@ void vnc_direct_bgp_add_nve(struct bgp *bgp, struct rfapi_descriptor *rfd)
 						ret = route_map_apply(
 							rfgn->rfg
 								->routemap_export_bgp,
-							p, RMAP_BGP, &info);
+							p, &info);
 						if (ret == RMAP_DENYMATCH) {
 							bgp_attr_flush(&hattr);
 							continue;
@@ -1242,8 +1242,7 @@ static void vnc_direct_add_rn_group_rd(struct bgp *bgp,
 
 		info.peer = irfd->peer;
 		info.attr = &hattr;
-		ret = route_map_apply(rfg->routemap_export_bgp, p, RMAP_BGP,
-				      &info);
+		ret = route_map_apply(rfg->routemap_export_bgp, p, &info);
 		if (ret == RMAP_DENYMATCH) {
 			bgp_attr_flush(&hattr);
 			vnc_zlog_debug_verbose(
@@ -1691,8 +1690,7 @@ void vnc_direct_bgp_rh_add_route(struct bgp *bgp, afi_t afi,
 		memset(&info, 0, sizeof(info));
 		info.peer = peer;
 		info.attr = &hattr;
-		ret = route_map_apply(hc->routemap_export_bgp, prefix, RMAP_BGP,
-				      &info);
+		ret = route_map_apply(hc->routemap_export_bgp, prefix, &info);
 		if (ret == RMAP_DENYMATCH) {
 			bgp_attr_flush(&hattr);
 			return;
@@ -1711,14 +1709,11 @@ void vnc_direct_bgp_rh_add_route(struct bgp *bgp, afi_t afi,
 	rfapiGetVncLifetime(attr, &eti->lifetime);
 	eti->lifetime = rfapiGetHolddownFromLifetime(eti->lifetime);
 
-	if (eti->timer) {
-		/*
-		 * export expiration timer is already running on
-		 * this route: cancel it
-		 */
-		thread_cancel(eti->timer);
-		eti->timer = NULL;
-	}
+	/*
+	 * export expiration timer is already running on
+	 * this route: cancel it
+	 */
+	thread_cancel(&eti->timer);
 
 	bgp_update(peer, prefix, /* prefix */
 		   0,		 /* addpath_id */
@@ -1865,7 +1860,7 @@ void vnc_direct_bgp_rh_vpn_enable(struct bgp *bgp, afi_t afi)
 			if (!bgp_dest_has_bgp_path_info_data(dest))
 				continue;
 
-			vnc_zlog_debug_verbose("%s: checking prefix %pRN",
+			vnc_zlog_debug_verbose("%s: checking prefix %pBD",
 					       __func__, dest);
 
 			dest_p = bgp_dest_get_prefix(dest);
@@ -1920,8 +1915,7 @@ void vnc_direct_bgp_rh_vpn_enable(struct bgp *bgp, afi_t afi)
 						info.attr = &hattr;
 						ret = route_map_apply(
 							hc->routemap_export_bgp,
-							dest_p, RMAP_BGP,
-							&info);
+							dest_p, &info);
 						if (ret == RMAP_DENYMATCH) {
 							bgp_attr_flush(&hattr);
 							vnc_zlog_debug_verbose(
@@ -1947,15 +1941,12 @@ void vnc_direct_bgp_rh_vpn_enable(struct bgp *bgp, afi_t afi)
 					rfapiGetVncLifetime(ri->attr,
 							    &eti->lifetime);
 
-					if (eti->timer) {
-						/*
-						 * export expiration timer is
-						 * already running on
-						 * this route: cancel it
-						 */
-						thread_cancel(eti->timer);
-						eti->timer = NULL;
-					}
+					/*
+					 * export expiration timer is
+					 * already running on
+					 * this route: cancel it
+					 */
+					thread_cancel(&eti->timer);
 
 					vnc_zlog_debug_verbose(
 						"%s: calling bgp_update",
@@ -2024,8 +2015,7 @@ void vnc_direct_bgp_rh_vpn_disable(struct bgp *bgp, afi_t afi)
 					ZEBRA_ROUTE_VNC_DIRECT_RH,
 					BGP_ROUTE_REDISTRIBUTE);
 				if (eti) {
-					if (eti->timer)
-						thread_cancel(eti->timer);
+					thread_cancel(&eti->timer);
 					vnc_eti_delete(eti);
 				}
 

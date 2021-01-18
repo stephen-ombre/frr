@@ -25,6 +25,8 @@ vtysh_scan += \
 vtysh_scan += zebra/irdp_interface.c
 vtysh_scan += zebra/zebra_fpm.c
 
+vtysh_daemons += zebra
+
 if IRDP
 module_LTLIBRARIES += zebra/zebra_irdp.la
 endif
@@ -36,6 +38,11 @@ module_LTLIBRARIES += zebra/zebra_fpm.la
 endif
 if LINUX
 module_LTLIBRARIES += zebra/zebra_cumulus_mlag.la
+endif
+
+# Dataplane sample plugin
+if DEV_BUILD
+module_LTLIBRARIES += zebra/dplane_sample_plugin.la
 endif
 
 man8 += $(MANBUILD)/frr-zebra.8
@@ -51,14 +58,11 @@ zebra_zebra_SOURCES = \
 	zebra/connected.c \
 	zebra/debug.c \
 	zebra/if_ioctl.c \
-	zebra/if_ioctl_solaris.c \
 	zebra/if_netlink.c \
 	zebra/if_sysctl.c \
 	zebra/interface.c \
 	zebra/ioctl.c \
-	zebra/ioctl_solaris.c \
 	zebra/ipforward_proc.c \
-	zebra/ipforward_solaris.c \
 	zebra/ipforward_sysctl.c \
 	zebra/kernel_netlink.c \
 	zebra/kernel_socket.c \
@@ -69,7 +73,6 @@ zebra_zebra_SOURCES = \
 	zebra/rt_netlink.c \
 	zebra/rt_socket.c \
 	zebra/rtadv.c \
-	zebra/rtread_getmsg.c \
 	zebra/rtread_netlink.c \
 	zebra/rtread_sysctl.c \
 	zebra/rule_netlink.c \
@@ -133,7 +136,6 @@ noinst_HEADERS += \
 	zebra/if_netlink.h \
 	zebra/interface.h \
 	zebra/ioctl.h \
-	zebra/ioctl_solaris.h \
 	zebra/ipforward.h \
 	zebra/irdp.h \
 	zebra/kernel_netlink.h \
@@ -209,6 +211,12 @@ zebra/zebra_fpm_dt.lo: fpm/fpm.pb-c.h qpb/qpb.pb-c.h
 endif
 endif
 
+# Sample dataplane plugin
+if DEV_BUILD
+zebra_dplane_sample_plugin_la_SOURCES = zebra/sample_plugin.c
+zebra_dplane_sample_plugin_la_LDFLAGS = -module -shared -avoid-version -export-dynamic
+endif
+
 nodist_zebra_zebra_SOURCES = \
 	yang/frr-zebra.yang.c \
 	# end
@@ -224,4 +232,10 @@ zebra_dplane_fpm_nl_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
 zebra_dplane_fpm_nl_la_LIBADD  =
 
 vtysh_scan += $(top_srcdir)/zebra/dplane_fpm_nl.c
+endif
+
+if NETLINK_DEBUG
+zebra_zebra_SOURCES += \
+	zebra/debug_nl.c \
+	# end
 endif

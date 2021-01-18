@@ -280,5 +280,33 @@
         }
       ]
     }
+  ],
+  "10.10.10.10\/32":[
+    {
+      "prefix":"10.10.10.10\/32",
+      "protocol":"isis",
+      "distance":115,
+      "metric":40,
+      "nexthops":[
+        {
+          "ip":"10.0.4.3",
+          "afi":"ipv4",
+          "interfaceName":"eth-rt3-1",
+          "active":true,
+          "labels":[
+            17100
+          ]
+        },
+        {
+          "ip":"10.0.5.3",
+          "afi":"ipv4",
+          "interfaceName":"eth-rt3-2",
+          "active":true,
+          "labels":[
+            17100
+          ]
+        }
+      ]
+    }
   ]
 }

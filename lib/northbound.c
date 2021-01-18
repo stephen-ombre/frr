@@ -122,9 +122,9 @@ static int nb_node_new_cb(const struct lys_node *snode, void *arg)
 	if (CHECK_FLAG(snode->nodetype, LYS_CONTAINER | LYS_LIST)) {
 		bool config_only = true;
 
-		yang_snodes_iterate_subtree(snode, nb_node_check_config_only,
-					    YANG_ITER_ALLOW_AUGMENTATIONS,
-					    &config_only);
+		(void)yang_snodes_iterate_subtree(snode, NULL,
+						  nb_node_check_config_only, 0,
+						  &config_only);
 		if (config_only)
 			SET_FLAG(nb_node->flags, F_NB_NODE_CONFIG_ONLY);
 	}
@@ -141,6 +141,7 @@ static int nb_node_new_cb(const struct lys_node *snode, void *arg)
 	 * another.
 	 */
 	nb_node->snode = snode;
+	assert(snode->priv == NULL);
 	lys_set_private(snode, nb_node);
 
 	return YANG_ITER_CONTINUE;
@@ -151,20 +152,22 @@ static int nb_node_del_cb(const struct lys_node *snode, void *arg)
 	struct nb_node *nb_node;
 
 	nb_node = snode->priv;
-	lys_set_private(snode, NULL);
-	XFREE(MTYPE_NB_NODE, nb_node);
+	if (nb_node) {
+		lys_set_private(snode, NULL);
+		XFREE(MTYPE_NB_NODE, nb_node);
+	}
 
 	return YANG_ITER_CONTINUE;
 }
 
 void nb_nodes_create(void)
 {
-	yang_snodes_iterate_all(nb_node_new_cb, 0, NULL);
+	yang_snodes_iterate(NULL, nb_node_new_cb, 0, NULL);
 }
 
 void nb_nodes_delete(void)
 {
-	yang_snodes_iterate_all(nb_node_del_cb, 0, NULL);
+	yang_snodes_iterate(NULL, nb_node_del_cb, 0, NULL);
 }
 
 struct nb_node *nb_node_find(const char *xpath)
@@ -272,8 +275,10 @@ static int nb_node_validate(const struct lys_node *snode, void *arg)
 	unsigned int *errors = arg;
 
 	/* Validate callbacks and priority. */
-	*errors += nb_node_validate_cbs(nb_node);
-	*errors += nb_node_validate_priority(nb_node);
+	if (nb_node) {
+		*errors += nb_node_validate_cbs(nb_node);
+		*errors += nb_node_validate_priority(nb_node);
+	}
 
 	return YANG_ITER_CONTINUE;
 }
@@ -1141,7 +1146,8 @@ const void *nb_callback_lookup_entry(const struct nb_node *nb_node,
 }
 
 int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
-		    const struct list *input, struct list *output)
+		    const struct list *input, struct list *output, char *errmsg,
+		    size_t errmsg_len)
 {
 	struct nb_cb_rpc_args args = {};
 
@@ -1150,6 +1156,8 @@ int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
 	args.xpath = xpath;
 	args.input = input;
 	args.output = output;
+	args.errmsg = errmsg;
+	args.errmsg_len = errmsg_len;
 	return nb_node->cbs.rpc(&args);
 }
 
@@ -2228,25 +2236,11 @@ static void nb_load_callbacks(const struct frr_yang_module_info *module)
 	}
 }
 
-void nb_init(struct thread_master *tm,
-	     const struct frr_yang_module_info *const modules[],
-	     size_t nmodules, bool db_enabled)
+void nb_validate_callbacks(void)
 {
 	unsigned int errors = 0;
 
-	/* Load YANG modules. */
-	for (size_t i = 0; i < nmodules; i++)
-		yang_module_load(modules[i]->name);
-
-	/* Create a nb_node for all YANG schema nodes. */
-	nb_nodes_create();
-
-	/* Load northbound callbacks. */
-	for (size_t i = 0; i < nmodules; i++)
-		nb_load_callbacks(modules[i]);
-
-	/* Validate northbound callbacks. */
-	yang_snodes_iterate_all(nb_node_validate, 0, &errors);
+	yang_snodes_iterate(NULL, nb_node_validate, 0, &errors);
 	if (errors > 0) {
 		flog_err(
 			EC_LIB_NB_CBS_VALIDATION,
@@ -2254,8 +2248,32 @@ void nb_init(struct thread_master *tm,
 			__func__, errors);
 		exit(1);
 	}
+}
 
+void nb_load_module(const struct frr_yang_module_info *module_info)
+{
+	struct yang_module *module;
+
+	DEBUGD(&nb_dbg_events, "northbound: loading %s.yang",
+	       module_info->name);
+
+	module = yang_module_load(module_info->name);
+	yang_snodes_iterate(module->info, nb_node_new_cb, 0, NULL);
+	nb_load_callbacks(module_info);
+}
+
+void nb_init(struct thread_master *tm,
+	     const struct frr_yang_module_info *const modules[],
+	     size_t nmodules, bool db_enabled)
+{
 	nb_db_enabled = db_enabled;
+
+	/* Load YANG modules and their corresponding northbound callbacks. */
+	for (size_t i = 0; i < nmodules; i++)
+		nb_load_module(modules[i]);
+
+	/* Validate northbound callbacks. */
+	nb_validate_callbacks();
 
 	/* Create an empty running configuration. */
 	running_config = nb_config_new(NULL);

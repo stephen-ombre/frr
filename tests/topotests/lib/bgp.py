@@ -21,6 +21,7 @@
 from copy import deepcopy
 from time import sleep
 import traceback
+import ipaddr
 import ipaddress
 import os
 import sys
@@ -28,6 +29,7 @@ from lib import topotest
 from lib.topolog import logger
 
 from lib.topogen import TopoRouter, get_topogen
+from lib.topotest import frr_unicode
 
 # Import common_config to use commomnly used APIs
 from lib.common_config import (
@@ -367,7 +369,7 @@ def __create_bgp_unicast_neighbor(
 
     bgp_data = input_dict["address_family"]
 
-    for addr_type, addr_dict in bgp_data.iteritems():
+    for addr_type, addr_dict in bgp_data.items():
         if not addr_dict:
             continue
 
@@ -391,12 +393,11 @@ def __create_bgp_unicast_neighbor(
             del_action = advertise_network_dict.setdefault("delete", False)
 
             # Generating IPs for verification
-            prefix = str(ipaddress.ip_network(unicode(network[0])).prefixlen)
             network_list = generate_ips(network, no_of_network)
             for ip in network_list:
-                ip = str(ipaddress.ip_network(unicode(ip)).network_address)
+                ip = str(ipaddress.ip_network(frr_unicode(ip)))
 
-                cmd = "network {}/{}".format(ip, prefix)
+                cmd = "network {}".format(ip)
                 if del_action:
                     cmd = "no {}".format(cmd)
 
@@ -471,7 +472,7 @@ def __create_bgp_unicast_neighbor(
             )
             config_data.extend(neigh_data)
 
-    for addr_type, addr_dict in bgp_data.iteritems():
+    for addr_type, addr_dict in bgp_data.items():
         if not addr_dict or not check_address_types(addr_type):
             continue
 
@@ -509,7 +510,7 @@ def __create_l2vpn_evpn_address_family(
 
     bgp_data = input_dict["address_family"]
 
-    for family_type, family_dict in bgp_data.iteritems():
+    for family_type, family_dict in bgp_data.items():
         if family_type != "l2vpn":
             continue
 
@@ -665,8 +666,8 @@ def __create_bgp_neighbor(topo, input_dict, router, addr_type, add_neigh=True):
     bgp_data = input_dict["address_family"]
     neigh_data = bgp_data[addr_type]["unicast"]["neighbor"]
 
-    for name, peer_dict in neigh_data.iteritems():
-        for dest_link, peer in peer_dict["dest_link"].iteritems():
+    for name, peer_dict in neigh_data.items():
+        for dest_link, peer in peer_dict["dest_link"].items():
             nh_details = topo[name]
 
             if "vrfs" in topo[router] or type(nh_details["bgp"]) is list:
@@ -691,8 +692,8 @@ def __create_bgp_neighbor(topo, input_dict, router, addr_type, add_neigh=True):
                 config_data.append("{} activate".format(neigh_cxt))
 
             disable_connected = peer.setdefault("disable_connected_check", False)
-            keep_alive = peer.setdefault("keepalivetimer", 60)
-            hold_down = peer.setdefault("holddowntimer", 180)
+            keep_alive = peer.setdefault("keepalivetimer", 3)
+            hold_down = peer.setdefault("holddowntimer", 10)
             password = peer.setdefault("password", None)
             no_password = peer.setdefault("no_password", None)
             max_hop_limit = peer.setdefault("ebgp_multihop", 1)
@@ -770,8 +771,8 @@ def __create_bgp_unicast_address_family(
     bgp_data = input_dict["address_family"]
     neigh_data = bgp_data[addr_type]["unicast"]["neighbor"]
 
-    for peer_name, peer_dict in deepcopy(neigh_data).iteritems():
-        for dest_link, peer in peer_dict["dest_link"].iteritems():
+    for peer_name, peer_dict in deepcopy(neigh_data).items():
+        for dest_link, peer in peer_dict["dest_link"].items():
             deactivate = None
             activate = None
             nh_details = topo[peer_name]
@@ -779,7 +780,7 @@ def __create_bgp_unicast_address_family(
             deactivate_addr_family = peer.setdefault("deactivate", None)
             # Loopback interface
             if "source_link" in peer and peer["source_link"] == "lo":
-                for destRouterLink, data in sorted(nh_details["links"].iteritems()):
+                for destRouterLink, data in sorted(nh_details["links"].items()):
                     if "type" in data and data["type"] == "loopback":
                         if dest_link == destRouterLink:
                             ip_addr = nh_details["links"][destRouterLink][
@@ -961,7 +962,7 @@ def modify_bgp_config_when_bgpd_down(tgen, topo, input_dict):
         # Copy bgp config file to /etc/frr
         for dut in input_dict.keys():
             router_list = tgen.routers()
-            for router, rnode in router_list.iteritems():
+            for router, rnode in router_list.items():
                 if router != dut:
                     continue
 
@@ -991,7 +992,7 @@ def modify_bgp_config_when_bgpd_down(tgen, topo, input_dict):
 #############################################
 # Verification APIs
 #############################################
-@retry(attempts=3, wait=2, return_is_str=True)
+@retry(attempts=4, wait=2, return_is_str=True)
 def verify_router_id(tgen, topo, input_dict):
     """
     Running command "show ip bgp json" for DUT and reading router-id
@@ -1038,7 +1039,7 @@ def verify_router_id(tgen, topo, input_dict):
         logger.info("Checking router %s router-id", router)
         show_bgp_json = run_frr_cmd(rnode, "show bgp summary json", isjson=True)
         router_id_out = show_bgp_json["ipv4Unicast"]["routerId"]
-        router_id_out = ipaddress.IPv4Address(unicode(router_id_out))
+        router_id_out = ipaddress.IPv4Address(frr_unicode(router_id_out))
 
         # Once router-id is deleted, highest interface ip should become
         # router-id
@@ -1046,7 +1047,7 @@ def verify_router_id(tgen, topo, input_dict):
             router_id = find_interface_with_greater_ip(topo, router)
         else:
             router_id = input_dict[router]["bgp"]["router_id"]
-        router_id = ipaddress.IPv4Address(unicode(router_id))
+        router_id = ipaddress.IPv4Address(frr_unicode(router_id))
 
         if router_id == router_id_out:
             logger.info("Found expected router-id %s for router %s", router_id, router)
@@ -1083,7 +1084,7 @@ def verify_bgp_convergence(tgen, topo, dut=None):
     """
 
     logger.debug("Entering lib API: verify_bgp_convergence()")
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if "bgp" not in topo["routers"][router]:
             continue
 
@@ -1246,7 +1247,7 @@ def verify_bgp_convergence(tgen, topo, dut=None):
     return True
 
 
-@retry(attempts=3, wait=4, return_is_str=True)
+@retry(attempts=4, wait=4, return_is_str=True)
 def verify_bgp_community(
     tgen, addr_type, router, network, input_dict=None, vrf=None, bestpath=False
 ):
@@ -1411,7 +1412,7 @@ def modify_as_number(tgen, topo, input_dict):
     return True
 
 
-@retry(attempts=3, wait=2, return_is_str=True)
+@retry(attempts=4, wait=2, return_is_str=True)
 def verify_as_numbers(tgen, topo, input_dict):
     """
     This API is to verify AS numbers for given DUT by running
@@ -1462,9 +1463,9 @@ def verify_as_numbers(tgen, topo, input_dict):
 
             bgp_neighbors = bgp_addr_type[addr_type]["unicast"]["neighbor"]
 
-            for bgp_neighbor, peer_data in bgp_neighbors.iteritems():
+            for bgp_neighbor, peer_data in bgp_neighbors.items():
                 remote_as = input_dict[bgp_neighbor]["bgp"]["local_as"]
-                for dest_link, peer_dict in peer_data["dest_link"].iteritems():
+                for dest_link, peer_dict in peer_data["dest_link"].items():
                     neighbor_ip = None
                     data = topo["routers"][bgp_neighbor]["links"]
 
@@ -1534,7 +1535,7 @@ def verify_bgp_convergence_from_running_config(tgen, dut=None):
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if dut is not None and dut != router:
             continue
 
@@ -1615,8 +1616,6 @@ def clear_bgp(tgen, addr_type, router, vrf=None):
     else:
         run_frr_cmd(rnode, "clear bgp *")
 
-    sleep(5)
-
     logger.debug("Exiting lib API: {}".format(sys._getframe().f_code.co_name))
 
 
@@ -1686,8 +1685,8 @@ def clear_bgp_and_verify(tgen, topo, router):
         for addr_type in bgp_addr_type:
             bgp_neighbors = bgp_addr_type[addr_type]["unicast"]["neighbor"]
 
-            for bgp_neighbor, peer_data in bgp_neighbors.iteritems():
-                for dest_link, peer_dict in peer_data["dest_link"].iteritems():
+            for bgp_neighbor, peer_data in bgp_neighbors.items():
+                for dest_link, peer_dict in peer_data["dest_link"].items():
                     data = topo["routers"][bgp_neighbor]["links"]
 
                     if dest_link in data:
@@ -1768,8 +1767,8 @@ def clear_bgp_and_verify(tgen, topo, router):
         for addr_type in bgp_addr_type:
             bgp_neighbors = bgp_addr_type[addr_type]["unicast"]["neighbor"]
 
-            for bgp_neighbor, peer_data in bgp_neighbors.iteritems():
-                for dest_link, peer_dict in peer_data["dest_link"].iteritems():
+            for bgp_neighbor, peer_data in bgp_neighbors.items():
+                for dest_link, peer_dict in peer_data["dest_link"].items():
                     data = topo["routers"][bgp_neighbor]["links"]
 
                     if dest_link in data:
@@ -1873,8 +1872,8 @@ def verify_bgp_timers_and_functionality(tgen, topo, input_dict):
                 continue
 
             bgp_neighbors = bgp_addr_type[addr_type]["unicast"]["neighbor"]
-            for bgp_neighbor, peer_data in bgp_neighbors.iteritems():
-                for dest_link, peer_dict in peer_data["dest_link"].iteritems():
+            for bgp_neighbor, peer_data in bgp_neighbors.items():
+                for dest_link, peer_dict in peer_data["dest_link"].items():
                     data = topo["routers"][bgp_neighbor]["links"]
 
                     keepalivetimer = peer_dict["keepalivetimer"]
@@ -2062,7 +2061,7 @@ def verify_bgp_timers_and_functionality(tgen, topo, input_dict):
     return True
 
 
-@retry(attempts=3, wait=4, return_is_str=True)
+@retry(attempts=4, wait=4, return_is_str=True)
 def verify_bgp_attributes(
     tgen,
     addr_type,
@@ -2115,7 +2114,7 @@ def verify_bgp_attributes(
     errormsg(str) or True
     """
 
-    logger.debug("Entering lib API: verify_bgp_attributes()")
+    logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
     for router, rnode in tgen.routers().iteritems():
         if router != dut:
             continue
@@ -2129,7 +2128,9 @@ def verify_bgp_attributes(
             dict_to_test = []
             tmp_list = []
 
-            if "route_maps" in input_dict.values()[0]:
+            dict_list = list(input_dict.values())[0]
+
+            if "route_maps" in dict_list:
                 for rmap_router in input_dict.keys():
                     for rmap, values in input_dict[rmap_router]["route_maps"].items():
                         if rmap == rmap_name:
@@ -2194,11 +2195,11 @@ def verify_bgp_attributes(
                                             )
                                             return errormsg
 
-    logger.debug("Exiting lib API: verify_bgp_attributes()")
+    logger.debug("Exiting lib API: {}".format(sys._getframe().f_code.co_name))
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=4, wait=2, return_is_str=True)
 def verify_best_path_as_per_bgp_attribute(
     tgen, addr_type, router, input_dict, attribute
 ):
@@ -2287,7 +2288,7 @@ def verify_best_path_as_per_bgp_attribute(
 
             routes = generate_ips(_network, no_of_ip)
             for route in routes:
-                route = str(ipaddress.ip_network(unicode(route)))
+                route = str(ipaddress.ip_network(frr_unicode(route)))
 
                 if route in sh_ip_bgp_json["routes"]:
                     route_attributes = sh_ip_bgp_json["routes"][route]
@@ -2330,7 +2331,7 @@ def verify_best_path_as_per_bgp_attribute(
                         # - rule is IGP>EGP>INCOMPLETE
                         _next_hop = [
                             key
-                            for (key, value) in attribute_dict.iteritems()
+                            for (key, value) in attribute_dict.items()
                             if value == "IGP"
                         ][0]
                         compare = ""
@@ -2402,6 +2403,7 @@ def verify_best_path_as_per_bgp_attribute(
     return True
 
 
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_best_path_as_per_admin_distance(
     tgen, addr_type, router, input_dict, attribute
 ):
@@ -2514,7 +2516,8 @@ def verify_best_path_as_per_admin_distance(
 
 
 @retry(attempts=5, wait=2, return_is_str=True, initial_wait=2)
-def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None):
+def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None,
+aspath=None, multi_nh=None):
     """
     This API is to verify whether bgp rib has any
     matching route for a nexthop.
@@ -2549,8 +2552,9 @@ def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None)
     additional_nexthops_in_required_nhs = []
     list1 = []
     list2 = []
+    found_hops = []
     for routerInput in input_dict.keys():
-        for router, rnode in router_list.iteritems():
+        for router, rnode in router_list.items():
             if router != dut:
                 continue
 
@@ -2605,7 +2609,7 @@ def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None)
                     ip_list = generate_ips(network, no_of_ip)
 
                     for st_rt in ip_list:
-                        st_rt = str(ipaddress.ip_network(unicode(st_rt)))
+                        st_rt = str(ipaddress.ip_network(frr_unicode(st_rt)))
 
                         _addr_type = validate_ip_address(st_rt)
                         if _addr_type != addr_type:
@@ -2615,44 +2619,73 @@ def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None)
                             st_found = True
                             found_routes.append(st_rt)
 
-                            if next_hop:
+                            if next_hop and multi_nh and st_found:
                                 if not isinstance(next_hop, list):
                                     next_hop = [next_hop]
                                     list1 = next_hop
 
-                                found_hops = [
-                                    rib_r["ip"]
-                                    for rib_r in rib_routes_json["routes"][st_rt][0][
-                                        "nexthops"
-                                    ]
-                                ]
-                                list2 = found_hops
+                                for mnh in range(
+                                    0, len(rib_routes_json["routes"][st_rt])
+                                ):
+                                    found_hops.append(
+                                        [
+                                            rib_r["ip"]
+                                            for rib_r in rib_routes_json["routes"][
+                                                st_rt
+                                            ][mnh]["nexthops"]
+                                        ]
+                                    )
+                                for mnh in found_hops:
+                                    for each_nh_in_multipath in mnh:
+                                        list2.append(each_nh_in_multipath)
+                                if found_hops[0]:
+                                    missing_list_of_nexthops = set(list2).difference(
+                                        list1
+                                    )
+                                    additional_nexthops_in_required_nhs = set(
+                                        list1
+                                    ).difference(list2)
 
-                                missing_list_of_nexthops = set(list2).difference(list1)
-                                additional_nexthops_in_required_nhs = set(
-                                    list1
-                                ).difference(list2)
-
-                                if list2:
-                                    if additional_nexthops_in_required_nhs:
-                                        logger.info(
-                                            "Missing nexthop %s for route"
-                                            " %s in RIB of router %s\n",
-                                            additional_nexthops_in_required_nhs,
-                                            st_rt,
-                                            dut,
-                                        )
-                                        errormsg = (
-                                            "Nexthop {} is Missing for "
-                                            "route {} in RIB of router {}\n".format(
+                                    if list2:
+                                        if additional_nexthops_in_required_nhs:
+                                            logger.info(
+                                                "Missing nexthop %s for route"
+                                                " %s in RIB of router %s\n",
                                                 additional_nexthops_in_required_nhs,
                                                 st_rt,
                                                 dut,
                                             )
-                                        )
                                         return errormsg
                                     else:
                                         nh_found = True
+
+                            elif next_hop and multi_nh is None:
+                                if not isinstance(next_hop, list):
+                                    next_hop = [next_hop]
+                                    list1 = next_hop
+                                found_hops = [rib_r["ip"] for rib_r in
+                                              rib_routes_json["routes"][
+                                                  st_rt][0]["nexthops"]]
+                                list2 = found_hops
+                                missing_list_of_nexthops = \
+                                    set(list2).difference(list1)
+                                additional_nexthops_in_required_nhs = \
+                                    set(list1).difference(list2)
+
+                                if list2:
+                                    if additional_nexthops_in_required_nhs:
+                                        logger.info("Missing nexthop %s for route"\
+                                        " %s in RIB of router %s\n", \
+                                        additional_nexthops_in_required_nhs,  \
+                                        st_rt, dut)
+                                        errormsg=("Nexthop {} is Missing for "\
+                                        "route {} in RIB of router {}\n".format(
+                                            additional_nexthops_in_required_nhs,
+                                            st_rt, dut))
+                                        return errormsg
+                                    else:
+                                        nh_found = True
+
                             if aspath:
                                 found_paths = rib_routes_json["routes"][st_rt][0][
                                     "path"
@@ -2743,7 +2776,7 @@ def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None)
                     ip_list = generate_ips(network, no_of_network)
 
                     for st_rt in ip_list:
-                        st_rt = str(ipaddress.ip_network(unicode(st_rt)))
+                        st_rt = str(ipaddress.ip_network(frr_unicode(st_rt)))
 
                         _addr_type = validate_ip_address(st_rt)
                         if _addr_type != addr_type:
@@ -2773,7 +2806,7 @@ def verify_bgp_rib(tgen, addr_type, dut, input_dict, next_hop=None, aspath=None)
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_graceful_restart(tgen, topo, addr_type, input_dict, dut, peer):
     """
     This API is to verify verify_graceful_restart configuration of DUT and
@@ -2834,7 +2867,7 @@ def verify_graceful_restart(tgen, topo, addr_type, input_dict, dut, peer):
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3022,7 +3055,7 @@ def verify_graceful_restart(tgen, topo, addr_type, input_dict, dut, peer):
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_r_bit(tgen, topo, addr_type, input_dict, dut, peer):
     """
     This API is to verify r_bit in the BGP gr capability advertised
@@ -3082,7 +3115,7 @@ def verify_r_bit(tgen, topo, addr_type, input_dict, dut, peer):
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3140,7 +3173,7 @@ def verify_r_bit(tgen, topo, addr_type, input_dict, dut, peer):
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_eor(tgen, topo, addr_type, input_dict, dut, peer):
     """
     This API is to verify EOR
@@ -3200,7 +3233,7 @@ def verify_eor(tgen, topo, addr_type, input_dict, dut, peer):
     """
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3303,7 +3336,7 @@ def verify_eor(tgen, topo, addr_type, input_dict, dut, peer):
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=4, wait=2, return_is_str=True)
 def verify_f_bit(tgen, topo, addr_type, input_dict, dut, peer):
     """
     This API is to verify f_bit in the BGP gr capability advertised
@@ -3365,7 +3398,7 @@ def verify_f_bit(tgen, topo, addr_type, input_dict, dut, peer):
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3443,7 +3476,7 @@ def verify_f_bit(tgen, topo, addr_type, input_dict, dut, peer):
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_graceful_restart_timers(tgen, topo, addr_type, input_dict, dut, peer):
     """
     This API is to verify graceful restart timers, configured and recieved
@@ -3491,7 +3524,7 @@ def verify_graceful_restart_timers(tgen, topo, addr_type, input_dict, dut, peer)
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3569,7 +3602,7 @@ def verify_graceful_restart_timers(tgen, topo, addr_type, input_dict, dut, peer)
     return True
 
 
-@retry(attempts=4, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=4, wait=2, return_is_str=True)
 def verify_gr_address_family(tgen, topo, addr_type, addr_family, dut):
     """
     This API is to verify gr_address_family in the BGP gr capability advertised
@@ -3595,7 +3628,7 @@ def verify_gr_address_family(tgen, topo, addr_type, addr_family, dut):
 
     logger.debug("Entering lib API: {}".format(sys._getframe().f_code.co_name))
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         if router != dut:
             continue
 
@@ -3659,7 +3692,7 @@ def verify_gr_address_family(tgen, topo, addr_type, addr_family, dut):
     logger.debug("Exiting lib API: {}".format(sys._getframe().f_code.co_name))
 
 
-@retry(attempts=5, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=6, wait=2, return_is_str=True)
 def verify_attributes_for_evpn_routes(
     tgen,
     topo,
@@ -3675,7 +3708,6 @@ def verify_attributes_for_evpn_routes(
     """
     API to verify rd and rt value using "sh bgp l2vpn evpn 10.1.1.1"
     command.
-
     Parameters
     ----------
     * `tgen`: topogen object
@@ -3689,7 +3721,6 @@ def verify_attributes_for_evpn_routes(
     * `ipLen` : IP prefix length
     * `rd_peer` : Peer name from which RD will be auto-generated
     * `rt_peer` : Peer name from which RT will be auto-generated
-
     Usage
     -----
         input_dict_1 = {
@@ -3761,7 +3792,7 @@ def verify_attributes_for_evpn_routes(
                                 logger.info(
                                     "[DUT %s]: Verifying RD value for"
                                     " EVPN route: %s [PASSED]|| "
-                                    "Found Exprected: %s",
+                                    "Found Expected: %s",
                                     dut,
                                     route,
                                     rd,
@@ -3807,34 +3838,33 @@ def verify_attributes_for_evpn_routes(
                                 continue
                             router_id = afi_data["routerId"]
 
+                        found = False
                         rd = "{}:{}".format(router_id, vni_dict[vrf])
-                        if rd in evpn_rd_value_json:
-                            rd_value_json = evpn_rd_value_json[rd]
-                            if rd_value_json["rd"] != rd:
-                                errormsg = (
-                                    "[DUT: %s] Failed: Verifying"
-                                    " RD value for EVPN route: %s"
-                                    "[FAILED]!!, EXPECTED  : %s "
-                                    " FOUND : %s"
-                                    % (dut, route, rd, rd_value_json["rd"])
-                                )
-                                return errormsg
+                        for _rd, rd_value_json in evpn_rd_value_json.items():
+                            if (
+                                str(rd_value_json["rd"].split(":")[0])
+                                != rd.split(":")[0]
+                            ):
+                                continue
 
-                            else:
-                                logger.info(
-                                    "[DUT %s]: Verifying RD value for"
-                                    " EVPN route: %s [PASSED]|| "
-                                    "Found Exprected: %s",
-                                    dut,
-                                    route,
-                                    rd,
-                                )
-                                return True
+                            if int(rd_value_json["rd"].split(":")[1]) > 0:
+                                found = True
 
+                        if found:
+                            logger.info(
+                                "[DUT %s]: Verifying RD value for"
+                                " EVPN route: %s "
+                                "Found Expected: %s",
+                                dut,
+                                route,
+                                rd_value_json["rd"],
+                            )
+                            return True
                         else:
                             errormsg = (
-                                "[DUT: %s] RD : %s is not present"
-                                " in cli json output" % (dut, rd)
+                                "[DUT: %s] Failed: Verifying"
+                                " RD value for EVPN route: %s"
+                                " FOUND : %s" % (dut, route, rd_value_json["rd"])
                             )
                             return errormsg
 
@@ -3907,7 +3937,7 @@ def verify_attributes_for_evpn_routes(
                                                 "[DUT %s]: Verifying "
                                                 "RT value for EVPN "
                                                 "route: %s [PASSED]||"
-                                                "Found Exprected: %s",
+                                                "Found Expected: %s",
                                                 dut,
                                                 route,
                                                 rt_input,
@@ -3956,7 +3986,7 @@ def verify_attributes_for_evpn_routes(
                                                 "[DUT %s]: Verifying RT"
                                                 " value for EVPN route:"
                                                 " %s [PASSED]|| "
-                                                "Found Exprected: %s",
+                                                "Found Expected: %s",
                                                 dut,
                                                 route,
                                                 rt_input,
@@ -4000,7 +4030,7 @@ def verify_attributes_for_evpn_routes(
                                         "[DUT %s]: RD: %s, Verifying "
                                         "ethTag value for EVPN route:"
                                         " %s [PASSED]|| "
-                                        "Found Exprected: %s",
+                                        "Found Expected: %s",
                                         dut,
                                         _rd,
                                         route,
@@ -4040,7 +4070,7 @@ def verify_attributes_for_evpn_routes(
                                         "[DUT %s]: RD: %s, Verifying "
                                         "ipLen value for EVPN route:"
                                         " %s [PASSED]|| "
-                                        "Found Exprected: %s",
+                                        "Found Expected: %s",
                                         dut,
                                         _rd,
                                         route,
@@ -4060,14 +4090,13 @@ def verify_attributes_for_evpn_routes(
     return False
 
 
-@retry(attempts=5, wait=2, return_is_str=True, initial_wait=2)
+@retry(attempts=5, wait=2, return_is_str=True)
 def verify_evpn_routes(
     tgen, topo, dut, input_dict, routeType=5, EthTag=0, next_hop=None
 ):
     """
     API to verify evpn routes using "sh bgp l2vpn evpn"
     command.
-
     Parameters
     ----------
     * `tgen`: topogen object
@@ -4078,7 +4107,6 @@ def verify_evpn_routes(
     * `route_type` : Route type 5 is supported as of now
     * `EthTag` : Ethernet tag, by-default is 0
     * `next_hop` : Prefered nexthop for the evpn routes
-
     Usage
     -----
         input_dict_1 = {
@@ -4091,7 +4119,6 @@ def verify_evpn_routes(
             }
         }
         result = verify_evpn_routes(tgen, topo, input_dict)
-
     Returns
     -------
     errormsg(str) or True

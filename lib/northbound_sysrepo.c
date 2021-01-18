@@ -174,6 +174,9 @@ static int frr_sr_process_change(struct nb_config *candidate,
 
 	xpath = sr_data->xpath;
 
+	DEBUGD(&nb_dbg_client_sysrepo, "sysrepo: processing change [xpath %s]",
+	       xpath);
+
 	/* Non-presence container - nothing to do. */
 	if (sr_data->type == SR_CONTAINER_T)
 		return NB_OK;
@@ -223,7 +226,7 @@ static int frr_sr_process_change(struct nb_config *candidate,
 
 	ret = nb_candidate_edit(candidate, nb_node, nb_op, xpath, NULL, data);
 	yang_data_free(data);
-	if (ret != NB_OK) {
+	if (ret != NB_OK && ret != NB_ERR_NOT_FOUND) {
 		flog_warn(
 			EC_LIB_NB_CANDIDATE_EDIT_ERROR,
 			"%s: failed to edit candidate configuration: operation [%s] xpath [%s]",
@@ -235,8 +238,7 @@ static int frr_sr_process_change(struct nb_config *candidate,
 }
 
 static int frr_sr_config_change_cb_prepare(sr_session_ctx_t *session,
-					   const char *module_name,
-					   bool startup_config)
+					   const char *module_name)
 {
 	sr_change_iter_t *it;
 	int ret;
@@ -275,33 +277,17 @@ static int frr_sr_config_change_cb_prepare(sr_session_ctx_t *session,
 
 	transaction = NULL;
 	context.client = NB_CLIENT_SYSREPO;
-	if (startup_config) {
-		/*
-		 * sysrepod sends the entire startup configuration using a
-		 * single event (SR_EV_ENABLED). This means we need to perform
-		 * the full two-phase commit protocol in one go here.
-		 */
-		ret = nb_candidate_commit(&context, candidate, true, NULL, NULL,
-					  errmsg, sizeof(errmsg));
-		if (ret != NB_OK && ret != NB_ERR_NO_CHANGES)
-			flog_warn(
-				EC_LIB_LIBSYSREPO,
-				"%s: failed to apply startup configuration: %s (%s)",
-				__func__, nb_err_name(ret), errmsg);
-	} else {
-		/*
-		 * Validate the configuration changes and allocate all resources
-		 * required to apply them.
-		 */
-		ret = nb_candidate_commit_prepare(&context, candidate, NULL,
-						  &transaction, errmsg,
-						  sizeof(errmsg));
-		if (ret != NB_OK && ret != NB_ERR_NO_CHANGES)
-			flog_warn(
-				EC_LIB_LIBSYSREPO,
-				"%s: failed to prepare configuration transaction: %s (%s)",
-				__func__, nb_err_name(ret), errmsg);
-	}
+	/*
+	 * Validate the configuration changes and allocate all resources
+	 * required to apply them.
+	 */
+	ret = nb_candidate_commit_prepare(&context, candidate, NULL,
+					  &transaction, errmsg, sizeof(errmsg));
+	if (ret != NB_OK && ret != NB_ERR_NO_CHANGES)
+		flog_warn(
+			EC_LIB_LIBSYSREPO,
+			"%s: failed to prepare configuration transaction: %s (%s)",
+			__func__, nb_err_name(ret), errmsg);
 
 	if (!transaction)
 		nb_config_free(candidate);
@@ -360,11 +346,8 @@ static int frr_sr_config_change_cb(sr_session_ctx_t *session,
 {
 	switch (sr_ev) {
 	case SR_EV_ENABLED:
-		return frr_sr_config_change_cb_prepare(session, module_name,
-						       true);
 	case SR_EV_CHANGE:
-		return frr_sr_config_change_cb_prepare(session, module_name,
-						       false);
+		return frr_sr_config_change_cb_prepare(session, module_name);
 	case SR_EV_DONE:
 		return frr_sr_config_change_cb_apply(session, module_name);
 	case SR_EV_ABORT:
@@ -431,6 +414,7 @@ static int frr_sr_config_rpc_cb(sr_session_ctx_t *session, const char *xpath,
 	struct yang_data *data;
 	size_t cb_output_cnt;
 	int ret = SR_ERR_OK;
+	char errmsg[BUFSIZ] = {0};
 
 	nb_node = nb_node_find(xpath);
 	if (!nb_node) {
@@ -453,7 +437,9 @@ static int frr_sr_config_rpc_cb(sr_session_ctx_t *session, const char *xpath,
 	}
 
 	/* Execute callback registered for this XPath. */
-	if (nb_callback_rpc(nb_node, xpath, input, output) != NB_OK) {
+	if (nb_callback_rpc(nb_node, xpath, input, output, errmsg,
+			    sizeof(errmsg))
+	    != NB_OK) {
 		flog_warn(EC_LIB_NB_CB_RPC, "%s: rpc callback failed: %s",
 			  __func__, xpath);
 		ret = SR_ERR_OPERATION_FAILED;
@@ -563,6 +549,10 @@ static void frr_sr_subscribe_config(struct yang_module *module)
 {
 	int ret;
 
+	DEBUGD(&nb_dbg_client_sysrepo,
+	       "sysrepo: subscribing for configuration changes made in the '%s' module",
+	       module->name);
+
 	ret = sr_module_change_subscribe(
 		session, module->name, NULL, frr_sr_config_change_cb, NULL, 0,
 		SR_SUBSCR_DEFAULT | SR_SUBSCR_ENABLED | SR_SUBSCR_NO_THREAD,
@@ -585,8 +575,10 @@ static int frr_sr_subscribe_state(const struct lys_node *snode, void *arg)
 		return YANG_ITER_CONTINUE;
 
 	nb_node = snode->priv;
+	if (!nb_node)
+		return YANG_ITER_CONTINUE;
 
-	DEBUGD(&nb_dbg_client_sysrepo, "%s: providing data to '%s'", __func__,
+	DEBUGD(&nb_dbg_client_sysrepo, "sysrepo: providing data to '%s'",
 	       nb_node->xpath);
 
 	ret = sr_oper_get_items_subscribe(
@@ -609,8 +601,10 @@ static int frr_sr_subscribe_rpc(const struct lys_node *snode, void *arg)
 		return YANG_ITER_CONTINUE;
 
 	nb_node = snode->priv;
+	if (!nb_node)
+		return YANG_ITER_CONTINUE;
 
-	DEBUGD(&nb_dbg_client_sysrepo, "%s: providing RPC to '%s'", __func__,
+	DEBUGD(&nb_dbg_client_sysrepo, "sysrepo: providing RPC to '%s'",
 	       nb_node->xpath);
 
 	ret = sr_rpc_subscribe(session, nb_node->xpath, frr_sr_config_rpc_cb,
@@ -696,10 +690,10 @@ static int frr_sr_init(void)
 		int event_pipe;
 
 		frr_sr_subscribe_config(module);
-		yang_snodes_iterate_module(module->info, frr_sr_subscribe_state,
-					   0, module);
-		yang_snodes_iterate_module(module->info, frr_sr_subscribe_rpc,
-					   0, module);
+		yang_snodes_iterate(module->info, frr_sr_subscribe_state, 0,
+				    module);
+		yang_snodes_iterate(module->info, frr_sr_subscribe_rpc, 0,
+				    module);
 
 		/* Watch subscriptions. */
 		ret = sr_get_event_pipe(module->sr_subscription, &event_pipe);
@@ -742,7 +736,7 @@ static int frr_sr_finish(void)
 	return 0;
 }
 
-static int frr_sr_module_late_init(struct thread_master *tm)
+static int frr_sr_module_very_late_init(struct thread_master *tm)
 {
 	master = tm;
 
@@ -753,6 +747,12 @@ static int frr_sr_module_late_init(struct thread_master *tm)
 	}
 
 	hook_register(frr_fini, frr_sr_finish);
+
+	return 0;
+}
+
+static int frr_sr_module_late_init(struct thread_master *tm)
+{
 	frr_sr_cli_init();
 
 	return 0;
@@ -761,6 +761,7 @@ static int frr_sr_module_late_init(struct thread_master *tm)
 static int frr_sr_module_init(void)
 {
 	hook_register(frr_late_init, frr_sr_module_late_init);
+	hook_register(frr_very_late_init, frr_sr_module_very_late_init);
 
 	return 0;
 }

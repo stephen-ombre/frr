@@ -172,8 +172,8 @@ static void rip_request_interface_send(struct interface *ifp, uint8_t version)
 				continue;
 
 			if (IS_RIP_DEBUG_EVENT)
-				zlog_debug("SEND request to %s",
-					   inet_ntoa(to.sin_addr));
+				zlog_debug("SEND request to %pI4",
+					   &to.sin_addr);
 
 			rip_request_send(&to, ifp, version, connected);
 		}
@@ -427,10 +427,11 @@ static int rip_ifp_destroy(struct interface *ifp)
 		rip_if_down(ifp);
 	}
 
-	zlog_info(
-		"interface delete %s vrf %s(%u) index %d flags %#llx metric %d mtu %d",
-		ifp->name, VRF_LOGNAME(vrf), ifp->vrf_id, ifp->ifindex,
-		(unsigned long long)ifp->flags, ifp->metric, ifp->mtu);
+	if (IS_RIP_DEBUG_ZEBRA)
+		zlog_debug(
+			"interface delete %s vrf %s(%u) index %d flags %#llx metric %d mtu %d",
+			ifp->name, VRF_LOGNAME(vrf), ifp->vrf_id, ifp->ifindex,
+			(unsigned long long)ifp->flags, ifp->metric, ifp->mtu);
 
 	return 0;
 }
@@ -467,10 +468,7 @@ static void rip_interface_clean(struct rip_interface *ri)
 	ri->enable_interface = 0;
 	ri->running = 0;
 
-	if (ri->t_wakeup) {
-		thread_cancel(ri->t_wakeup);
-		ri->t_wakeup = NULL;
-	}
+	thread_cancel(&ri->t_wakeup);
 }
 
 void rip_interfaces_clean(struct rip *rip)
@@ -602,8 +600,7 @@ int rip_interface_address_add(ZAPI_CALLBACK_ARGS)
 
 	if (p->family == AF_INET) {
 		if (IS_RIP_DEBUG_ZEBRA)
-			zlog_debug("connected address %s/%d is added",
-				   inet_ntoa(p->u.prefix4), p->prefixlen);
+			zlog_debug("connected address %pFX is added", p);
 
 		rip_enable_apply(ifc->ifp);
 		/* Check if this prefix needs to be redistributed */
@@ -652,9 +649,8 @@ int rip_interface_address_delete(ZAPI_CALLBACK_ARGS)
 		p = ifc->address;
 		if (p->family == AF_INET) {
 			if (IS_RIP_DEBUG_ZEBRA)
-				zlog_debug("connected address %s/%d is deleted",
-					   inet_ntoa(p->u.prefix4),
-					   p->prefixlen);
+				zlog_debug("connected address %pFX is deleted",
+					   p);
 
 			hook_call(rip_ifaddr_del, ifc);
 
@@ -1175,9 +1171,7 @@ int rip_show_network_config(struct vty *vty, struct rip *rip)
 	for (node = route_top(rip->enable_network); node;
 	     node = route_next(node))
 		if (node->info)
-			vty_out(vty, "    %s/%u\n",
-				inet_ntoa(node->p.u.prefix4),
-				node->p.prefixlen);
+			vty_out(vty, "    %pFX\n", &node->p);
 
 	/* Interface name RIP enable statement. */
 	for (i = 0; i < vector_active(rip->enable_interface); i++)
@@ -1187,7 +1181,7 @@ int rip_show_network_config(struct vty *vty, struct rip *rip)
 	/* RIP neighbors listing. */
 	for (node = route_top(rip->neighbor); node; node = route_next(node))
 		if (node->info)
-			vty_out(vty, "    %s\n", inet_ntoa(node->p.u.prefix4));
+			vty_out(vty, "    %pI4\n", &node->p.u.prefix4);
 
 	return 0;
 }

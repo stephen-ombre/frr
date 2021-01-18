@@ -29,6 +29,8 @@
 #include "jhash.h"
 #include "stream.h"
 
+#include "lib/printfrr.h"
+
 #include "bgpd/bgpd.h"
 #include "bgpd/bgp_ecommunity.h"
 #include "bgpd/bgp_lcommunity.h"
@@ -265,7 +267,8 @@ struct ecommunity *ecommunity_dup(struct ecommunity *ecom)
 	if (new->size) {
 		new->val = XMALLOC(MTYPE_ECOMMUNITY_VAL,
 				   ecom->size * ecom->unit_size);
-		memcpy(new->val, ecom->val, ecom->size * ecom->unit_size);
+		memcpy(new->val, ecom->val,
+		       (size_t)ecom->size * (size_t)ecom->unit_size);
 	} else
 		new->val = NULL;
 	return new;
@@ -285,18 +288,16 @@ struct ecommunity *ecommunity_merge(struct ecommunity *ecom1,
 				    struct ecommunity *ecom2)
 {
 	if (ecom1->val)
-		ecom1->val =
-			XREALLOC(MTYPE_ECOMMUNITY_VAL, ecom1->val,
-				 (ecom1->size + ecom2->size) *
-				 ecom1->unit_size);
+		ecom1->val = XREALLOC(MTYPE_ECOMMUNITY_VAL, ecom1->val,
+				      (size_t)(ecom1->size + ecom2->size)
+					      * (size_t)ecom1->unit_size);
 	else
-		ecom1->val =
-			XMALLOC(MTYPE_ECOMMUNITY_VAL,
-				(ecom1->size + ecom2->size) *
-				ecom1->unit_size);
+		ecom1->val = XMALLOC(MTYPE_ECOMMUNITY_VAL,
+				     (size_t)(ecom1->size + ecom2->size)
+					     * (size_t)ecom1->unit_size);
 
 	memcpy(ecom1->val + (ecom1->size * ecom1->unit_size), ecom2->val,
-	       ecom2->size * ecom1->unit_size);
+	       (size_t)ecom2->size * (size_t)ecom1->unit_size);
 	ecom1->size += ecom2->size;
 
 	return ecom1;
@@ -325,6 +326,9 @@ struct ecommunity *ecommunity_intern(struct ecommunity *ecom)
 void ecommunity_unintern(struct ecommunity **ecom)
 {
 	struct ecommunity *ret;
+
+	if (!*ecom)
+		return;
 
 	if ((*ecom)->refcnt)
 		(*ecom)->refcnt--;
@@ -820,8 +824,8 @@ static int ecommunity_rt_soo_str_internal(char *buf, size_t bufsz,
 		eip.val = (*pnt++ << 8);
 		eip.val |= (*pnt++);
 
-		len = snprintf(buf, bufsz, "%s%s:%u", prefix, inet_ntoa(eip.ip),
-			       eip.val);
+		len = snprintfrr(buf, bufsz, "%s%pI4:%u", prefix, &eip.ip,
+				 eip.val);
 	}
 
 	/* consume value */
@@ -899,7 +903,7 @@ char *ecommunity_ecom2str(struct ecommunity *ecom, int format, int filter)
 	int str_size;
 	char *str_buf;
 
-	if (ecom->size == 0)
+	if (!ecom || ecom->size == 0)
 		return XCALLOC(MTYPE_ECOMMUNITY_STR, 1);
 
 	/* ecom strlen + space + null term */
@@ -1037,6 +1041,27 @@ char *ecommunity_ecom2str(struct ecommunity *ecom, int format, int filter)
 					(flags &
 					 ECOMMUNITY_EVPN_SUBTYPE_ESI_SA_FLAG) ?
 					"SA":"AA");
+			} else if (*pnt
+				   == ECOMMUNITY_EVPN_SUBTYPE_DF_ELECTION) {
+				uint8_t alg;
+				uint16_t pref;
+				uint16_t bmap;
+
+				alg = *(pnt + 1);
+				memcpy(&bmap, pnt + 2, 2);
+				bmap = ntohs(bmap);
+				memcpy(&pref, pnt + 5, 2);
+				pref = ntohs(pref);
+
+				if (bmap)
+					snprintf(
+						encbuf, sizeof(encbuf),
+						"DF: (alg: %u, bmap: 0x%x pref: %u)",
+						alg, bmap, pref);
+				else
+					snprintf(encbuf, sizeof(encbuf),
+						 "DF: (alg: %u, pref: %u)", alg,
+						 pref);
 			} else
 				unk_ecom = 1;
 		} else if (type == ECOMMUNITY_ENCODE_REDIRECT_IP_NH) {

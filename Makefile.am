@@ -112,6 +112,7 @@ dist_examples_DATA =
 dist_yangmodels_DATA =
 man_MANS =
 vtysh_scan =
+vtysh_daemons =
 clippy_scan =
 
 ## libtool, the self-made GNU scourge
@@ -135,7 +136,6 @@ include qpb/subdir.am
 include fpm/subdir.am
 include grpc/subdir.am
 include tools/subdir.am
-include solaris/subdir.am
 
 include bgpd/subdir.am
 include bgpd/rfp-example/librfp/subdir.am
@@ -158,6 +158,7 @@ include bfdd/subdir.am
 include yang/subdir.am
 include yang/libyang_plugins/subdir.am
 include vrrpd/subdir.am
+include pathd/subdir.am
 
 include vtysh/subdir.am
 include tests/subdir.am

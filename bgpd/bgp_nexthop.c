@@ -45,7 +45,7 @@
 #include "bgpd/bgp_vty.h"
 #include "bgpd/bgp_rd.h"
 
-DEFINE_MTYPE_STATIC(BGPD, MARTIAN_STRING, "BGP Martian Address Intf String");
+DEFINE_MTYPE_STATIC(BGPD, MARTIAN_STRING, "BGP Martian Addr Intf String");
 
 int bgp_nexthop_cache_compare(const struct bgp_nexthop_cache *a,
 			      const struct bgp_nexthop_cache *b)
@@ -563,7 +563,7 @@ bool bgp_nexthop_self(struct bgp *bgp, afi_t afi, uint8_t type,
 	if (addr)
 		return true;
 
-	if (new_afi == AF_INET) {
+	if (new_afi == AF_INET && hashcount(bgp->tip_hash)) {
 		memset(&tmp_tip, 0, sizeof(struct tip_addr));
 		tmp_tip.addr = attr->nexthop;
 
@@ -757,10 +757,10 @@ static void bgp_show_nexthop_paths(struct vty *vty, struct bgp *bgp,
 		if (dest->pdest) {
 			prefix_rd2str((struct prefix_rd *)bgp_dest_get_prefix(dest->pdest),
 					buf1, sizeof(buf1));
-			vty_out(vty, "    %d/%d %pRN RD %s %s flags 0x%x\n",
+			vty_out(vty, "    %d/%d %pBD RD %s %s flags 0x%x\n",
 				afi, safi, dest, buf1, bgp_path->name_pretty, path->flags);
 		} else
-			vty_out(vty, "    %d/%d %pRN %s flags 0x%x\n",
+			vty_out(vty, "    %d/%d %pBD %s flags 0x%x\n",
 				afi, safi, dest, bgp_path->name_pretty, path->flags);
 	}
 }

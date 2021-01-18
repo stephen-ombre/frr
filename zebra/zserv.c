@@ -590,6 +590,7 @@ static void zserv_client_free(struct zserv *client)
 	/* Close file descriptor. */
 	if (client->sock) {
 		unsigned long nroutes;
+		unsigned long nnhgs;
 
 		close(client->sock);
 
@@ -599,6 +600,13 @@ static void zserv_client_free(struct zserv *client)
 			zlog_notice(
 				"client %d disconnected %lu %s routes removed from the rib",
 				client->sock, nroutes,
+				zebra_route_string(client->proto));
+
+			/* Not worrying about instance for now */
+			nnhgs = zebra_nhg_score_proto(client->proto);
+			zlog_notice(
+				"client %d disconnected %lu %s nhgs removed from the rib",
+				client->sock, nnhgs,
 				zebra_route_string(client->proto));
 		}
 		client->sock = -1;
@@ -1025,6 +1033,9 @@ static void zebra_show_client_detail(struct vty *vty, struct zserv *client)
 	} else
 		vty_out(vty, "Not registered for Nexthop Updates\n");
 
+	vty_out(vty, "Client will %sbe notified about it's routes status\n",
+		client->notify_owner ? "" : "Not ");
+
 	last_read_time = (time_t)atomic_load_explicit(&client->last_read_time,
 						      memory_order_relaxed);
 	last_write_time = (time_t)atomic_load_explicit(&client->last_write_time,
@@ -1164,11 +1175,9 @@ static void zebra_show_stale_client_detail(struct vty *vty,
 				}
 			}
 			vty_out(vty, "Current AFI : %d\n", info->current_afi);
-			if (info->current_prefix) {
-				prefix2str(info->current_prefix, buf,
-					   sizeof(buf));
-				vty_out(vty, "Current prefix : %s\n", buf);
-			}
+			if (info->current_prefix)
+				vty_out(vty, "Current prefix : %pFX\n",
+					info->current_prefix);
 		}
 	}
 	vty_out(vty, "\n");
@@ -1294,6 +1303,21 @@ DEFUN (show_zebra_client_summary,
 	return CMD_SUCCESS;
 }
 
+static int zserv_client_close_cb(struct zserv *closed_client)
+{
+	struct listnode *node, *nnode;
+	struct zserv *client = NULL;
+
+	for (ALL_LIST_ELEMENTS(zrouter.client_list, node, nnode, client)) {
+		if (client->proto == closed_client->proto)
+			continue;
+
+		zsend_client_close_notify(client, closed_client);
+	}
+
+	return 0;
+}
+
 void zserv_init(void)
 {
 	/* Client list init. */
@@ -1306,4 +1330,6 @@ void zserv_init(void)
 
 	install_element(ENABLE_NODE, &show_zebra_client_cmd);
 	install_element(ENABLE_NODE, &show_zebra_client_summary_cmd);
+
+	hook_register(zserv_client_close, zserv_client_close_cb);
 }

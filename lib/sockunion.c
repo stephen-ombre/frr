@@ -587,15 +587,11 @@ static void __attribute__((unused)) sockunion_print(const union sockunion *su)
 
 	switch (su->sa.sa_family) {
 	case AF_INET:
-		printf("%s\n", inet_ntoa(su->sin.sin_addr));
+		printf("%pI4\n", &su->sin.sin_addr);
 		break;
-	case AF_INET6: {
-		char buf[SU_ADDRSTRLEN];
-
-		printf("%s\n", inet_ntop(AF_INET6, &(su->sin6.sin6_addr), buf,
-					 sizeof(buf)));
-	} break;
-
+	case AF_INET6:
+		printf("%pI6\n", &su->sin6.sin6_addr);
+		break;
 #ifdef AF_LINK
 	case AF_LINK: {
 		struct sockaddr_dl *sdl;
@@ -711,4 +707,21 @@ static ssize_t printfrr_psu(char *buf, size_t bsz, const char *fmt,
 
 	fb.pos[0] = '\0';
 	return consumed;
+}
+
+int sockunion_is_null(const union sockunion *su)
+{
+	unsigned char null_s6_addr[16] = {0};
+
+	switch (sockunion_family(su)) {
+	case AF_UNSPEC:
+		return 1;
+	case AF_INET:
+		return (su->sin.sin_addr.s_addr == 0);
+	case AF_INET6:
+		return !memcmp(su->sin6.sin6_addr.s6_addr, null_s6_addr,
+			       sizeof(null_s6_addr));
+	default:
+		return 0;
+	}
 }

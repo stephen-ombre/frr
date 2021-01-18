@@ -216,6 +216,9 @@ void bfd_session_apply(struct bfd_session *bs)
 	    && (bs->timers.desired_min_tx != min_tx
 		|| bs->timers.required_min_rx != min_rx))
 		bfd_set_polling(bs);
+
+	/* Send updated information to data plane. */
+	bfd_dplane_update_session(bs);
 }
 
 void bfd_profile_remove(struct bfd_session *bs)
@@ -293,6 +296,10 @@ int bfd_session_enable(struct bfd_session *bs)
 	struct vrf *vrf = NULL;
 	int psock;
 
+	/* We are using data plane, we don't need software. */
+	if (bs->bdc)
+		return 0;
+
 	/*
 	 * If the interface or VRF doesn't exist, then we must register
 	 * the session but delay its start.
@@ -332,9 +339,14 @@ int bfd_session_enable(struct bfd_session *bs)
 		bs->vrf = vrf_lookup_by_id(VRF_DEFAULT);
 	assert(bs->vrf);
 
-	if (bs->key.ifname[0]
-	    && CHECK_FLAG(bs->flags, BFD_SESS_FLAG_MH) == 0)
-		bs->ifp = ifp;
+	/* Assign interface pointer (if any). */
+	bs->ifp = ifp;
+
+	/* Attempt to use data plane. */
+	if (bglobal.bg_use_dplane && bfd_dplane_add_session(bs) == 0) {
+		control_notify_config(BCM_NOTIFY_CONFIG_ADD, bs);
+		return 0;
+	}
 
 	/* Sanity check: don't leak open sockets. */
 	if (bs->sock != -1) {
@@ -383,6 +395,10 @@ int bfd_session_enable(struct bfd_session *bs)
  */
 void bfd_session_disable(struct bfd_session *bs)
 {
+	/* We are using data plane, we don't need software. */
+	if (bs->bdc)
+		return;
+
 	/* Free up socket resources. */
 	if (bs->sock != -1) {
 		close(bs->sock);
@@ -393,8 +409,6 @@ void bfd_session_disable(struct bfd_session *bs)
 	bfd_recvtimer_delete(bs);
 	bfd_xmttimer_delete(bs);
 	ptm_bfd_echo_stop(bs);
-	bs->vrf = NULL;
-	bs->ifp = NULL;
 
 	/* Set session down so it doesn't report UP and disabled. */
 	ptm_bfd_sess_dn(bs, BD_PATH_DOWN);
@@ -803,6 +817,9 @@ void bfd_session_free(struct bfd_session *bs)
 	struct bfd_session_observer *bso;
 
 	bfd_session_disable(bs);
+
+	/* Remove session from data plane if any. */
+	bfd_dplane_delete_session(bs);
 
 	bfd_key_delete(bs->key);
 	bfd_id_delete(bs->discrs.my_discr);
@@ -1267,14 +1284,18 @@ void bfd_set_echo(struct bfd_session *bs, bool echo)
 		SET_FLAG(bs->flags, BFD_SESS_FLAG_ECHO);
 
 		/* Activate/update echo receive timeout timer. */
-		bs_echo_timer_handler(bs);
+		if (bs->bdc == NULL)
+			bs_echo_timer_handler(bs);
 	} else {
 		/* Check if echo mode is already disabled. */
 		if (!CHECK_FLAG(bs->flags, BFD_SESS_FLAG_ECHO))
 			return;
 
 		UNSET_FLAG(bs->flags, BFD_SESS_FLAG_ECHO);
-		ptm_bfd_echo_stop(bs);
+
+		/* Deactivate timeout timer. */
+		if (bs->bdc == NULL)
+			ptm_bfd_echo_stop(bs);
 	}
 }
 
@@ -1299,6 +1320,14 @@ void bfd_set_shutdown(struct bfd_session *bs, bool shutdown)
 
 		SET_FLAG(bs->flags, BFD_SESS_FLAG_SHUTDOWN);
 
+		/* Handle data plane shutdown case. */
+		if (bs->bdc) {
+			bs->ses_state = PTM_BFD_ADM_DOWN;
+			bfd_dplane_update_session(bs);
+			control_notify(bs, bs->ses_state);
+			return;
+		}
+
 		/* Disable all events. */
 		bfd_recvtimer_delete(bs);
 		bfd_echo_recvtimer_delete(bs);
@@ -1318,6 +1347,14 @@ void bfd_set_shutdown(struct bfd_session *bs, bool shutdown)
 			return;
 
 		UNSET_FLAG(bs->flags, BFD_SESS_FLAG_SHUTDOWN);
+
+		/* Handle data plane shutdown case. */
+		if (bs->bdc) {
+			bs->ses_state = PTM_BFD_DOWN;
+			bfd_dplane_update_session(bs);
+			control_notify(bs, bs->ses_state);
+			return;
+		}
 
 		/* Change and notify state change. */
 		bs->ses_state = PTM_BFD_DOWN;
@@ -1694,7 +1731,7 @@ struct bfd_session *bfd_key_lookup(struct bfd_key key)
 	inet_ntop(bs.key.family, &bs.key.peer, peer_buf,
 		  sizeof(peer_buf));
 	/* Handle cases where local-address is optional. */
-	if (bs.key.family == AF_INET) {
+	if (memcmp(&bs.key.local, &zero_addr, sizeof(bs.key.local))) {
 		memset(&bs.key.local, 0, sizeof(bs.key.local));
 		bsp = hash_lookup(bfd_key_hash, &bs);
 		if (bsp) {
@@ -1743,20 +1780,24 @@ struct bfd_session *bfd_key_lookup(struct bfd_key key)
 
 	/* Handle case where a context more complex ctx is present.
 	 * input has no iface nor local-address, but a context may
-	 * exist
+	 * exist.
+	 *
+	 * Only applies to IPv4, because IPv6 requires either
+	 * local-address or interface.
 	 */
-	ctx.result = NULL;
-	ctx.given = &bs;
-	hash_walk(bfd_key_hash,
-		  &bfd_key_lookup_ignore_partial_walker,
-		  &ctx);
-	/* change key */
-	if (ctx.result) {
-		bsp = ctx.result;
-		if (bglobal.debug_peer_event)
-			zlog_debug(
-				" peer %s found, but ifp and/or loc-addr params ignored",
-				peer_buf);
+	if (!bs.key.mhop && bs.key.family == AF_INET) {
+		ctx.result = NULL;
+		ctx.given = &bs;
+		hash_walk(bfd_key_hash, &bfd_key_lookup_ignore_partial_walker,
+			  &ctx);
+		/* change key */
+		if (ctx.result) {
+			bsp = ctx.result;
+			if (bglobal.debug_peer_event)
+				zlog_debug(
+					" peer %s found, but ifp and/or loc-addr params ignored",
+					peer_buf);
+		}
 	}
 	return bsp;
 }
@@ -2024,6 +2065,16 @@ static int bfd_vrf_enable(struct vrf *vrf)
 		bvrf = XCALLOC(MTYPE_BFDD_VRF, sizeof(struct bfd_vrf_global));
 		bvrf->vrf = vrf;
 		vrf->info = (void *)bvrf;
+
+		/* Disable sockets if using data plane. */
+		if (bglobal.bg_use_dplane) {
+			bvrf->bg_shop = -1;
+			bvrf->bg_mhop = -1;
+			bvrf->bg_shop6 = -1;
+			bvrf->bg_mhop6 = -1;
+			bvrf->bg_echo = -1;
+			bvrf->bg_echov6 = -1;
+		}
 	} else
 		bvrf = vrf->info;
 
@@ -2045,25 +2096,24 @@ static int bfd_vrf_enable(struct vrf *vrf)
 		if (!bvrf->bg_echov6)
 			bvrf->bg_echov6 = bp_echov6_socket(vrf);
 
-		/* Add descriptors to the event loop. */
-		if (!bvrf->bg_ev[0])
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_shop,
-					&bvrf->bg_ev[0]);
-		if (!bvrf->bg_ev[1])
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_mhop,
-					&bvrf->bg_ev[1]);
+		if (!bvrf->bg_ev[0] && bvrf->bg_shop != -1)
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_shop, &bvrf->bg_ev[0]);
+		if (!bvrf->bg_ev[1] && bvrf->bg_mhop != -1)
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_mhop, &bvrf->bg_ev[1]);
 		if (!bvrf->bg_ev[2] && bvrf->bg_shop6 != -1)
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_shop6,
-					&bvrf->bg_ev[2]);
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_shop6, &bvrf->bg_ev[2]);
 		if (!bvrf->bg_ev[3] && bvrf->bg_mhop6 != -1)
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_mhop6,
-					&bvrf->bg_ev[3]);
-		if (!bvrf->bg_ev[4])
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_echo,
-					&bvrf->bg_ev[4]);
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_mhop6, &bvrf->bg_ev[3]);
+		if (!bvrf->bg_ev[4] && bvrf->bg_echo != -1)
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_echo, &bvrf->bg_ev[4]);
 		if (!bvrf->bg_ev[5] && bvrf->bg_echov6 != -1)
-			thread_add_read(master, bfd_recv_cb, bvrf, bvrf->bg_echov6,
-					&bvrf->bg_ev[5]);
+			thread_add_read(master, bfd_recv_cb, bvrf,
+					bvrf->bg_echov6, &bvrf->bg_ev[5]);
 	}
 	if (vrf->vrf_id != VRF_DEFAULT) {
 		bfdd_zclient_register(vrf->vrf_id);
@@ -2158,6 +2208,7 @@ void bfd_session_update_vrf_name(struct bfd_session *bs, struct vrf *vrf)
 	if (yang_module_find("frr-bfdd") && bs->key.vrfname[0]) {
 		struct lyd_node *bfd_dnode;
 		char xpath[XPATH_MAXLEN], xpath_srcaddr[XPATH_MAXLEN + 32];
+		char oldpath[XPATH_MAXLEN], newpath[XPATH_MAXLEN];
 		char addr_buf[INET6_ADDRSTRLEN];
 		int slen;
 
@@ -2178,14 +2229,19 @@ void bfd_session_update_vrf_name(struct bfd_session *bs, struct vrf *vrf)
 					 "[interface='%s']", bs->key.ifname);
 		else
 			slen += snprintf(xpath + slen, sizeof(xpath) - slen,
-					 "[interface='']");
+					 "[interface='*']");
 		snprintf(xpath + slen, sizeof(xpath) - slen, "[vrf='%s']/vrf",
 			 bs->key.vrfname);
 
 		bfd_dnode = yang_dnode_get(running_config->dnode, xpath,
 					   bs->key.vrfname);
 		if (bfd_dnode) {
+			yang_dnode_get_path(bfd_dnode->parent, oldpath,
+					    sizeof(oldpath));
 			yang_dnode_change_leaf(bfd_dnode, vrf->name);
+			yang_dnode_get_path(bfd_dnode->parent, newpath,
+					    sizeof(newpath));
+			nb_running_move_tree(oldpath, newpath);
 			running_config->version++;
 		}
 	}

@@ -15,7 +15,7 @@ network for optimizing forwarding of overlay BUM traffic.
 
    On Linux for PIM-SM operation you *must* have kernel version 4.18 or greater.
    To use PIM for EVPN BUM forwarding, kernels 5.0 or greater are required.
-   OpenBSD has no multicast support and FreeBSD, NetBSD and Solaris only
+   OpenBSD has no multicast support and FreeBSD, and NetBSD only
    have support for SSM.
 
 .. _starting-and-stopping-pimd:
@@ -166,18 +166,18 @@ Certain signals have special meanings to *pimd*.
    urib-only
       Lookup in the Unicast Rib only.
 
-.. index:: [no] ip msdp mesh-group [WORD]
+.. index:: ip msdp mesh-group [WORD]
 .. clicmd:: [no] ip msdp mesh-group [WORD]
 
    Create or Delete a multicast source discovery protocol mesh-group using
    [WORD] as the group name.
 
-.. index:: [no] ip msdp mesh-group WORD member A.B.C.D
+.. index:: ip msdp mesh-group WORD member A.B.C.D
 .. clicmd:: [no] ip msdp mesh-group WORD member A.B.C.D
 
    Attach or Delete A.B.C.D to the MSDP mesh group WORD specified.
 
-.. index:: [no] ip msdp mesh-group WORD source A.B.C.D
+.. index:: ip msdp mesh-group WORD source A.B.C.D
 .. clicmd:: [no] ip msdp mesh-group WORD source A.B.C.D
 
    For the address specified A.B.C.D use that as the source address for
@@ -190,7 +190,7 @@ Certain signals have special meanings to *pimd*.
    the existing IGMP general query timer.If no version is provided in the cli,
    it will be considered as default v2 query.This is a hidden command.
 
-.. index:: [no] ip igmp watermark-warn (10-60000)
+.. index:: ip igmp watermark-warn (10-60000)
 .. clicmd:: [no] ip igmp watermark-warn (10-60000)
 
    Configure watermark warning generation for an igmp group limit. Generates
@@ -252,7 +252,7 @@ is in a vrf, enter the interface command with the vrf keyword at the end.
    reports on the interface. Refer to the next `ip igmp` command for IGMP
    management.
 
-.. index:: [no] ip pim use-source A.B.C.D
+.. index:: ip pim use-source A.B.C.D
 .. clicmd:: [no] ip pim use-source A.B.C.D
 
    If you have multiple addresses configured on a particular interface
@@ -336,6 +336,42 @@ caution. Most of the time this will not be necessary.
 
    Insert into the Multicast Rib Route A.B.C.D/M using the specified INTERFACE.
    The distance can be specified as well if desired.
+
+.. _msdp-configuration:
+
+Multicast Source Discovery Protocol (MSDP) Configuration
+========================================================
+
+.. index:: ip msdp mesh-group [WORD] member A.B.C.D
+.. clicmd:: ip msdp mesh-group [WORD] member A.B.C.D
+
+   Include a MSDP peer as a member of a MSDP mesh-group.
+
+.. index:: ip msdp mesh-group [WORD] source A.B.C.D
+.. clicmd:: ip msdp mesh-group [WORD] source A.B.C.D
+
+   Create a MSDP mesh-group, defining a name for it and an associated local source
+   address.
+
+.. index:: ip msdp peer A.B.C.D source A.B.C.D
+.. clicmd:: ip msdp peer A.B.C.D source A.B.C.D
+
+   Establish a MSDP connection with a peer.
+
+.. index:: ip msdp mesh-group [WORD] member A.B.C.D
+.. clicmd:: no ip msdp mesh-group [WORD] member A.B.C.D
+
+   Remove a MSDP peer member from a MSDP mesh-group.
+
+.. index:: ip msdp mesh-group [WORD] source A.B.C.D
+.. clicmd:: no ip msdp mesh-group [WORD] source A.B.C.D
+
+   Delete a MSDP mesh-group.
+
+.. index:: ip msdp peer A.B.C.D
+.. clicmd:: no ip msdp peer A.B.C.D
+
+   Delete a MSDP peer connection.
 
 .. _show-pim-information:
 
@@ -421,6 +457,19 @@ cause great confusion.
 
    Display total number of S,G mroutes and number of S,G mroutes
    installed into the kernel for all vrfs.
+
+.. index:: show ip msdp mesh-group
+.. clicmd:: show ip msdp mesh-group
+
+   Display the configured mesh-groups, the local address associated with each
+   mesh-group, the peer members included in each mesh-group, and their status.
+
+.. index:: show ip msdp peer
+.. clicmd:: show ip msdp peer
+
+   Display information about the MSDP peers. That includes the peer address,
+   the local address used to establish the connection to the peer, the
+   connection status, and the number of active sources.
 
 .. index:: show ip pim assert
 .. clicmd:: show ip pim assert
@@ -676,6 +725,13 @@ Clear commands reset various variables.
 .. clicmd:: clear ip pim oil
 
    Rescan PIM OIL (output interface list).
+
+.. index:: clear ip pim [vrf NAME] bsr-data
+.. clicmd:: clear ip pim [vrf NAME] bsr-data
+
+   This command will clear the BSM scope data struct. This command also
+   removes the next hop tracking for the bsr and resets the upstreams
+   for the dynamically learnt RPs.
 
 PIM EVPN configuration
 ======================

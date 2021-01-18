@@ -92,6 +92,7 @@ static const char *const frr_native_modules[] = {
 	"frr-isisd",
 	"frr-vrrpd",
 	"frr-zebra",
+	"frr-pathd",
 };
 /* clang-format on */
 
@@ -147,10 +148,14 @@ struct yang_module *yang_module_find(const char *module_name)
 }
 
 int yang_snodes_iterate_subtree(const struct lys_node *snode,
+				const struct lys_module *module,
 				yang_iterate_cb cb, uint16_t flags, void *arg)
 {
 	struct lys_node *child;
 	int ret = YANG_ITER_CONTINUE;
+
+	if (module && snode->module != module)
+		goto next;
 
 	if (CHECK_FLAG(flags, YANG_ITER_FILTER_IMPLICIT)) {
 		switch (snode->nodetype) {
@@ -214,50 +219,35 @@ next:
 		return YANG_ITER_CONTINUE;
 
 	LY_TREE_FOR (snode->child, child) {
-		if (!CHECK_FLAG(flags, YANG_ITER_ALLOW_AUGMENTATIONS)
-		    && child->parent != snode)
+		ret = yang_snodes_iterate_subtree(child, module, cb, flags,
+						  arg);
+		if (ret == YANG_ITER_STOP)
+			return ret;
+	}
+
+	return ret;
+}
+
+int yang_snodes_iterate(const struct lys_module *module, yang_iterate_cb cb,
+			uint16_t flags, void *arg)
+{
+	const struct lys_module *module_iter;
+	uint32_t idx = 0;
+	int ret = YANG_ITER_CONTINUE;
+
+	idx = ly_ctx_internal_modules_count(ly_native_ctx);
+	while ((module_iter = ly_ctx_get_module_iter(ly_native_ctx, &idx))) {
+		struct lys_node *snode;
+
+		if (!module_iter->implemented)
 			continue;
 
-		ret = yang_snodes_iterate_subtree(child, cb, flags, arg);
-		if (ret == YANG_ITER_STOP)
-			return ret;
-	}
-
-	return ret;
-}
-
-int yang_snodes_iterate_module(const struct lys_module *module,
-			       yang_iterate_cb cb, uint16_t flags, void *arg)
-{
-	struct lys_node *snode;
-	int ret = YANG_ITER_CONTINUE;
-
-	LY_TREE_FOR (module->data, snode) {
-		ret = yang_snodes_iterate_subtree(snode, cb, flags, arg);
-		if (ret == YANG_ITER_STOP)
-			return ret;
-	}
-
-	for (uint8_t i = 0; i < module->augment_size; i++) {
-		ret = yang_snodes_iterate_subtree(
-			(const struct lys_node *)&module->augment[i], cb, flags,
-			arg);
-		if (ret == YANG_ITER_STOP)
-			return ret;
-	}
-
-	return ret;
-}
-
-int yang_snodes_iterate_all(yang_iterate_cb cb, uint16_t flags, void *arg)
-{
-	struct yang_module *module;
-	int ret = YANG_ITER_CONTINUE;
-
-	RB_FOREACH (module, yang_modules, &yang_modules) {
-		ret = yang_snodes_iterate_module(module->info, cb, flags, arg);
-		if (ret == YANG_ITER_STOP)
-			return ret;
+		LY_TREE_FOR (module_iter->data, snode) {
+			ret = yang_snodes_iterate_subtree(snode, module, cb,
+							  flags, arg);
+			if (ret == YANG_ITER_STOP)
+				return ret;
+		}
 	}
 
 	return ret;
@@ -479,7 +469,7 @@ void yang_dnode_iterate(yang_dnode_iter_cb cb, void *arg,
 		dnode = set->set.d[i];
 		ret = (*cb)(dnode, arg);
 		if (ret == YANG_ITER_STOP)
-			return;
+			break;
 	}
 
 	ly_set_free(set);
@@ -783,8 +773,7 @@ const struct lyd_node *yang_dnode_get_parent(const struct lyd_node *dnode,
 	return NULL;
 }
 
-/* API to check if the given node is last node in the list */
-static bool yang_is_last_list_dnode(const struct lyd_node *dnode)
+bool yang_is_last_list_dnode(const struct lyd_node *dnode)
 {
 	return (((dnode->next == NULL)
 	     || (dnode->next
@@ -796,8 +785,7 @@ static bool yang_is_last_list_dnode(const struct lyd_node *dnode)
 		    != 0)));
 }
 
-/* API to check if the given node is last node in the data tree level */
-static bool yang_is_last_level_dnode(const struct lyd_node *dnode)
+bool yang_is_last_level_dnode(const struct lyd_node *dnode)
 {
 	const struct lyd_node *parent;
 	const struct lys_node_list *snode;

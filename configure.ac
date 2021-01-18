@@ -25,6 +25,13 @@ dnl -----------------------------------
 AC_CANONICAL_BUILD()
 AC_CANONICAL_HOST()
 
+AC_ARG_VAR([AR],[archiver command])
+AC_ARG_VAR([LD],[linker command])
+AC_ARG_VAR([OBJCOPY],[objcopy command])
+AC_ARG_VAR([OBJDUMP],[objdump command])
+AC_ARG_VAR([RANLIB],[ranlib command])
+AC_ARG_VAR([STRIP],[strip command])
+
 hosttools_clippy="false"
 build_clippy="true"
 
@@ -138,6 +145,13 @@ AC_ARG_WITH([yangmodelsdir], [AS_HELP_STRING([--with-yangmodelsdir=DIR], [yang m
 	yangmodelsdir="\${datarootdir}/yang"
 ])
 AC_SUBST([yangmodelsdir])
+
+AC_ARG_WITH([vici-socket], [AS_HELP_STRING([--with-vici-socket=PATH], [vici-socket (/var/run/charon.vici)])], [
+	vici_socket="$withval"
+], [
+	vici_socket="/var/run/charon.vici"
+])
+AC_DEFINE_UNQUOTED([VICI_SOCKET], ["$vici_socket"], [StrongSWAN vici socket path])
 
 AC_ARG_ENABLE(tcmalloc,
 	AS_HELP_STRING([--enable-tcmalloc], [Turn on tcmalloc]),
@@ -444,6 +458,11 @@ fi
 AC_SUBST([AC_LDFLAGS])
 AM_CONDITIONAL([STATIC_BIN], [test "$enable_static_bin" = "yes"])
 
+AC_ARG_ENABLE([rpath],
+  [AS_HELP_STRING([--enable-rpath], [set hardcoded rpaths in the executable @<:@default=yes@:>@])],
+  [],
+  [enable_rpath=yes])
+
 dnl $AR and $RANLIB are set by LT_INIT above
 AC_MSG_CHECKING([whether $AR supports D option])
 if $AR crD conftest.a >/dev/null 2>/dev/null; then
@@ -541,8 +560,10 @@ AC_ARG_ENABLE([fabricd],
   AS_HELP_STRING([--disable-fabricd], [do not build fabricd]))
 AC_ARG_ENABLE([vrrpd],
   AS_HELP_STRING([--disable-vrrpd], [do not build vrrpd]))
+AC_ARG_ENABLE([pathd],
+  AS_HELP_STRING([--disable-pathd], [do not build pathd]))
 AC_ARG_ENABLE([bgp-announce],
-  AS_HELP_STRING([--disable-bgp-announce,], [turn off BGP route announcement]))
+  AS_HELP_STRING([--disable-bgp-announce], [turn off BGP route announcement]))
 AC_ARG_ENABLE([bgp-vnc],
   AS_HELP_STRING([--disable-bgp-vnc],[turn off BGP VNC support]))
 AC_ARG_ENABLE([bgp-bmp],
@@ -559,6 +580,10 @@ AC_ARG_ENABLE([grpc],
   AS_HELP_STRING([--enable-grpc], [enable the gRPC northbound plugin]))
 AC_ARG_ENABLE([zeromq],
   AS_HELP_STRING([--enable-zeromq], [enable ZeroMQ handler (libfrrzmq)]))
+AC_ARG_ENABLE([lttng],
+  AS_HELP_STRING([--enable-lttng], [enable LTTng tracing]))
+AC_ARG_ENABLE([usdt],
+  AS_HELP_STRING([--enable-usdt], [enable USDT probes]))
 AC_ARG_WITH([libpam],
   AS_HELP_STRING([--with-libpam], [use libpam for PAM support in vtysh]))
 AC_ARG_ENABLE([ospfapi],
@@ -593,7 +618,7 @@ AC_ARG_ENABLE([rusage],
 AC_ARG_ENABLE([gcc_ultra_verbose],
   AS_HELP_STRING([--enable-gcc-ultra-verbose], [enable ultra verbose GCC warnings]))
 AC_ARG_ENABLE([backtrace],
-  AS_HELP_STRING([--disable-backtrace,], [disable crash backtraces (default autodetect)]))
+  AS_HELP_STRING([--disable-backtrace], [disable crash backtraces (default autodetect)]))
 AC_ARG_ENABLE([time-check],
   AS_HELP_STRING([--disable-time-check], [disable slow thread warning messages]))
 AC_ARG_ENABLE([cpu-time],
@@ -602,6 +627,8 @@ AC_ARG_ENABLE([pcreposix],
   AS_HELP_STRING([--enable-pcreposix], [enable using PCRE Posix libs for regex functions]))
 AC_ARG_ENABLE([fpm],
   AS_HELP_STRING([--enable-fpm], [enable Forwarding Plane Manager support]))
+AC_ARG_ENABLE([pcep],
+  AS_HELP_STRING([--enable-pcep], [enable PCEP support for pathd]))
 AC_ARG_ENABLE([systemd],
   AS_HELP_STRING([--enable-systemd], [enable Systemd support]))
 AC_ARG_ENABLE([werror],
@@ -672,6 +699,15 @@ AC_ARG_ENABLE([dev_build],
 
 AC_ARG_ENABLE([lua],
     AS_HELP_STRING([--enable-lua], [Build Lua scripting]))
+
+AC_ARG_ENABLE([netlink-debug],
+  AS_HELP_STRING([--disable-netlink-debug], [pretty print netlink debug messages]))
+
+if test "$enable_netlink_debug" != "no" ; then
+  AC_DEFINE([NETLINK_DEBUG], [1], [Netlink extra debugging code])
+fi
+
+AM_CONDITIONAL([NETLINK_DEBUG], [test "$enable_netlink_debug" != "no"])
 
 if test "$enable_time_check" != "no" ; then
   if test "$enable_time_check" = "yes" -o "$enable_time_check" = "" ; then
@@ -1124,17 +1160,7 @@ is_linux=false
 AC_MSG_CHECKING([which operating system interface to use])
 case "$host_os" in
   sunos* | solaris2*)
-    AC_MSG_RESULT([Solaris])
-
-    AC_DEFINE([SUNOS_5], [1], [SunOS 5])
-    AC_DEFINE([SOLARIS_IPV6], [1], Solaris IPv6)
-    AC_DEFINE([_POSIX_C_SOURCE], [200809L], [enable POSIX.1-2008 and XPG7/SUSv4])
-
-    AC_CHECK_LIB([socket], [main])
-    AC_CHECK_LIB([nsl], [main])
-    AC_CHECK_LIB([umem], [main])
-    SOLARIS="solaris"
-    AC_MSG_WARN([--Solaris support is being considered for deprecation, please let us know if you are still using this--])
+    AC_MSG_FAILURE([Solaris support has been removed please see versions prior or equal to 7.5])
     ;;
   linux*)
     AC_MSG_RESULT([Linux])
@@ -1167,7 +1193,6 @@ case "$host_os" in
     AC_DEFINE([BSD_V6_SYSCTL], [1], [BSD v6 sysctl to turn on and off forwarding])
     ;;
 esac
-AM_CONDITIONAL([SOLARIS], [test "$SOLARIS" = "solaris"])
 AM_CONDITIONAL([LINUX], [${is_linux}])
 
 AC_SYS_LARGEFILE
@@ -1391,10 +1416,6 @@ case "$host_os" in
     AC_MSG_RESULT([pfpacket])
     ISIS_METHOD_MACRO="ISIS_METHOD_PFPACKET"
     ;;
-  solaris* | sunos*)
-    AC_MSG_RESULT([DLPI])
-    ISIS_METHOD_MACRO="ISIS_METHOD_DLPI"
-    ;;
   *)
     if test "$ac_cv_header_net_bpf_h" = "no"; then
       if test "$ac_cv_header_sys_dlpi_h" = "no"; then
@@ -1512,7 +1533,6 @@ if test "$ac_cv_have_decl_TCP_MD5SIG" = "no"; then
        AC_CHECK_DECLS([TCP_MD5SIG], [], [], MD5_INCLUDES)])
 fi
 
-AC_SUBST([SOLARIS])
 AC_CHECK_LIB([crypt], [crypt], [],
 		    [AC_CHECK_LIB([crypto], [DES_crypt])])
 AC_CHECK_LIB([resolv], [res_init])
@@ -1577,8 +1597,68 @@ dnl --------------------
 dnl Daemon disable check
 dnl --------------------
 
+AS_IF([test "$enable_bgpd" != "no"], [
+  AC_DEFINE([HAVE_BGPD], [1], [bgpd])
+])
+
+AS_IF([test "$enable_ripd" != "no"], [
+  AC_DEFINE([HAVE_RIPD], [1], [ripd])
+])
+
+AS_IF([test "$enable_ripngd" != "no"], [
+  AC_DEFINE([HAVE_RIPNGD], [1], [ripngd])
+])
+
+AS_IF([test "$enable_ospfd" != "no"], [
+  AC_DEFINE([HAVE_OSPFD], [1], [ospfd])
+])
+
+AS_IF([test "$enable_ospf6d" != "no"], [
+  AC_DEFINE([HAVE_OSPF6D], [1], [ospf6d])
+])
+
 AS_IF([test "$enable_ldpd" != "no"], [
   AC_DEFINE([HAVE_LDPD], [1], [ldpd])
+])
+
+AS_IF([test "$enable_nhrpd" != "no"], [
+  AC_DEFINE([HAVE_NHRPD], [1], [nhrpd])
+])
+
+AS_IF([test "$enable_eigrpd" != "no"], [
+  AC_DEFINE([HAVE_EIGRPD], [1], [eigrpd])
+])
+
+AS_IF([test "$enable_babeld" != "no"], [
+  AC_DEFINE([HAVE_BABELD], [1], [babeld])
+])
+
+AS_IF([test "$enable_isisd" != "no"], [
+  AC_DEFINE([HAVE_ISISD], [1], [isisd])
+])
+
+AS_IF([test "$enable_pimd" != "no"], [
+  AC_DEFINE([HAVE_PIMD], [1], [pimd])
+])
+
+AS_IF([test "$enable_pbrd" != "no"], [
+  AC_DEFINE([HAVE_PBRD], [1], [pbrd])
+])
+
+AS_IF([test "$enable_sharpd" = "yes"], [
+  AC_DEFINE([HAVE_SHARPD], [1], [sharpd])
+])
+
+AS_IF([test "$enable_staticd" != "no"], [
+  AC_DEFINE([HAVE_STATICD], [1], [staticd])
+])
+
+AS_IF([test "$enable_fabricd" != "no"], [
+  AC_DEFINE([HAVE_FABRICD], [1], [fabricd])
+])
+
+AS_IF([test "$enable_vrrpd" != "no"], [
+  AC_DEFINE([HAVE_VRRPD], [1], [vrrpd])
 ])
 
 if test "$enable_bfdd" = "no"; then
@@ -1598,6 +1678,14 @@ else
       ;;
   esac
 fi
+
+AS_IF([test "$enable_pathd" != "no"], [
+  AC_DEFINE([HAVE_PATHD], [1], [pathd])
+])
+
+AS_IF([test "$enable_pcep" != "no"], [
+  AC_DEFINE([HAVE_PATHD_PCEP], [1], [pathd-pcep])
+])
 
 if test "$ac_cv_lib_json_c_json_object_get" = "no" -a "$BFDD" = "bfdd"; then
   AC_MSG_ERROR(["you must use json-c library to use bfdd"])
@@ -1774,7 +1862,7 @@ dnl ---------------
 dnl sysrepo
 dnl ---------------
 if test "$enable_sysrepo" = "yes"; then
-  PKG_CHECK_MODULES([SYSREPO], [libsysrepo],
+  PKG_CHECK_MODULES([SYSREPO], [sysrepo],
       [AC_DEFINE([HAVE_SYSREPO], [1], [Enable sysrepo integration])
       SYSREPO=true],
       [SYSREPO=false
@@ -1797,6 +1885,30 @@ if test "$enable_grpc" = "yes"; then
   ], [
     GRPC=false
     AC_MSG_ERROR([grpc/grpc++ were not found on your system.])
+  ])
+fi
+
+dnl -----
+dnl LTTng
+dnl -----
+if test "$enable_lttng" = "yes"; then
+  PKG_CHECK_MODULES([UST], [lttng-ust >= 2.12.0], [
+    AC_DEFINE([HAVE_LTTNG], [1], [Enable LTTng support])
+    LTTNG=true
+  ], [
+    AC_MSG_ERROR([configuration specifies --enable-lttng but lttng-ust was not found])
+  ])
+fi
+
+dnl ----
+dnl USDT
+dnl ----
+if test "$enable_usdt" = "yes"; then
+  AC_CHECK_HEADERS([sys/sdt.h], [
+    AC_DEFINE([HAVE_USDT], [1], [Enable USDT probes])
+    USDT=true
+  ], [
+    AC_MSG_ERROR([configuration specifies --enable-usdt but no USDT kernel headers (sys/sdt.h) found])
   ])
 fi
 
@@ -2143,17 +2255,6 @@ if test "$enable_capabilities" != "no"; then
        LIBCAP="-lcap"
        frr_ac_lcaps="yes"]
     )
-  else
-    AC_CHECK_HEADERS([priv.h],
-     [AC_MSG_CHECKING([Solaris style privileges are available])
-      AC_TRY_COMPILE([#include <priv.h>], [getpflags(PRIV_AWARE);],
-    	  [AC_MSG_RESULT([yes])
-    	   AC_DEFINE([HAVE_SOLARIS_CAPABILITIES], [1], [getpflags])
-    	   frr_ac_scaps="yes"],
-    	   AC_MSG_RESULT(no)
-      )
-     ]
-   )
   fi
   if test "$frr_ac_scaps" = "yes" \
        -o "$frr_ac_lcaps" = "yes"; then
@@ -2219,7 +2320,7 @@ dnl check for malloc mallinfo struct and call
 dnl this must try and link using LIBS, in
 dnl order to check no alternative allocator
 dnl has been specified, which might not provide
-dnl mallinfo, e.g. such as Umem on Solaris.
+dnl mallinfo
 dnl -----------------------------------------
 AC_CHECK_HEADERS([malloc.h malloc_np.h malloc/malloc.h],,, [FRR_INCLUDES])
 
@@ -2378,6 +2479,18 @@ AM_CONDITIONAL([IRDP], [$IRDP])
 AM_CONDITIONAL([FPM], [test "$enable_fpm" = "yes"])
 AM_CONDITIONAL([HAVE_PROTOBUF], [test "$enable_protobuf" = "yes"])
 AM_CONDITIONAL([HAVE_PROTOBUF3], [$PROTO3])
+
+dnl PCEP plugin
+AM_CONDITIONAL([HAVE_PATHD_PCEP], [test "$enable_pcep" = "yes"])
+AS_IF([test "$enable_pcep" = "yes"], [
+  AC_CHECK_LIB([pcep_pcc], [initialize_pcc], [
+    PATHD_PCEP_LIBS="-lpcep_pcc"
+  ],[
+    AC_MSG_ERROR([PCEP library libpcep_pcc not found])
+  ])
+  AC_SUBST([PATHD_PCEP_LIBS])
+])
+
 dnl daemons
 AM_CONDITIONAL([VTYSH], [test "$VTYSH" = "vtysh"])
 AM_CONDITIONAL([ZEBRA], [test "$enable_zebra" != "no"])
@@ -2400,6 +2513,7 @@ AM_CONDITIONAL([SHARPD], [test "$enable_sharpd" = "yes"])
 AM_CONDITIONAL([STATICD], [test "$enable_staticd" != "no"])
 AM_CONDITIONAL([FABRICD], [test "$enable_fabricd" != "no"])
 AM_CONDITIONAL([VRRPD], [test "$enable_vrrpd" != "no"])
+AM_CONDITIONAL([PATHD], [test "$enable_pathd" != "no"])
 
 AC_CONFIG_FILES([Makefile],[
 	test "$enable_dev_build" = "yes" && makefile_devbuild="--dev-build"
@@ -2413,7 +2527,6 @@ AC_CONFIG_FILES([
 	  config.version
 	  changelog-auto
 	  redhat/frr.spec
-	  solaris/Makefile
 	  alpine/APKBUILD
 	  snapcraft/snapcraft.yaml
 	  lib/version.h
@@ -2427,19 +2540,6 @@ AC_CONFIG_FILES([tools/frr], [chmod +x tools/frr])
 AC_CONFIG_FILES([tools/watchfrr.sh], [chmod +x tools/watchfrr.sh])
 AC_CONFIG_FILES([tools/frrinit.sh], [chmod +x tools/frrinit.sh])
 AC_CONFIG_FILES([tools/frrcommon.sh])
-
-AC_CONFIG_COMMANDS([lib/route_types.h], [
-	dst="${ac_abs_top_builddir}/lib/route_types.h"
-	${PERL} "${ac_abs_top_srcdir}/lib/route_types.pl" \
-		< "${ac_abs_top_srcdir}/lib/route_types.txt" \
-		> "${dst}.tmp"
-	test -f "$dst" \
-		&& diff "${dst}.tmp" "${dst}" >/dev/null 2>/dev/null \
-		&& rm "${dst}.tmp" \
-		|| mv "${dst}.tmp" "${dst}"
-], [
-	PERL="$PERL"
-])
 
 AS_IF([test "$with_pkg_git_version" = "yes"], [
     AC_CONFIG_COMMANDS([lib/gitversion.h], [
@@ -2459,6 +2559,14 @@ AS_IF([test "$with_pkg_git_version" = "yes"], [
 ## Hack, but working solution to avoid rebuilding of frr.info.
 ## It's already in CVS until texinfo 4.7 is more common.
 AC_OUTPUT
+
+if test "$enable_rpath" = "yes" ; then
+	true
+else
+	# See https://old-en.opensuse.org/openSUSE:Packaging_Guidelines#Removing_Rpath
+	sed -i 's|^hardcode_libdir_flag_spec=.*|hardcode_libdir_flag_spec=""|g' libtool
+	sed -i 's|^runpath_var=LD_RUN_PATH|runpath_var=DIE_RPATH_DIE|g' libtool
+fi
 
 echo "
 FRRouting configuration
@@ -2480,6 +2588,7 @@ group for vty sockets   : ${enable_vty_group}
 config file mask        : ${enable_configfile_mask}
 log file mask           : ${enable_logfile_mask}
 zebra protobuf enabled  : ${enable_protobuf:-no}
+vici socket path        : ${vici_socket}
 
 The above user and group must have read/write access to the state file
 directory and to the config files in the config file directory."

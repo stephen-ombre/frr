@@ -194,6 +194,30 @@ const struct frr_yang_module_info frr_isisd_info = {
 			},
 		},
 		{
+			.xpath = "/frr-isisd:isis/instance/spf/prefix-priorities/critical/access-list-name",
+			.cbs = {
+				.cli_show = cli_show_isis_spf_prefix_priority,
+				.modify = isis_instance_spf_prefix_priorities_critical_access_list_name_modify,
+				.destroy = isis_instance_spf_prefix_priorities_critical_access_list_name_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/spf/prefix-priorities/high/access-list-name",
+			.cbs = {
+				.cli_show = cli_show_isis_spf_prefix_priority,
+				.modify = isis_instance_spf_prefix_priorities_high_access_list_name_modify,
+				.destroy = isis_instance_spf_prefix_priorities_high_access_list_name_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/spf/prefix-priorities/medium/access-list-name",
+			.cbs = {
+				.cli_show = cli_show_isis_spf_prefix_priority,
+				.modify = isis_instance_spf_prefix_priorities_medium_access_list_name_modify,
+				.destroy = isis_instance_spf_prefix_priorities_medium_access_list_name_destroy,
+			}
+		},
+		{
 			.xpath = "/frr-isisd:isis/instance/area-password",
 			.cbs = {
 				.apply_finish = area_password_apply_finish,
@@ -432,6 +456,80 @@ const struct frr_yang_module_info frr_isisd_info = {
 			},
 		},
 		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-1/lfa/load-sharing",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_load_sharing,
+				.modify = isis_instance_fast_reroute_level_1_lfa_load_sharing_modify,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-1/lfa/priority-limit",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_priority_limit,
+				.modify = isis_instance_fast_reroute_level_1_lfa_priority_limit_modify,
+				.destroy = isis_instance_fast_reroute_level_1_lfa_priority_limit_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-1/lfa/tiebreaker",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_tiebreaker,
+				.create = isis_instance_fast_reroute_level_1_lfa_tiebreaker_create,
+				.destroy = isis_instance_fast_reroute_level_1_lfa_tiebreaker_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-1/lfa/tiebreaker/type",
+			.cbs = {
+				.modify = isis_instance_fast_reroute_level_1_lfa_tiebreaker_type_modify,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-1/remote-lfa/prefix-list",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_remote_lfa_plist,
+				.modify = isis_instance_fast_reroute_level_1_remote_lfa_prefix_list_modify,
+				.destroy = isis_instance_fast_reroute_level_1_remote_lfa_prefix_list_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-2/lfa/load-sharing",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_load_sharing,
+				.modify = isis_instance_fast_reroute_level_2_lfa_load_sharing_modify,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-2/lfa/priority-limit",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_priority_limit,
+				.modify = isis_instance_fast_reroute_level_2_lfa_priority_limit_modify,
+				.destroy = isis_instance_fast_reroute_level_2_lfa_priority_limit_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-2/lfa/tiebreaker",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_lfa_tiebreaker,
+				.create = isis_instance_fast_reroute_level_2_lfa_tiebreaker_create,
+				.destroy = isis_instance_fast_reroute_level_2_lfa_tiebreaker_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-2/lfa/tiebreaker/type",
+			.cbs = {
+				.modify = isis_instance_fast_reroute_level_2_lfa_tiebreaker_type_modify,
+			}
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/fast-reroute/level-2/remote-lfa/prefix-list",
+			.cbs = {
+				.cli_show = cli_show_isis_frr_remote_lfa_plist,
+				.modify = isis_instance_fast_reroute_level_2_remote_lfa_prefix_list_modify,
+				.destroy = isis_instance_fast_reroute_level_2_remote_lfa_prefix_list_destroy,
+			}
+		},
+		{
 			.xpath = "/frr-isisd:isis/instance/log-adjacency-changes",
 			.cbs = {
 				.cli_show = cli_show_isis_log_adjacency,
@@ -536,6 +634,12 @@ const struct frr_yang_module_info frr_isisd_info = {
 			.cbs = {
 				.modify = isis_instance_segment_routing_prefix_sid_map_prefix_sid_last_hop_behavior_modify,
 			},
+		},
+		{
+			.xpath = "/frr-isisd:isis/instance/segment-routing/prefix-sid-map/prefix-sid/n-flag-clear",
+			.cbs = {
+				.modify = isis_instance_segment_routing_prefix_sid_map_prefix_sid_n_flag_clear_modify,
+			}
 		},
 		{
 			.xpath = "/frr-isisd:isis/instance/mpls/ldp-sync",
@@ -817,6 +921,92 @@ const struct frr_yang_module_info frr_isisd_info = {
 				.cli_show = cli_show_ip_isis_mt_ipv6_dstsrc,
 				.modify = lib_interface_isis_multi_topology_ipv6_dstsrc_modify,
 			},
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute",
+			.cbs = {
+				.cli_show = cli_show_ip_isis_frr,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_1_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/lfa/exclude-interface",
+			.cbs = {
+				.cli_show = cli_show_frr_lfa_exclude_interface,
+				.create = lib_interface_isis_fast_reroute_level_1_lfa_exclude_interface_create,
+				.destroy = lib_interface_isis_fast_reroute_level_1_lfa_exclude_interface_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/remote-lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_1_remote_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/remote-lfa/maximum-metric",
+			.cbs = {
+				.cli_show = cli_show_frr_remote_lfa_max_metric,
+				.modify = lib_interface_isis_fast_reroute_level_1_remote_lfa_maximum_metric_modify,
+				.destroy = lib_interface_isis_fast_reroute_level_1_remote_lfa_maximum_metric_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/ti-lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_1_ti_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-1/ti-lfa/node-protection",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_1_ti_lfa_node_protection_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_2_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/lfa/exclude-interface",
+			.cbs = {
+				.cli_show = cli_show_frr_lfa_exclude_interface,
+				.create = lib_interface_isis_fast_reroute_level_2_lfa_exclude_interface_create,
+				.destroy = lib_interface_isis_fast_reroute_level_2_lfa_exclude_interface_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/remote-lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_2_remote_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/remote-lfa/maximum-metric",
+			.cbs = {
+				.cli_show = cli_show_frr_remote_lfa_max_metric,
+				.modify = lib_interface_isis_fast_reroute_level_2_remote_lfa_maximum_metric_modify,
+				.destroy = lib_interface_isis_fast_reroute_level_2_remote_lfa_maximum_metric_destroy,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/ti-lfa/enable",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_2_ti_lfa_enable_modify,
+			}
+		},
+		{
+			.xpath = "/frr-interface:lib/interface/frr-isisd:isis/fast-reroute/level-2/ti-lfa/node-protection",
+			.cbs = {
+				.modify = lib_interface_isis_fast_reroute_level_2_ti_lfa_node_protection_modify,
+			}
 		},
 		{
 			.xpath = "/frr-interface:lib/interface/state/frr-isisd:isis",

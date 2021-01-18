@@ -17,6 +17,10 @@ submodule frr-bgp-common {
     prefix frr-bt;
   }
 
+  import frr-route-map {
+    prefix frr-route-map;
+  }
+
   import frr-route-types {
     prefix frr-rt-type;
   }
@@ -73,25 +77,25 @@ submodule frr-bgp-common {
 
   grouping rmap-policy-import {
     leaf rmap-import {
-      type frr-bt:rmap-ref;
+      type frr-route-map:route-map-ref;
     }
   }
 
   grouping rmap-policy-export {
     leaf rmap-export {
-      type frr-bt:rmap-ref;
+      type frr-route-map:route-map-ref;
     }
   }
 
-  grouping unsupress-map-policy-import {
-    leaf unsupress-map-import {
-      type frr-bt:rmap-ref;
+  grouping unsuppress-map-policy-import {
+    leaf unsuppress-map-import {
+      type frr-route-map:route-map-ref;
     }
   }
 
-  grouping unsupress-map-policy-export {
-    leaf unsupress-map-export {
-      type frr-bt:rmap-ref;
+  grouping unsuppress-map-policy-export {
+    leaf unsuppress-map-export {
+      type frr-route-map:route-map-ref;
     }
   }
 
@@ -191,7 +195,7 @@ submodule frr-bgp-common {
 
       leaf external-compare-router-id {
         type boolean;
-        default "true";
+        default "false";
         description
           "When comparing similar routes received from external BGP
            peers, use the router-id as a criterion to select the
@@ -352,6 +356,13 @@ submodule frr-bgp-common {
       default "false";
       description
         "Apply administrative shutdown to newly configured peers.";
+    }
+
+    leaf suppress-duplicates {
+      type boolean;
+      default "true";
+      description
+        "Suppress duplicate updates if the route actually not changed.";
     }
 
     leaf ebgp-requires-policy {
@@ -728,7 +739,7 @@ submodule frr-bgp-common {
       }
 
       leaf rmap-policy-import {
-        type frr-bt:rmap-ref;
+        type frr-route-map:route-map-ref;
         description
           "Route-map to be applied for redistributed routes into the bgp.";
       }
@@ -743,7 +754,7 @@ submodule frr-bgp-common {
     }
 
     leaf rmap-policy-export {
-      type frr-bt:rmap-ref;
+      type frr-route-map:route-map-ref;
       description
         "Route-map to modify the attributes for Routes going out
          via BGP updates.";
@@ -771,9 +782,51 @@ submodule frr-bgp-common {
     }
 
     leaf rmap-policy-export {
-      type frr-bt:rmap-ref;
+      type frr-route-map:route-map-ref;
       description
         "Apply route map to aggregate network.";
+    }
+
+    leaf origin {
+      type enumeration {
+        enum "igp" {
+          value 0;
+          description
+            "Local IGP.";
+        }
+        enum "egp" {
+          value 1;
+          description
+            "Remote EGP.";
+        }
+        enum "incomplete" {
+          value 2;
+          description
+            "Unknown heritage.";
+        }
+        enum "unspecified" {
+          value 255;
+          description
+            "Unspecified.";
+        }
+      }
+      default "unspecified";
+      description
+        "BGP origin type.";
+    }
+
+    leaf match-med {
+      type boolean;
+      default "false";
+      description
+        "When set to 'true' aggregate-route matches only
+         med.";
+    }
+
+    leaf suppress-map {
+      type string;
+      description
+        "Suppress more specific routes specified in route-map.";
     }
   }
 
@@ -787,6 +840,7 @@ submodule frr-bgp-common {
         type uint8 {
           range "1..255";
         }
+        default "20";
         description
           "Administrative distance for routes learned from
            external BGP (EBGP).";
@@ -796,6 +850,7 @@ submodule frr-bgp-common {
         type uint8 {
           range "1..255";
         }
+        default "200";
         description
           "Administrative distance for routes learned from
            internal BGP (IBGP).";
@@ -805,6 +860,7 @@ submodule frr-bgp-common {
         type uint8 {
           range "1..255";
         }
+        default "200";
         description
           "Administrative distance for routes learned from
            local.";
@@ -1013,6 +1069,7 @@ submodule frr-bgp-common {
       case import-export {
         uses rt-list;
       }
+
       case both {
         leaf-list rt-list {
           type rt-types:route-target;
@@ -1060,7 +1117,11 @@ submodule frr-bgp-common {
 
   grouping global-afi-safi-vpn-config {
     container vpn-config {
-      uses route-distinguisher-params;
+      leaf rd {
+        type string;
+        description
+          "Route distinguisher value as per RFC4364.";
+      }
 
       uses vpn-label-params;
 
@@ -1097,7 +1158,7 @@ submodule frr-bgp-common {
         }
 
         leaf rmap-policy-export {
-          type frr-bt:rmap-ref;
+          type frr-route-map:route-map-ref;
           description
             "Route-map to modify the attributes for Routes going out
              via BGP updates.";

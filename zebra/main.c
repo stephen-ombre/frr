@@ -83,16 +83,18 @@ uint32_t nl_rcvbufsize = 4194304;
 #endif /* HAVE_NETLINK */
 
 #define OPTION_V6_RR_SEMANTICS 2000
+#define OPTION_ASIC_OFFLOAD    2001
+
 /* Command line options. */
 const struct option longopts[] = {
 	{"batch", no_argument, NULL, 'b'},
 	{"allow_delete", no_argument, NULL, 'a'},
-	{"keep_kernel", no_argument, NULL, 'k'},
 	{"socket", required_argument, NULL, 'z'},
 	{"ecmp", required_argument, NULL, 'e'},
 	{"retain", no_argument, NULL, 'r'},
 	{"vrfdefaultname", required_argument, NULL, 'o'},
 	{"graceful_restart", required_argument, NULL, 'K'},
+	{"asic-offload", optional_argument, NULL, OPTION_ASIC_OFFLOAD},
 #ifdef HAVE_NETLINK
 	{"vrfwnetns", no_argument, NULL, 'n'},
 	{"nl-bufsize", required_argument, NULL, 's'},
@@ -171,19 +173,21 @@ static void sigint(void)
 
 	zebra_ptm_finish();
 
-	if (retain_mode)
+	if (retain_mode) {
+		zebra_nhg_mark_keep();
 		RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
 			zvrf = vrf->info;
 			if (zvrf)
 				SET_FLAG(zvrf->flags, ZEBRA_VRF_RETAIN);
 		}
+	}
 	if (zrouter.lsp_process_q)
 		work_queue_free_and_null(&zrouter.lsp_process_q);
 
 	vrf_terminate();
 	rtadv_terminate();
 
-	ns_walk_func(zebra_ns_early_shutdown);
+	ns_walk_func(zebra_ns_early_shutdown, NULL, NULL);
 	zebra_ns_notify_close();
 
 	access_list_reset();
@@ -214,7 +218,7 @@ int zebra_finalize(struct thread *dummy)
 	zlog_info("Zebra final shutdown");
 
 	/* Final shutdown of ns resources */
-	ns_walk_func(zebra_ns_final_shutdown);
+	ns_walk_func(zebra_ns_final_shutdown, NULL, NULL);
 
 	/* Stop dplane thread and finish any cleanup */
 	zebra_dplane_shutdown();
@@ -280,6 +284,8 @@ int main(int argc, char **argv)
 	char *vrf_default_name_configured = NULL;
 	struct sockaddr_storage dummy;
 	socklen_t dummylen;
+	bool asic_offload = false;
+	bool notify_on_ack = true;
 
 	graceful_restart = 0;
 	vrf_configure_backend(VRF_BACKEND_VRF_LITE);
@@ -300,6 +306,7 @@ int main(int argc, char **argv)
 		"  -r, --retain             When program terminates, retain added route by zebra.\n"
 		"  -o, --vrfdefaultname     Set default VRF name.\n"
 		"  -K, --graceful_restart   Graceful restart at the kernel level, timer in seconds for expiration\n"
+		"  -A, --asic-offload       FRR is interacting with an asic underneath the linux kernel\n"
 #ifdef HAVE_NETLINK
 		"  -n, --vrfwnetns          Use NetNS as VRF backend\n"
 		"  -s, --nl-bufsize         Set netlink receive buffer size\n"
@@ -365,6 +372,13 @@ int main(int argc, char **argv)
 		case OPTION_V6_RR_SEMANTICS:
 			v6_rr_semantics = true;
 			break;
+		case OPTION_ASIC_OFFLOAD:
+			if (!strcmp(optarg, "notify_on_offload"))
+				notify_on_ack = false;
+			if (!strcmp(optarg, "notify_on_ack"))
+				notify_on_ack = true;
+			asic_offload = true;
+			break;
 #endif /* HAVE_NETLINK */
 		default:
 			frr_help_exit(1);
@@ -375,7 +389,7 @@ int main(int argc, char **argv)
 	zrouter.master = frr_init();
 
 	/* Zebra related initialize. */
-	zebra_router_init();
+	zebra_router_init(asic_offload, notify_on_ack);
 	zserv_init();
 	rib_init();
 	zebra_if_init();

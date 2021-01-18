@@ -8,7 +8,6 @@
           "active": true,
           "afi": "ipv4",
           "fib": true,
-          "interfaceIndex": 2,
           "interfaceName": "r2-eth0",
           "ip": "10.0.21.1"
         }
@@ -20,26 +19,11 @@
   ],
   "10.0.21.0/24": [
     {
-      "distance": 115,
-      "metric": 10,
-      "nexthops": [
-        {
-          "afi": "ipv4",
-          "interfaceIndex": 2,
-          "interfaceName": "r2-eth0",
-          "ip": "10.0.21.1"
-        }
-      ],
-      "prefix": "10.0.21.0/24",
-      "protocol": "isis"
-    },
-    {
       "nexthops": [
         {
           "active": true,
           "directlyConnected": true,
           "fib": true,
-          "interfaceIndex": 2,
           "interfaceName": "r2-eth0"
         }
       ],
@@ -55,7 +39,6 @@
           "active": true,
           "directlyConnected": true,
           "fib": true,
-          "interfaceIndex": 1,
           "interfaceName": "lo"
         }
       ],
@@ -73,7 +56,6 @@
           "active": true,
           "afi": "ipv4",
           "fib": true,
-          "interfaceIndex": 2,
           "interfaceName": "r2-eth0",
           "ip": "10.0.21.1"
         }

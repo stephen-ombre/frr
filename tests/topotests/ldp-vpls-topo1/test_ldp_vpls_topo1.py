@@ -121,7 +121,8 @@ class TemplateTopo(Topo):
         switch.add_link(tgen.gears["r2"])
         switch.add_link(tgen.gears["r3"])
 
-
+@pytest.mark.ldp
+@pytest.mark.ospf
 def setup_module(mod):
     "Sets up the pytest environment"
     tgen = Topogen(TemplateTopo, mod.__name__)
@@ -130,7 +131,7 @@ def setup_module(mod):
     router_list = tgen.routers()
 
     # For all registered routers, load the zebra configuration file
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -283,8 +284,7 @@ def test_ldp_pseudowires_after_link_down():
     # for nexthop resolution). Give some extra wait time.
     for rname in ["r1", "r2", "r3"]:
         router_compare_json_output(
-            rname, "show l2vpn atom vc json", "show_l2vpn_vc.ref",
-            count=160, wait=1
+            rname, "show l2vpn atom vc json", "show_l2vpn_vc.ref", count=160, wait=1
         )
 
 

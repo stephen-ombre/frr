@@ -712,7 +712,11 @@ static ssize_t netlink_send_msg(const struct nlsock *nl, void *buf,
 
 	if (IS_ZEBRA_DEBUG_KERNEL_MSGDUMP_SEND) {
 		zlog_debug("%s: >> netlink message dump [sent]", __func__);
+#ifdef NETLINK_DEBUG
+		nl_dump(buf, buflen);
+#else
 		zlog_hexdump(buf, buflen);
+#endif /* NETLINK_DEBUG */
 	}
 
 	if (status == -1) {
@@ -770,7 +774,11 @@ static int netlink_recv_msg(const struct nlsock *nl, struct msghdr msg,
 
 	if (IS_ZEBRA_DEBUG_KERNEL_MSGDUMP_RECV) {
 		zlog_debug("%s: << netlink message dump [recv]", __func__);
+#ifdef NETLINK_DEBUG
+		nl_dump(buf, status);
+#else
 		zlog_hexdump(buf, status);
+#endif /* NETLINK_DEBUG */
 	}
 
 	return status;
@@ -1051,7 +1059,7 @@ static int nl_batch_read_resp(struct nl_batch *bth)
 {
 	struct nlmsghdr *h;
 	struct sockaddr_nl snl;
-	struct msghdr msg;
+	struct msghdr msg = {};
 	int status, seq;
 	const struct nlsock *nl;
 	struct zebra_dplane_ctx *ctx;
@@ -1321,6 +1329,7 @@ static enum netlink_msg_status nl_put_msg(struct nl_batch *bth,
 	case DPLANE_OP_SYS_ROUTE_DELETE:
 	case DPLANE_OP_ROUTE_NOTIFY:
 	case DPLANE_OP_LSP_NOTIFY:
+	case DPLANE_OP_BR_PORT_UPDATE:
 		return FRR_NETLINK_SUCCESS;
 
 	case DPLANE_OP_NONE:
@@ -1462,6 +1471,9 @@ void kernel_init(struct zebra_ns *zns)
 	one = 1;
 	ret = setsockopt(zns->netlink_dplane.sock, SOL_NETLINK, NETLINK_CAP_ACK,
 			 &one, sizeof(one));
+	if (ret < 0)
+		zlog_notice(
+			"Registration for reduced ACK packet size failed, probably running an early kernel");
 #endif
 
 	/* Register kernel socket. */
@@ -1498,7 +1510,7 @@ void kernel_init(struct zebra_ns *zns)
 
 void kernel_terminate(struct zebra_ns *zns, bool complete)
 {
-	THREAD_READ_OFF(zns->t_netlink);
+	thread_cancel(&zns->t_netlink);
 
 	if (zns->netlink.sock >= 0) {
 		close(zns->netlink.sock);

@@ -274,10 +274,11 @@ static int ripng_ifp_destroy(struct interface *ifp)
 		ripng_if_down(ifp);
 	}
 
-	zlog_info(
-		"interface delete %s vrf %s(%u) index %d flags %#llx metric %d mtu %d",
-		ifp->name, VRF_LOGNAME(vrf), ifp->vrf_id, ifp->ifindex,
-		(unsigned long long)ifp->flags, ifp->metric, ifp->mtu6);
+	if (IS_RIPNG_DEBUG_ZEBRA)
+		zlog_debug(
+			"interface delete %s vrf %s(%u) index %d flags %#llx metric %d mtu %d",
+			ifp->name, VRF_LOGNAME(vrf), ifp->vrf_id, ifp->ifindex,
+			(unsigned long long)ifp->flags, ifp->metric, ifp->mtu6);
 
 	return 0;
 }
@@ -320,10 +321,7 @@ void ripng_interface_clean(struct ripng *ripng)
 		ri->enable_interface = 0;
 		ri->running = 0;
 
-		if (ri->t_wakeup) {
-			thread_cancel(ri->t_wakeup);
-			ri->t_wakeup = NULL;
-		}
+		thread_cancel(&ri->t_wakeup);
 	}
 }
 
@@ -374,8 +372,7 @@ int ripng_interface_address_add(ZAPI_CALLBACK_ARGS)
 		struct ripng_interface *ri = c->ifp->info;
 
 		if (IS_RIPNG_DEBUG_ZEBRA)
-			zlog_debug("RIPng connected address %s/%d add",
-				   inet6_ntoa(p->u.prefix6), p->prefixlen);
+			zlog_debug("RIPng connected address %pFX add", p);
 
 		/* Check is this prefix needs to be redistributed. */
 		ripng_apply_address_add(c);
@@ -427,7 +424,6 @@ int ripng_interface_address_delete(ZAPI_CALLBACK_ARGS)
 {
 	struct connected *ifc;
 	struct prefix *p;
-	char buf[INET6_ADDRSTRLEN];
 
 	ifc = zebra_interface_address_read(ZEBRA_INTERFACE_ADDRESS_DELETE,
 					   zclient->ibuf, vrf_id);
@@ -438,10 +434,8 @@ int ripng_interface_address_delete(ZAPI_CALLBACK_ARGS)
 		if (p->family == AF_INET6) {
 			if (IS_RIPNG_DEBUG_ZEBRA)
 				zlog_debug(
-					"RIPng connected address %s/%d delete",
-					inet_ntop(AF_INET6, &p->u.prefix6, buf,
-						  INET6_ADDRSTRLEN),
-					p->prefixlen);
+					"RIPng connected address %pFX delete",
+					p);
 
 			/* Check wether this prefix needs to be removed. */
 			ripng_apply_address_del(ifc);

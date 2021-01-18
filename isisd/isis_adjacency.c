@@ -147,7 +147,7 @@ void isis_delete_adj(void *arg)
 	if (!adj)
 		return;
 
-	THREAD_TIMER_OFF(adj->t_expire);
+	thread_cancel(&adj->t_expire);
 	if (adj->adj_state != ISIS_ADJ_DOWN)
 		adj->adj_state = ISIS_ADJ_DOWN;
 
@@ -304,7 +304,6 @@ void isis_adj_state_change(struct isis_adjacency **padj,
 				continue;
 			if (new_state == ISIS_ADJ_UP) {
 				circuit->upadjcount[level - 1]++;
-				hook_call(isis_adj_state_change_hook, adj);
 				/* update counter & timers for debugging
 				 * purposes */
 				adj->last_flap = time(NULL);
@@ -317,7 +316,6 @@ void isis_adj_state_change(struct isis_adjacency **padj,
 				if (circuit->upadjcount[level - 1] == 0)
 					isis_tx_queue_clean(circuit->tx_queue);
 
-				hook_call(isis_adj_state_change_hook, adj);
 				if (new_state == ISIS_ADJ_DOWN)
 					del = true;
 			}
@@ -342,7 +340,6 @@ void isis_adj_state_change(struct isis_adjacency **padj,
 				continue;
 			if (new_state == ISIS_ADJ_UP) {
 				circuit->upadjcount[level - 1]++;
-				hook_call(isis_adj_state_change_hook, adj);
 
 				/* update counter & timers for debugging
 				 * purposes */
@@ -365,12 +362,13 @@ void isis_adj_state_change(struct isis_adjacency **padj,
 				if (circuit->upadjcount[level - 1] == 0)
 					isis_tx_queue_clean(circuit->tx_queue);
 
-				hook_call(isis_adj_state_change_hook, adj);
 				if (new_state == ISIS_ADJ_DOWN)
 					del = true;
 			}
 		}
 	}
+
+	hook_call(isis_adj_state_change_hook, adj);
 
 	if (del) {
 		isis_delete_adj(adj);
@@ -395,7 +393,7 @@ void isis_adj_print(struct isis_adjacency *adj)
 	if (adj->ipv4_address_count) {
 		zlog_debug("IPv4 Address(es):");
 		for (unsigned int i = 0; i < adj->ipv4_address_count; i++)
-			zlog_debug("%s", inet_ntoa(adj->ipv4_addresses[i]));
+			zlog_debug("%pI4", &adj->ipv4_addresses[i]);
 	}
 
 	if (adj->ipv6_address_count) {
@@ -467,11 +465,15 @@ void isis_adj_print_vty(struct isis_adjacency *adj, struct vty *vty,
 		vty_out(vty, "%-3u", adj->level); /* level */
 		vty_out(vty, "%-13s", adj_state2string(adj->adj_state));
 		now = time(NULL);
-		if (adj->last_upd)
-			vty_out(vty, "%-9llu",
-				(unsigned long long)adj->last_upd
-					+ adj->hold_time - now);
-		else
+		if (adj->last_upd) {
+			if (adj->last_upd + adj->hold_time
+			    < (unsigned long long)now)
+				vty_out(vty, " Expiring");
+			else
+				vty_out(vty, " %-9llu",
+					(unsigned long long)adj->last_upd
+						+ adj->hold_time - now);
+		} else
 			vty_out(vty, "-        ");
 		vty_out(vty, "%-10s", snpa_print(adj->snpa));
 		vty_out(vty, "\n");
@@ -491,11 +493,15 @@ void isis_adj_print_vty(struct isis_adjacency *adj, struct vty *vty,
 		vty_out(vty, ", Level: %u", adj->level); /* level */
 		vty_out(vty, ", State: %s", adj_state2string(adj->adj_state));
 		now = time(NULL);
-		if (adj->last_upd)
-			vty_out(vty, ", Expires in %s",
-				time2string(adj->last_upd + adj->hold_time
-					    - now));
-		else
+		if (adj->last_upd) {
+			if (adj->last_upd + adj->hold_time
+			    < (unsigned long long)now)
+				vty_out(vty, " Expiring");
+			else
+				vty_out(vty, ", Expires in %s",
+					time2string(adj->last_upd
+						    + adj->hold_time - now));
+		} else
 			vty_out(vty, ", Expires in %s",
 				time2string(adj->hold_time));
 		vty_out(vty, "\n");
@@ -556,8 +562,8 @@ void isis_adj_print_vty(struct isis_adjacency *adj, struct vty *vty,
 			vty_out(vty, "    IPv4 Address(es):\n");
 			for (unsigned int i = 0; i < adj->ipv4_address_count;
 			     i++)
-				vty_out(vty, "      %s\n",
-					inet_ntoa(adj->ipv4_addresses[i]));
+				vty_out(vty, "      %pI4\n",
+					&adj->ipv4_addresses[i]);
 		}
 		if (adj->ipv6_address_count) {
 			vty_out(vty, "    IPv6 Address(es):\n");

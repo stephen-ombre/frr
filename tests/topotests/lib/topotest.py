@@ -51,8 +51,9 @@ from mininet.log import setLogLevel, info
 from mininet.cli import CLI
 from mininet.link import Intf
 
+
 def gdb_core(obj, daemon, corefiles):
-    gdbcmds = '''
+    gdbcmds = """
         info threads
         bt full
         disassemble
@@ -66,20 +67,20 @@ def gdb_core(obj, daemon, corefiles):
         disassemble
         up
         disassemble
-    '''
-    gdbcmds = [['-ex', i.strip()] for i in gdbcmds.strip().split('\n')]
+    """
+    gdbcmds = [["-ex", i.strip()] for i in gdbcmds.strip().split("\n")]
     gdbcmds = [item for sl in gdbcmds for item in sl]
 
     daemon_path = os.path.join(obj.daemondir, daemon)
     backtrace = subprocess.check_output(
-        ['gdb', daemon_path, corefiles[0], '--batch'] + gdbcmds
+        ["gdb", daemon_path, corefiles[0], "--batch"] + gdbcmds
     )
     sys.stderr.write(
-        "\n%s: %s crashed. Core file found - Backtrace follows:\n"
-        % (obj.name, daemon)
+        "\n%s: %s crashed. Core file found - Backtrace follows:\n" % (obj.name, daemon)
     )
     sys.stderr.write("%s" % backtrace)
     return backtrace
+
 
 class json_cmp_result(object):
     "json_cmp result class for better assertion messages"
@@ -608,8 +609,10 @@ def interface_set_status(node, ifacename, ifaceaction=False, vrf_name=None):
             ifacename, str_ifaceaction
         )
     else:
-        cmd = 'vtysh -c "configure terminal" -c "interface {0} vrf {1}" -c "{2}"'.format(
-            ifacename, vrf_name, str_ifaceaction
+        cmd = (
+            'vtysh -c "configure terminal" -c "interface {0} vrf {1}" -c "{2}"'.format(
+                ifacename, vrf_name, str_ifaceaction
+            )
         )
     node.run(cmd)
 
@@ -628,7 +631,7 @@ def ip4_route_zebra(node, vrf_name=None):
     lines = output.splitlines()
     header_found = False
     while lines and (not lines[0].strip() or not header_found):
-        if "> - selected route" in lines[0]:
+        if "o - offload failure" in lines[0]:
             header_found = True
         lines = lines[1:]
     return "\n".join(lines)
@@ -654,7 +657,7 @@ def ip6_route_zebra(node, vrf_name=None):
     lines = output.splitlines()
     header_found = False
     while lines and (not lines[0].strip() or not header_found):
-        if "> - selected route" in lines[0]:
+        if "o - offload failure" in lines[0]:
             header_found = True
         lines = lines[1:]
 
@@ -739,7 +742,8 @@ def ip4_vrf_route(node):
     }
     """
     output = normalize_text(
-            node.run("ip route show vrf {0}-cust1".format(node.name))).splitlines()
+        node.run("ip route show vrf {0}-cust1".format(node.name))
+    ).splitlines()
 
     result = {}
     for line in output:
@@ -821,7 +825,8 @@ def ip6_vrf_route(node):
     }
     """
     output = normalize_text(
-            node.run("ip -6 route show vrf {0}-cust1".format(node.name))).splitlines()
+        node.run("ip -6 route show vrf {0}-cust1".format(node.name))
+    ).splitlines()
     result = {}
     for line in output:
         columns = line.split(" ")
@@ -907,53 +912,112 @@ def sleep(amount, reason=None):
     time.sleep(amount)
 
 
-def checkAddressSanitizerError(output, router, component):
+def checkAddressSanitizerError(output, router, component, logdir=""):
     "Checks for AddressSanitizer in output. If found, then logs it and returns true, false otherwise"
 
-    addressSantizerError = re.search(
-        "(==[0-9]+==)ERROR: AddressSanitizer: ([^\s]*) ", output
-    )
-    if addressSantizerError:
+    def processAddressSanitizerError(asanErrorRe, output, router, component):
         sys.stderr.write(
             "%s: %s triggered an exception by AddressSanitizer\n" % (router, component)
         )
         # Sanitizer Error found in log
-        pidMark = addressSantizerError.group(1)
-        addressSantizerLog = re.search(
+        pidMark = asanErrorRe.group(1)
+        addressSanitizerLog = re.search(
             "%s(.*)%s" % (pidMark, pidMark), output, re.DOTALL
         )
-        if addressSantizerLog:
-            callingTest = os.path.basename(
-                sys._current_frames().values()[0].f_back.f_back.f_globals["__file__"]
-            )
-            callingProc = sys._getframe(2).f_code.co_name
+        if addressSanitizerLog:
+            # Find Calling Test. Could be multiple steps back
+            testframe = sys._current_frames().values()[0]
+            level = 0
+            while level < 10:
+                test = os.path.splitext(
+                    os.path.basename(testframe.f_globals["__file__"])
+                )[0]
+                if (test != "topotest") and (test != "topogen"):
+                    # Found the calling test
+                    callingTest = os.path.basename(testframe.f_globals["__file__"])
+                    break
+                level = level + 1
+                testframe = testframe.f_back
+            if level >= 10:
+                # somehow couldn't find the test script.
+                callingTest = "unknownTest"
+            #
+            # Now finding Calling Procedure
+            level = 0
+            while level < 20:
+                callingProc = sys._getframe(level).f_code.co_name
+                if (
+                    (callingProc != "processAddressSanitizerError")
+                    and (callingProc != "checkAddressSanitizerError")
+                    and (callingProc != "checkRouterCores")
+                    and (callingProc != "stopRouter")
+                    and (callingProc != "__stop_internal")
+                    and (callingProc != "stop")
+                    and (callingProc != "stop_topology")
+                    and (callingProc != "checkRouterRunning")
+                    and (callingProc != "check_router_running")
+                    and (callingProc != "routers_have_failure")
+                ):
+                    # Found the calling test
+                    break
+                level = level + 1
+            if level >= 20:
+                # something wrong - couldn't found the calling test function
+                callingProc = "unknownProc"
             with open("/tmp/AddressSanitzer.txt", "a") as addrSanFile:
                 sys.stderr.write(
-                    "\n".join(addressSantizerLog.group(1).splitlines()) + "\n"
+                    "AddressSanitizer error in topotest `%s`, test `%s`, router `%s`\n\n"
+                    % (callingTest, callingProc, router)
                 )
-                addrSanFile.write("## Error: %s\n\n" % addressSantizerError.group(2))
+                sys.stderr.write(
+                    "\n".join(addressSanitizerLog.group(1).splitlines()) + "\n"
+                )
+                addrSanFile.write("## Error: %s\n\n" % asanErrorRe.group(2))
                 addrSanFile.write(
                     "### AddressSanitizer error in topotest `%s`, test `%s`, router `%s`\n\n"
                     % (callingTest, callingProc, router)
                 )
                 addrSanFile.write(
                     "    "
-                    + "\n    ".join(addressSantizerLog.group(1).splitlines())
+                    + "\n    ".join(addressSanitizerLog.group(1).splitlines())
                     + "\n"
                 )
                 addrSanFile.write("\n---------------\n")
+        return
+
+    addressSanitizerError = re.search(
+        "(==[0-9]+==)ERROR: AddressSanitizer: ([^\s]*) ", output
+    )
+    if addressSanitizerError:
+        processAddressSanitizerError(addressSanitizerError, output, router, component)
         return True
+
+    # No Address Sanitizer Error in Output. Now check for AddressSanitizer daemon file
+    if logdir:
+        filepattern = logdir + "/" + router + "/" + component + ".asan.*"
+        logger.debug(
+            "Log check for %s on %s, pattern %s\n" % (component, router, filepattern)
+        )
+        for file in glob.glob(filepattern):
+            with open(file, "r") as asanErrorFile:
+                asanError = asanErrorFile.read()
+            addressSanitizerError = re.search(
+                "(==[0-9]+==)ERROR: AddressSanitizer: ([^\s]*) ", asanError
+            )
+            if addressSanitizerError:
+                processAddressSanitizerError(
+                    addressSanitizerError, asanError, router, component
+                )
+                return True
     return False
 
 
 def addRouter(topo, name):
-    "Adding a FRRouter (or Quagga) to Topology"
+    "Adding a FRRouter to Topology"
 
     MyPrivateDirs = [
         "/etc/frr",
-        "/etc/quagga",
         "/var/run/frr",
-        "/var/run/quagga",
         "/var/log",
     ]
     if sys.platform.startswith("linux"):
@@ -985,7 +1049,7 @@ def assert_sysctl(node, sysctl, value):
 
 
 class Router(Node):
-    "A Node with IPv4/IPv6 forwarding enabled and Quagga as Routing Engine"
+    "A Node with IPv4/IPv6 forwarding enabled"
 
     def __init__(self, name, **params):
         super(Router, self).__init__(name, **params)
@@ -994,12 +1058,11 @@ class Router(Node):
         # Backward compatibility:
         #   Load configuration defaults like topogen.
         self.config_defaults = configparser.ConfigParser(
-            {
+            defaults={
                 "verbosity": "info",
                 "frrdir": "/usr/lib/frr",
-                "quaggadir": "/usr/lib/quagga",
                 "routertype": "frr",
-                "memleak_path": None,
+                "memleak_path": "",
             }
         )
         self.config_defaults.read(
@@ -1011,7 +1074,7 @@ class Router(Node):
         if self.logdir is None:
             cur_test = os.environ["PYTEST_CURRENT_TEST"]
             self.logdir = "/tmp/topotests/" + cur_test[
-                0 : cur_test.find(".py")
+                cur_test.find("/") + 1 : cur_test.find(".py")
             ].replace("/", ".")
 
         # If the logdir is not created, then create it and set the
@@ -1019,6 +1082,8 @@ class Router(Node):
         if not os.path.isdir(self.logdir):
             os.system("mkdir -p " + self.logdir + "/" + name)
             os.system("chmod -R go+rw /tmp/topotests")
+            # Erase logs of previous run
+            os.system("rm -rf " + self.logdir + "/" + name)
 
         self.daemondir = None
         self.hasmpls = False
@@ -1040,6 +1105,7 @@ class Router(Node):
             "sharpd": 0,
             "babeld": 0,
             "pbrd": 0,
+            'pathd': 0
         }
         self.daemons_options = {"zebra": ""}
         self.reportCores = True
@@ -1055,18 +1121,6 @@ class Router(Node):
         if not os.path.isfile(zebra_path):
             raise Exception("FRR zebra binary doesn't exist at {}".format(zebra_path))
 
-    def _config_quagga(self, **params):
-        "Configure Quagga binaries"
-        self.daemondir = params.get("quaggadir")
-        if self.daemondir is None:
-            self.daemondir = self.config_defaults.get("topogen", "quaggadir")
-
-        zebra_path = os.path.join(self.daemondir, "zebra")
-        if not os.path.isfile(zebra_path):
-            raise Exception(
-                "Quagga zebra binary doesn't exist at {}".format(zebra_path)
-            )
-
     # pylint: disable=W0221
     # Some params are only meaningful for the parent class.
     def config(self, **params):
@@ -1078,10 +1132,7 @@ class Router(Node):
             self.routertype = params.get(
                 "routertype", self.config_defaults.get("topogen", "routertype")
             )
-            if self.routertype == "quagga":
-                self._config_quagga(**params)
-            else:
-                self._config_frr(**params)
+            self._config_frr(**params)
         else:
             # Test the provided path
             zpath = os.path.join(self.daemondir, "zebra")
@@ -1113,7 +1164,7 @@ class Router(Node):
         if re.search(r"No such file or directory", rundaemons):
             return 0
         if rundaemons is not None:
-            bet = rundaemons.split('\n')
+            bet = rundaemons.split("\n")
             for d in bet[:-1]:
                 daemonpid = self.cmd("cat %s" % d.rstrip()).rstrip()
                 if daemonpid.isdigit() and pid_exists(int(daemonpid)):
@@ -1128,24 +1179,28 @@ class Router(Node):
         if re.search(r"No such file or directory", rundaemons):
             return errors
         if rundaemons is not None:
-            dmns = rundaemons.split('\n')
+            dmns = rundaemons.split("\n")
             # Exclude empty string at end of list
             for d in dmns[:-1]:
                 daemonpid = self.cmd("cat %s" % d.rstrip()).rstrip()
                 if daemonpid.isdigit() and pid_exists(int(daemonpid)):
                     daemonname = os.path.basename(d.rstrip().rsplit(".", 1)[0])
-                    logger.info(
-                        "{}: stopping {}".format(
-                            self.name, daemonname
-                        )
-                    )
+                    logger.info("{}: stopping {}".format(self.name, daemonname))
                     try:
                         os.kill(int(daemonpid), signal.SIGTERM)
                     except OSError as err:
                         if err.errno == errno.ESRCH:
-                            logger.error("{}: {} left a dead pidfile (pid={})".format(self.name, daemonname, daemonpid))
+                            logger.error(
+                                "{}: {} left a dead pidfile (pid={})".format(
+                                    self.name, daemonname, daemonpid
+                                )
+                            )
                         else:
-                            logger.info("{}: {} could not kill pid {}: {}".format(self.name, daemonname, daemonpid, str(err)))
+                            logger.info(
+                                "{}: {} could not kill pid {}: {}".format(
+                                    self.name, daemonname, daemonpid, str(err)
+                                )
+                            )
 
             if not wait:
                 return errors
@@ -1153,18 +1208,28 @@ class Router(Node):
             running = self.listDaemons()
 
             if running:
-                sleep(0.1, "{}: waiting for daemons stopping: {}".format(self.name, ', '.join(running)))
+                sleep(
+                    0.1,
+                    "{}: waiting for daemons stopping: {}".format(
+                        self.name, ", ".join(running)
+                    ),
+                )
                 running = self.listDaemons()
 
                 counter = 20
                 while counter > 0 and running:
-                    sleep(0.5, "{}: waiting for daemons stopping: {}".format(self.name, ', '.join(running)))
+                    sleep(
+                        0.5,
+                        "{}: waiting for daemons stopping: {}".format(
+                            self.name, ", ".join(running)
+                        ),
+                    )
                     running = self.listDaemons()
                     counter -= 1
 
             if running:
                 # 2nd round of kill if daemons didn't exit
-                dmns = rundaemons.split('\n')
+                dmns = rundaemons.split("\n")
                 # Exclude empty string at end of list
                 for d in dmns[:-1]:
                     daemonpid = self.cmd("cat %s" % d.rstrip()).rstrip()
@@ -1186,7 +1251,7 @@ class Router(Node):
         if self.checkRouterVersion("<", minErrorVersion):
             # ignore errors in old versions
             errors = ""
-        if assertOnError and len(errors) > 0:
+        if assertOnError and errors is not None and len(errors) > 0:
             assert "Errors found - details follow:" == 0, errors
         return errors
 
@@ -1313,17 +1378,19 @@ class Router(Node):
     def startRouterDaemons(self, daemons=None):
         "Starts all FRR daemons for this router."
 
-        bundle_data = ''
+        bundle_data = ""
 
-        if os.path.exists('/etc/frr/support_bundle_commands.conf'):
+        if os.path.exists("/etc/frr/support_bundle_commands.conf"):
             bundle_data = subprocess.check_output(
-                ["cat /etc/frr/support_bundle_commands.conf"], shell=True)
+                ["cat /etc/frr/support_bundle_commands.conf"], shell=True
+            )
         self.cmd(
             "echo '{}' > /etc/frr/support_bundle_commands.conf".format(bundle_data)
         )
 
         # Starts actual daemons without init (ie restart)
         # cd to per node directory
+        self.cmd("install -d {}/{}".format(self.logdir, self.name))
         self.cmd("cd {}/{}".format(self.logdir, self.name))
         self.cmd("umask 000")
 
@@ -1340,7 +1407,9 @@ class Router(Node):
         # If `daemons` was specified then some upper API called us with
         # specific daemons, otherwise just use our own configuration.
         daemons_list = []
-        if daemons is None:
+        if daemons != None:
+            daemons_list = daemons
+        else:
             # Append all daemons configured.
             for daemon in self.daemons:
                 if self.daemons[daemon] == 1:
@@ -1351,7 +1420,7 @@ class Router(Node):
             zebra_path = os.path.join(self.daemondir, "zebra")
             zebra_option = self.daemons_options["zebra"]
             self.cmd(
-                "{0} {1} --log stdout --log-level debug -s 90000000 -d > zebra.out 2> zebra.err".format(
+                "ASAN_OPTIONS=log_path=zebra.asan {0} {1} --log file:zebra.log --log-level debug -s 90000000 -d > zebra.out 2> zebra.err".format(
                     zebra_path, zebra_option, self.logdir, self.name
                 )
             )
@@ -1366,7 +1435,7 @@ class Router(Node):
             staticd_path = os.path.join(self.daemondir, "staticd")
             staticd_option = self.daemons_options["staticd"]
             self.cmd(
-                "{0} {1} --log stdout --log-level debug -d > staticd.out 2> staticd.err".format(
+                "ASAN_OPTIONS=log_path=staticd.asan {0} {1} --log file:staticd.log --log-level debug -d > staticd.out 2> staticd.err".format(
                     staticd_path, staticd_option, self.logdir, self.name
                 )
             )
@@ -1390,7 +1459,7 @@ class Router(Node):
 
             daemon_path = os.path.join(self.daemondir, daemon)
             self.cmd(
-                "{0} {1} --log stdout --log-level debug -d > {2}.out 2> {2}.err".format(
+                "ASAN_OPTIONS=log_path={2}.asan {0} {1} --log file:{2}.log --log-level debug -d > {2}.out 2> {2}.err".format(
                     daemon_path, self.daemons_options.get(daemon, ""), daemon
                 )
             )
@@ -1406,7 +1475,7 @@ class Router(Node):
     def killRouterDaemons(
         self, daemons, wait=True, assertOnError=True, minErrorVersion="5.1"
     ):
-        # Kill Running Quagga or FRR specific
+        # Kill Running FRR
         # Daemons(user specified daemon only) using SIGKILL
         rundaemons = self.cmd("ls -1 /var/run/%s/*.pid" % self.routertype)
         errors = ""
@@ -1416,7 +1485,7 @@ class Router(Node):
         for daemon in daemons:
             if rundaemons is not None and daemon in rundaemons:
                 numRunning = 0
-                dmns = rundaemons.split('\n')
+                dmns = rundaemons.split("\n")
                 # Exclude empty string at end of list
                 for d in dmns[:-1]:
                     if re.search(r"%s" % daemon, d):
@@ -1512,7 +1581,7 @@ class Router(Node):
                         reportMade = True
                 # Look for AddressSanitizer Errors and append to /tmp/AddressSanitzer.txt if found
                 if checkAddressSanitizerError(
-                    self.getStdErr(daemon), self.name, daemon
+                    self.getStdErr(daemon), self.name, daemon, self.logdir
                 ):
                     sys.stderr.write(
                         "%s: Daemon %s killed by AddressSanitizer" % (self.name, daemon)
@@ -1541,7 +1610,7 @@ class Router(Node):
         for daemon in self.daemons:
             if (self.daemons[daemon] == 1) and not (daemon in daemonsRunning):
                 sys.stderr.write("%s: Daemon %s not running\n" % (self.name, daemon))
-                if daemon is "staticd":
+                if daemon == "staticd":
                     sys.stderr.write(
                         "You may have a copy of staticd installed but are attempting to test against\n"
                     )
@@ -1576,7 +1645,7 @@ class Router(Node):
 
                 # Look for AddressSanitizer Errors and append to /tmp/AddressSanitzer.txt if found
                 if checkAddressSanitizerError(
-                    self.getStdErr(daemon), self.name, daemon
+                    self.getStdErr(daemon), self.name, daemon, self.logdir
                 ):
                     return "%s: Daemon %s not running - killed by AddressSanitizer" % (
                         self.name,
@@ -1607,7 +1676,7 @@ class Router(Node):
             logger.info("{}: running version: {}".format(self.name, self.version))
 
         rversion = self.version
-        if rversion is None:
+        if rversion == None:
             return False
 
         result = version_cmp(rversion, version)
@@ -1668,7 +1737,7 @@ class Router(Node):
         return True
 
     def get_routertype(self):
-        "Return the type of Router (frr or quagga)"
+        "Return the type of Router (frr)"
 
         return self.routertype
 
@@ -1753,3 +1822,11 @@ class LegacySwitch(OVSSwitch):
     def __init__(self, name, **params):
         OVSSwitch.__init__(self, name, failMode="standalone", **params)
         self.switchIP = None
+
+
+def frr_unicode(s):
+    """Convert string to unicode, depending on python version"""
+    if sys.version_info[0] > 2:
+        return s
+    else:
+        return unicode(s)

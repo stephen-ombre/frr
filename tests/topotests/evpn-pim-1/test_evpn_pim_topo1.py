@@ -97,7 +97,7 @@ class NetworkTopo(Topo):
 ##
 #####################################################
 
-
+@pytest.mark.pim
 def setup_module(module):
     "Setup topology"
     tgen = Topogen(NetworkTopo, module.__name__)
@@ -123,7 +123,7 @@ def setup_module(module):
     # tgen.mininet_cli()
     # This is a sample of configuration loading.
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )

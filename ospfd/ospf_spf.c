@@ -200,10 +200,10 @@ static struct vertex *ospf_vertex_new(struct ospf_area *area,
 	listnode_add(area->spf_vertex_list, new);
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("%s: Created %s vertex %s", __func__,
+		zlog_debug("%s: Created %s vertex %pI4", __func__,
 			   new->type == OSPF_VERTEX_ROUTER ? "Router"
 							   : "Network",
-			   inet_ntoa(new->lsa->id));
+			   &new->lsa->id);
 
 	return new;
 }
@@ -213,9 +213,9 @@ static void ospf_vertex_free(void *data)
 	struct vertex *v = data;
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("%s: Free %s vertex %s", __func__,
+		zlog_debug("%s: Free %s vertex %pI4", __func__,
 			   v->type == OSPF_VERTEX_ROUTER ? "Router" : "Network",
-			   inet_ntoa(v->lsa->id));
+			   &v->lsa->id);
 
 	if (v->children)
 		list_delete(&v->children);
@@ -234,9 +234,9 @@ static void ospf_vertex_dump(const char *msg, struct vertex *v,
 	if (!IS_DEBUG_OSPF_EVENT)
 		return;
 
-	zlog_debug("%s %s vertex %s  distance %u flags %u", msg,
+	zlog_debug("%s %s vertex %pI4  distance %u flags %u", msg,
 		   v->type == OSPF_VERTEX_ROUTER ? "Router" : "Network",
-		   inet_ntoa(v->lsa->id), v->distance, (unsigned int)v->flags);
+		   &v->lsa->id, v->distance, (unsigned int)v->flags);
 
 	if (print_parents) {
 		struct listnode *node;
@@ -247,8 +247,8 @@ static void ospf_vertex_dump(const char *msg, struct vertex *v,
 
 			if (vp) {
 				zlog_debug(
-					"parent %s backlink %d nexthop %s  lsa pos %d",
-					inet_ntoa(vp->parent->lsa->id),
+					"parent %pI4 backlink %d nexthop %s  lsa pos %d",
+					&vp->parent->lsa->id,
 					vp->backlink,
 					inet_ntop(AF_INET, &vp->nexthop->router,
 						  buf1, BUFSIZ),
@@ -583,6 +583,21 @@ static unsigned int ospf_nexthop_calculation(struct ospf_area *area,
 			struct router_lsa_link *l2 = NULL;
 
 			if (l->m[0].type == LSA_LINK_TYPE_POINTOPOINT) {
+				struct ospf_interface *oi = NULL;
+				struct in_addr nexthop = {.s_addr = 0};
+
+				oi = ospf_if_lookup_by_lsa_pos(area, lsa_pos);
+				if (!oi) {
+					zlog_debug(
+						"%s: OI not found in LSA: lsa_pos: %d link_id:%s link_data:%s",
+						__func__, lsa_pos,
+						inet_ntop(AF_INET, &l->link_id,
+							  buf1, BUFSIZ),
+						inet_ntop(AF_INET,
+							  &l->link_data, buf2,
+							  BUFSIZ));
+					return 0;
+				}
 
 				/*
 				 * If the destination is a router which connects
@@ -629,17 +644,12 @@ static unsigned int ospf_nexthop_calculation(struct ospf_area *area,
 				 * as described above using a reverse lookup to
 				 * figure out the nexthop.
 				 */
+				if (oi->type == OSPF_IFTYPE_POINTOPOINT) {
+					struct ospf_neighbor *nbr_w = NULL;
 
-				struct in_addr nexthop = {.s_addr = 0};
-				struct ospf_interface *oi = NULL;
-				struct ospf_neighbor *nbr_w = NULL;
-
-				/* Calculating node is root node, link is P2P */
-				if (area->spf_root_node) {
-					oi = ospf_if_lookup_by_lsa_pos(area,
-								       lsa_pos);
-					if (oi->type
-					    == OSPF_IFTYPE_POINTOPOINT) {
+					/* Calculating node is root node, link
+					 * is P2P */
+					if (area->spf_root_node) {
 						nbr_w = ospf_nbr_lookup_by_routerid(
 							oi->nbrs, &l->link_id);
 						if (nbr_w) {
@@ -647,20 +657,45 @@ static unsigned int ospf_nexthop_calculation(struct ospf_area *area,
 							nexthop = nbr_w->src;
 						}
 					}
-				}
 
-				/* Reverse lookup */
-				if (!added) {
+					/* Reverse lookup */
+					if (!added) {
+						while ((l2 = ospf_get_next_link(
+								w, v, l2))) {
+							if (match_stub_prefix(
+								    v->lsa,
+								    l->link_data,
+								    l2->link_data)) {
+								added = 1;
+								nexthop =
+									l2->link_data;
+								break;
+							}
+						}
+					}
+				} else if (oi->type
+					   == OSPF_IFTYPE_POINTOMULTIPOINT) {
+					struct prefix_ipv4 la;
+
+					la.family = AF_INET;
+					la.prefixlen = oi->address->prefixlen;
+
+					/*
+					 * V links to W on PtMP interface;
+					 * find the interface address on W
+					 */
 					while ((l2 = ospf_get_next_link(w, v,
 									l2))) {
-						if (match_stub_prefix(
-							    v->lsa,
-							    l->link_data,
-							    l2->link_data)) {
-							added = 1;
-							nexthop = l2->link_data;
-							break;
-						}
+						la.prefix = l2->link_data;
+
+						if (prefix_cmp((struct prefix
+									*)&la,
+							       oi->address)
+						    != 0)
+							continue;
+						added = 1;
+						nexthop = l2->link_data;
+						break;
 					}
 				}
 
@@ -672,8 +707,8 @@ static unsigned int ospf_nexthop_calculation(struct ospf_area *area,
 					return 1;
 				} else
 					zlog_info(
-						"%s: could not determine nexthop for link",
-						__func__);
+						"%s: could not determine nexthop for link %s",
+						__func__, oi->ifp->name);
 			} /* end point-to-point link from V to W */
 			else if (l->m[0].type == LSA_LINK_TYPE_VIRTUALLINK) {
 				/*
@@ -826,9 +861,9 @@ static void ospf_spf_next(struct vertex *v, struct ospf_area *area,
 	}
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("%s: Next vertex of %s vertex %s", __func__,
+		zlog_debug("%s: Next vertex of %s vertex %pI4", __func__,
 			   v->type == OSPF_VERTEX_ROUTER ? "Router" : "Network",
-			   inet_ntoa(v->lsa->id));
+			   &v->lsa->id);
 
 	p = ((uint8_t *)v->lsa) + OSPF_LSA_HEADER_SIZE + 4;
 	lim = ((uint8_t *)v->lsa) + ntohs(v->lsa->length);
@@ -868,20 +903,20 @@ static void ospf_spf_next(struct vertex *v, struct ospf_area *area,
 				if (type == LSA_LINK_TYPE_VIRTUALLINK
 				    && IS_DEBUG_OSPF_EVENT)
 					zlog_debug(
-						"looking up LSA through VL: %s",
-						inet_ntoa(l->link_id));
+						"looking up LSA through VL: %pI4",
+						&l->link_id);
 				w_lsa = ospf_lsa_lookup(area->ospf, area,
 							OSPF_ROUTER_LSA,
 							l->link_id, l->link_id);
 				if (w_lsa && IS_DEBUG_OSPF_EVENT)
-					zlog_debug("found Router LSA %s",
-						   inet_ntoa(l->link_id));
+					zlog_debug("found Router LSA %pI4",
+						   &l->link_id);
 				break;
 			case LSA_LINK_TYPE_TRANSIT:
 				if (IS_DEBUG_OSPF_EVENT)
 					zlog_debug(
-						"Looking up Network LSA, ID: %s",
-						inet_ntoa(l->link_id));
+						"Looking up Network LSA, ID: %pI4",
+						&l->link_id);
 				w_lsa = ospf_lsa_lookup_by_id(
 					area, OSPF_NETWORK_LSA, l->link_id);
 				if (w_lsa && IS_DEBUG_OSPF_EVENT)
@@ -904,8 +939,8 @@ static void ospf_spf_next(struct vertex *v, struct ospf_area *area,
 			w_lsa = ospf_lsa_lookup_by_id(area, OSPF_ROUTER_LSA,
 						      *r);
 			if (w_lsa && IS_DEBUG_OSPF_EVENT)
-				zlog_debug("found Router LSA %s",
-					   inet_ntoa(w_lsa->data->id));
+				zlog_debug("found Router LSA %pI4",
+					   &w_lsa->data->id);
 
 			/* step (d) below */
 			distance = v->distance;
@@ -1003,20 +1038,21 @@ static void ospf_spf_dump(struct vertex *v, int i)
 
 	if (v->type == OSPF_VERTEX_ROUTER) {
 		if (IS_DEBUG_OSPF_EVENT)
-			zlog_debug("SPF Result: %d [R] %s", i,
-				   inet_ntoa(v->lsa->id));
+			zlog_debug("SPF Result: %d [R] %pI4", i,
+				   &v->lsa->id);
 	} else {
 		struct network_lsa *lsa = (struct network_lsa *)v->lsa;
 		if (IS_DEBUG_OSPF_EVENT)
-			zlog_debug("SPF Result: %d [N] %s/%d", i,
-				   inet_ntoa(v->lsa->id),
+			zlog_debug("SPF Result: %d [N] %pI4/%d", i,
+				   &v->lsa->id,
 				   ip_masklen(lsa->mask));
 	}
 
 	if (IS_DEBUG_OSPF_EVENT)
 		for (ALL_LIST_ELEMENTS_RO(v->parents, nnode, parent)) {
-			zlog_debug(" nexthop %p %s %d", (void *)parent->nexthop,
-				   inet_ntoa(parent->nexthop->router),
+			zlog_debug(" nexthop %p %pI4 %d",
+				   (void *)parent->nexthop,
+				   &parent->nexthop->router,
 				   parent->nexthop->lsa_pos);
 		}
 
@@ -1033,17 +1069,17 @@ void ospf_spf_print(struct vty *vty, struct vertex *v, int i)
 	struct vertex_parent *parent;
 
 	if (v->type == OSPF_VERTEX_ROUTER) {
-		vty_out(vty, "SPF Result: depth %d [R] %s\n", i,
-			inet_ntoa(v->lsa->id));
+		vty_out(vty, "SPF Result: depth %d [R] %pI4\n", i,
+			&v->lsa->id);
 	} else {
 		struct network_lsa *lsa = (struct network_lsa *)v->lsa;
-		vty_out(vty, "SPF Result: depth %d [N] %s/%d\n", i,
-			inet_ntoa(v->lsa->id), ip_masklen(lsa->mask));
+		vty_out(vty, "SPF Result: depth %d [N] %pI4/%d\n", i,
+			&v->lsa->id, ip_masklen(lsa->mask));
 	}
 
 	for (ALL_LIST_ELEMENTS_RO(v->parents, nnode, parent)) {
-		vty_out(vty, " nexthop %s lsa pos %d\n",
-			inet_ntoa(parent->nexthop->router),
+		vty_out(vty, " nexthop %pI4 lsa pos %d\n",
+			&parent->nexthop->router,
 			parent->nexthop->lsa_pos);
 	}
 
@@ -1061,8 +1097,8 @@ static void ospf_spf_process_stubs(struct ospf_area *area, struct vertex *v,
 	struct vertex *child;
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("ospf_process_stub():processing stubs for area %s",
-			   inet_ntoa(area->area_id));
+		zlog_debug("ospf_process_stub():processing stubs for area %pI4",
+			   &area->area_id);
 
 	if (v->type == OSPF_VERTEX_ROUTER) {
 		uint8_t *p;
@@ -1073,8 +1109,8 @@ static void ospf_spf_process_stubs(struct ospf_area *area, struct vertex *v,
 
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"ospf_process_stubs():processing router LSA, id: %s",
-				inet_ntoa(v->lsa->id));
+				"ospf_process_stubs():processing router LSA, id: %pI4",
+				&v->lsa->id);
 
 		router_lsa = (struct router_lsa *)v->lsa;
 
@@ -1202,7 +1238,7 @@ ospf_rtrs_print (struct route_table *rtrs)
 
           for (ALL_LIST_ELEMENTS_RO (or->paths, pnode, path))
             {
-              if (path->nexthop.s_addr == 0)
+              if (path->nexthop.s_addr == INADDR_ANY)
                 {
                   if (IS_DEBUG_OSPF_EVENT)
                     zlog_debug ("   directly attached to %s\r",
@@ -1211,8 +1247,8 @@ ospf_rtrs_print (struct route_table *rtrs)
               else
                 {
                   if (IS_DEBUG_OSPF_EVENT)
-                    zlog_debug ("   via %s, %s\r",
-				inet_ntoa (path->nexthop),
+                    zlog_debug ("   via %pI4, %s\r",
+				&path->nexthop,
 				ifindex2ifname (path->ifindex), VRF_DEFAULT);
                 }
             }
@@ -1233,8 +1269,8 @@ void ospf_spf_calculate(struct ospf_area *area, struct ospf_lsa *root_lsa,
 
 	if (IS_DEBUG_OSPF_EVENT) {
 		zlog_debug("ospf_spf_calculate: Start");
-		zlog_debug("ospf_spf_calculate: running Dijkstra for area %s",
-			   inet_ntoa(area->area_id));
+		zlog_debug("ospf_spf_calculate: running Dijkstra for area %pI4",
+			   &area->area_id);
 	}
 
 	/*
@@ -1245,8 +1281,8 @@ void ospf_spf_calculate(struct ospf_area *area, struct ospf_lsa *root_lsa,
 	if (!root_lsa) {
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
-				"ospf_spf_calculate: Skip area %s's calculation due to empty root LSA",
-				inet_ntoa(area->area_id));
+				"ospf_spf_calculate: Skip area %pI4's calculation due to empty root LSA",
+				&area->area_id);
 		return;
 	}
 
@@ -1431,8 +1467,11 @@ static int ospf_spf_calculate_schedule_worker(struct thread *thread)
 
 	/* ABRs may require additional changes, see RFC 2328 16.7. */
 	monotime(&start_time);
-	if (IS_OSPF_ABR(ospf))
+	if (IS_OSPF_ABR(ospf)) {
+		if (ospf->anyNSSA)
+			ospf_abr_nssa_check_status(ospf);
 		ospf_abr_task(ospf);
+	}
 	abr_time = monotime_since(&start_time, NULL);
 
 	/* Schedule Segment Routing update */
@@ -1444,20 +1483,19 @@ static int ospf_spf_calculate_schedule_worker(struct thread *thread)
 	rbuf[0] = '\0';
 	if (spf_reason_flags) {
 		if (spf_reason_flags & SPF_FLAG_ROUTER_LSA_INSTALL)
-			strncat(rbuf, "R, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "R, ", sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_NETWORK_LSA_INSTALL)
-			strncat(rbuf, "N, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "N, ", sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_SUMMARY_LSA_INSTALL)
-			strncat(rbuf, "S, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "S, ", sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_ASBR_SUMMARY_LSA_INSTALL)
-			strncat(rbuf, "AS, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "AS, ", sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_ABR_STATUS_CHANGE)
-			strncat(rbuf, "ABR, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "ABR, ", sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_ASBR_STATUS_CHANGE)
-			strncat(rbuf, "ASBR, ",
-				sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "ASBR, ",	sizeof(rbuf));
 		if (spf_reason_flags & SPF_FLAG_MAXAGE)
-			strncat(rbuf, "M, ", sizeof(rbuf) - strlen(rbuf) - 1);
+			strlcat(rbuf, "M, ", sizeof(rbuf));
 
 		size_t rbuflen = strlen(rbuf);
 		if (rbuflen >= 2)

@@ -76,6 +76,7 @@ from lib.common_config import (
     create_prefix_lists,
     create_route_maps,
     verify_bgp_community,
+    required_linux_kernel_version,
 )
 from lib.topolog import logger
 from lib.bgp import (
@@ -136,6 +137,11 @@ def setup_module(mod):
 
     * `mod`: module name
     """
+
+    # Required linux kernel version for this suite to run.
+    result = required_linux_kernel_version("4.15")
+    if result is not True:
+        pytest.skip("Kernel requirements are not met")
 
     testsuite_run_time = time.asctime(time.localtime(time.time()))
     logger.info("Testsuite start time: {}".format(testsuite_run_time))
@@ -276,10 +282,26 @@ def test_BGP_config_with_invalid_ASN_p2(request):
 
     # Api call to modify AS number
     input_dict = {
-        "r1": {"bgp": {"local_as": 0,}},
-        "r2": {"bgp": {"local_as": 0,}},
-        "r3": {"bgp": {"local_as": 0,}},
-        "r4": {"bgp": {"local_as": 64000,}},
+        "r1": {
+            "bgp": {
+                "local_as": 0,
+            }
+        },
+        "r2": {
+            "bgp": {
+                "local_as": 0,
+            }
+        },
+        "r3": {
+            "bgp": {
+                "local_as": 0,
+            }
+        },
+        "r4": {
+            "bgp": {
+                "local_as": 64000,
+            }
+        },
     }
     result = modify_as_number(tgen, topo, input_dict)
     try:
@@ -561,7 +583,7 @@ def test_BGP_attributes_with_vrf_default_keyword_p0(request):
     if tgen.routers_have_failure():
         pytest.skip(tgen.errors)
 
-    #reset_config_on_routers(tgen)
+    # reset_config_on_routers(tgen)
 
     step("Configure static routes and redistribute in BGP on R3")
     for addr_type in ADDR_TYPES:
@@ -813,7 +835,11 @@ def test_bgp_with_loopback_interface(request):
             # Adding ['source_link'] = 'lo' key:value pair
             topo["routers"][routerN]["bgp"]["address_family"]["ipv4"]["unicast"][
                 "neighbor"
-            ][bgp_neighbor]["dest_link"] = {"lo": {"source_link": "lo",}}
+            ][bgp_neighbor]["dest_link"] = {
+                "lo": {
+                    "source_link": "lo",
+                }
+            }
 
     # Creating configuration from JSON
     build_config_from_json(tgen, topo)

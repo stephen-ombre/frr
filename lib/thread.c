@@ -35,6 +35,8 @@
 #include "frratomic.h"
 #include "frr_pthread.h"
 #include "lib_errors.h"
+#include "libfrr_trace.h"
+#include "libfrr.h"
 
 DEFINE_MTYPE_STATIC(LIB, THREAD, "Thread")
 DEFINE_MTYPE_STATIC(LIB, THREAD_MASTER, "Thread master")
@@ -114,10 +116,9 @@ static void vty_out_cpu_thread_history(struct vty *vty,
 				       struct cpu_thread_history *a)
 {
 	vty_out(vty, "%5zu %10zu.%03zu %9zu %8zu %9zu %8zu %9zu",
-		(size_t)a->total_active, a->cpu.total / 1000,
-		a->cpu.total % 1000, (size_t)a->total_calls,
-		(size_t)(a->cpu.total / a->total_calls), a->cpu.max,
-		(size_t)(a->real.total / a->total_calls), a->real.max);
+		a->total_active, a->cpu.total / 1000, a->cpu.total % 1000,
+		a->total_calls,	(a->cpu.total / a->total_calls), a->cpu.max,
+		(a->real.total / a->total_calls), a->real.max);
 	vty_out(vty, " %c%c%c%c%c %s\n",
 		a->types & (1 << THREAD_READ) ? 'R' : ' ',
 		a->types & (1 << THREAD_WRITE) ? 'W' : ' ',
@@ -438,21 +439,31 @@ struct thread_master *thread_master_create(const char *name)
 	pthread_cond_init(&rv->cancel_cond, NULL);
 
 	/* Set name */
-	rv->name = name ? XSTRDUP(MTYPE_THREAD_MASTER, name) : NULL;
+	name = name ? name : "default";
+	rv->name = XSTRDUP(MTYPE_THREAD_MASTER, name);
 
 	/* Initialize I/O task data structures */
-	getrlimit(RLIMIT_NOFILE, &limit);
-	rv->fd_limit = (int)limit.rlim_cur;
+
+	/* Use configured limit if present, ulimit otherwise. */
+	rv->fd_limit = frr_get_fd_limit();
+	if (rv->fd_limit == 0) {
+		getrlimit(RLIMIT_NOFILE, &limit);
+		rv->fd_limit = (int)limit.rlim_cur;
+	}
+
 	rv->read = XCALLOC(MTYPE_THREAD_POLL,
 			   sizeof(struct thread *) * rv->fd_limit);
 
 	rv->write = XCALLOC(MTYPE_THREAD_POLL,
 			    sizeof(struct thread *) * rv->fd_limit);
 
+	char tmhashname[strlen(name) + 32];
+	snprintf(tmhashname, sizeof(tmhashname), "%s - threadmaster event hash",
+		 name);
 	rv->cpu_record = hash_create_size(
 		8, (unsigned int (*)(const void *))cpu_record_hash_key,
 		(bool (*)(const void *, const void *))cpu_record_hash_cmp,
-		"Thread Hash");
+		tmhashname);
 
 	thread_list_init(&rv->event);
 	thread_list_init(&rv->ready);
@@ -723,9 +734,13 @@ static void thread_free(struct thread_master *master, struct thread *thread)
 	XFREE(MTYPE_THREAD, thread);
 }
 
-static int fd_poll(struct thread_master *m, struct pollfd *pfds, nfds_t pfdsize,
-		   nfds_t count, const struct timeval *timer_wait)
+static int fd_poll(struct thread_master *m, const struct timeval *timer_wait,
+		   bool *eintr_p)
 {
+	sigset_t origsigs;
+	unsigned char trash[64];
+	nfds_t count = m->handler.copycount;
+
 	/*
 	 * If timer_wait is null here, that means poll() should block
 	 * indefinitely, unless the thread_master has overridden it by setting
@@ -756,15 +771,58 @@ static int fd_poll(struct thread_master *m, struct pollfd *pfds, nfds_t pfdsize,
 	rcu_assert_read_unlocked();
 
 	/* add poll pipe poker */
-	assert(count + 1 < pfdsize);
-	pfds[count].fd = m->io_pipe[0];
-	pfds[count].events = POLLIN;
-	pfds[count].revents = 0x00;
+	assert(count + 1 < m->handler.pfdsize);
+	m->handler.copy[count].fd = m->io_pipe[0];
+	m->handler.copy[count].events = POLLIN;
+	m->handler.copy[count].revents = 0x00;
 
-	num = poll(pfds, count + 1, timeout);
+	/* We need to deal with a signal-handling race here: we
+	 * don't want to miss a crucial signal, such as SIGTERM or SIGINT,
+	 * that may arrive just before we enter poll(). We will block the
+	 * key signals, then check whether any have arrived - if so, we return
+	 * before calling poll(). If not, we'll re-enable the signals
+	 * in the ppoll() call.
+	 */
 
-	unsigned char trash[64];
-	if (num > 0 && pfds[count].revents != 0 && num--)
+	sigemptyset(&origsigs);
+	if (m->handle_signals) {
+		/* Main pthread that handles the app signals */
+		if (frr_sigevent_check(&origsigs)) {
+			/* Signal to process - restore signal mask and return */
+			pthread_sigmask(SIG_SETMASK, &origsigs, NULL);
+			num = -1;
+			*eintr_p = true;
+			goto done;
+		}
+	} else {
+		/* Don't make any changes for the non-main pthreads */
+		pthread_sigmask(SIG_SETMASK, NULL, &origsigs);
+	}
+
+#if defined(HAVE_PPOLL)
+	struct timespec ts, *tsp;
+
+	if (timeout >= 0) {
+		ts.tv_sec = timeout / 1000;
+		ts.tv_nsec = (timeout % 1000) * 1000000;
+		tsp = &ts;
+	} else
+		tsp = NULL;
+
+	num = ppoll(m->handler.copy, count + 1, tsp, &origsigs);
+	pthread_sigmask(SIG_SETMASK, &origsigs, NULL);
+#else
+	/* Not ideal - there is a race after we restore the signal mask */
+	pthread_sigmask(SIG_SETMASK, &origsigs, NULL);
+	num = poll(m->handler.copy, count + 1, timeout);
+#endif
+
+done:
+
+	if (num < 0 && errno == EINTR)
+		*eintr_p = true;
+
+	if (num > 0 && m->handler.copy[count].revents != 0 && num--)
 		while (read(m->io_pipe[0], &trash, sizeof(trash)) > 0)
 			;
 
@@ -782,6 +840,13 @@ struct thread *funcname_thread_add_read_write(int dir, struct thread_master *m,
 {
 	struct thread *thread = NULL;
 	struct thread **thread_array;
+
+	if (dir == THREAD_READ)
+		frrtrace(9, frr_libfrr, schedule_read, m, funcname, schedfrom,
+			 fromln, t_ptr, fd, 0, arg, 0);
+	else
+		frrtrace(9, frr_libfrr, schedule_write, m, funcname, schedfrom,
+			 fromln, t_ptr, fd, 0, arg, 0);
 
 	assert(fd >= 0 && fd < m->fd_limit);
 	frr_with_mutex(&m->mtx) {
@@ -856,6 +921,9 @@ funcname_thread_add_timer_timeval(struct thread_master *m,
 
 	assert(type == THREAD_TIMER);
 	assert(time_relative);
+
+	frrtrace(9, frr_libfrr, schedule_timer, m, funcname, schedfrom, fromln,
+		 t_ptr, 0, 0, arg, (long)time_relative->tv_sec);
 
 	frr_with_mutex(&m->mtx) {
 		if (t_ptr && *t_ptr)
@@ -934,6 +1002,9 @@ struct thread *funcname_thread_add_event(struct thread_master *m,
 					 struct thread **t_ptr, debugargdef)
 {
 	struct thread *thread = NULL;
+
+	frrtrace(9, frr_libfrr, schedule_event, m, funcname, schedfrom, fromln,
+		 t_ptr, 0, val, arg, 0);
 
 	assert(m != NULL);
 
@@ -1159,19 +1230,30 @@ void thread_cancel_event(struct thread_master *master, void *arg)
  *
  * @param thread task to cancel
  */
-void thread_cancel(struct thread *thread)
+void thread_cancel(struct thread **thread)
 {
-	struct thread_master *master = thread->master;
+	struct thread_master *master;
+
+	if (thread == NULL || *thread == NULL)
+		return;
+
+	master = (*thread)->master;
+
+	frrtrace(9, frr_libfrr, thread_cancel, master, (*thread)->funcname,
+		 (*thread)->schedfrom, (*thread)->schedfrom_line, NULL, (*thread)->u.fd,
+		 (*thread)->u.val, (*thread)->arg, (*thread)->u.sands.tv_sec);
 
 	assert(master->owner == pthread_self());
 
 	frr_with_mutex(&master->mtx) {
 		struct cancel_req *cr =
 			XCALLOC(MTYPE_TMP, sizeof(struct cancel_req));
-		cr->thread = thread;
+		cr->thread = *thread;
 		listnode_add(master->cancel_req, cr);
 		do_thread_cancel(master);
 	}
+
+	*thread = NULL;
 }
 
 /**
@@ -1202,6 +1284,17 @@ void thread_cancel_async(struct thread_master *master, struct thread **thread,
 			 void *eventobj)
 {
 	assert(!(thread && eventobj) && (thread || eventobj));
+
+	if (thread && *thread)
+		frrtrace(9, frr_libfrr, thread_cancel_async, master,
+			 (*thread)->funcname, (*thread)->schedfrom,
+			 (*thread)->schedfrom_line, NULL, (*thread)->u.fd,
+			 (*thread)->u.val, (*thread)->arg,
+			 (*thread)->u.sands.tv_sec);
+	else
+		frrtrace(9, frr_libfrr, thread_cancel_async, master, NULL, NULL,
+			 0, NULL, 0, 0, eventobj, 0);
+
 	assert(master->owner != pthread_self());
 
 	frr_with_mutex(&master->mtx) {
@@ -1223,6 +1316,9 @@ void thread_cancel_async(struct thread_master *master, struct thread **thread,
 		while (!master->canceled)
 			pthread_cond_wait(&master->cancel_cond, &master->mtx);
 	}
+
+	if (thread)
+		*thread = NULL;
 }
 /* ------------------------------------------------------------------------- */
 
@@ -1391,7 +1487,7 @@ struct thread *thread_fetch(struct thread_master *m, struct thread *fetch)
 	struct timeval zerotime = {0, 0};
 	struct timeval tv;
 	struct timeval *tw = NULL;
-
+	bool eintr_p = false;
 	int num = 0;
 
 	do {
@@ -1463,14 +1559,14 @@ struct thread *thread_fetch(struct thread_master *m, struct thread *fetch)
 
 		pthread_mutex_unlock(&m->mtx);
 		{
-			num = fd_poll(m, m->handler.copy, m->handler.pfdsize,
-				      m->handler.copycount, tw);
+			eintr_p = false;
+			num = fd_poll(m, tw, &eintr_p);
 		}
 		pthread_mutex_lock(&m->mtx);
 
 		/* Handle any errors received in poll() */
 		if (num < 0) {
-			if (errno == EINTR) {
+			if (eintr_p) {
 				pthread_mutex_unlock(&m->mtx);
 				/* loop around to signal handler */
 				continue;
@@ -1577,6 +1673,10 @@ void thread_call(struct thread *thread)
 	GETRUSAGE(&before);
 	thread->real = before.real;
 
+	frrtrace(9, frr_libfrr, thread_call, thread->master, thread->funcname,
+		 thread->schedfrom, thread->schedfrom_line, NULL, thread->u.fd,
+		 thread->u.val, thread->arg, thread->u.sands.tv_sec);
+
 	pthread_setspecific(thread_current, thread);
 	(*thread->func)(thread);
 	pthread_setspecific(thread_current, NULL);
@@ -1655,4 +1755,50 @@ void funcname_thread_execute(struct thread_master *m,
 
 	/* Give back or free thread. */
 	thread_add_unuse(m, thread);
+}
+
+/* Debug signal mask - if 'sigs' is NULL, use current effective mask. */
+void debug_signals(const sigset_t *sigs)
+{
+	int i, found;
+	sigset_t tmpsigs;
+	char buf[300];
+
+	/*
+	 * We're only looking at the non-realtime signals here, so we need
+	 * some limit value. Platform differences mean at some point we just
+	 * need to pick a reasonable value.
+	 */
+#if defined SIGRTMIN
+#  define LAST_SIGNAL SIGRTMIN
+#else
+#  define LAST_SIGNAL 32
+#endif
+
+
+	if (sigs == NULL) {
+		sigemptyset(&tmpsigs);
+		pthread_sigmask(SIG_BLOCK, NULL, &tmpsigs);
+		sigs = &tmpsigs;
+	}
+
+	found = 0;
+	buf[0] = '\0';
+
+	for (i = 0; i < LAST_SIGNAL; i++) {
+		char tmp[20];
+
+		if (sigismember(sigs, i) > 0) {
+			if (found > 0)
+				strlcat(buf, ",", sizeof(buf));
+			snprintf(tmp, sizeof(tmp), "%d", i);
+			strlcat(buf, tmp, sizeof(buf));
+			found++;
+		}
+	}
+
+	if (found == 0)
+		snprintf(buf, sizeof(buf), "<none>");
+
+	zlog_debug("%s: %s", __func__, buf);
 }

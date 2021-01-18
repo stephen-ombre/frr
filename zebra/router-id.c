@@ -331,7 +331,7 @@ DEFUN (ip_router_id_in_vrf,
        ip_router_id_in_vrf_cmd,
        "ip router-id A.B.C.D",
        IP_STR
-       "Manuall set the router-id\n"
+       "Manually set the router-id\n"
        "IP address to use for router-id\n")
 {
 	ZEBRA_DECLVAR_CONTEXT(vrf, zvrf);
@@ -361,7 +361,7 @@ DEFUN (ipv6_router_id_in_vrf,
        ipv6_router_id_in_vrf_cmd,
        "ipv6 router-id X:X::X:X",
        IP6_STR
-       "Manuall set the IPv6 router-id\n"
+       "Manually set the IPv6 router-id\n"
        "IPV6 address to use for router-id\n")
 {
 	ZEBRA_DECLVAR_CONTEXT(vrf, zvrf);
@@ -522,7 +522,8 @@ DEFUN (show_ip_router_id,
 			inet_ntop(AF_INET6, &zvrf->rid6_user_assigned.u.prefix6,
 				  addr_name, sizeof(addr_name));
 		} else {
-			if (zvrf->rid_user_assigned.u.prefix4.s_addr == 0)
+			if (zvrf->rid_user_assigned.u.prefix4.s_addr
+			    == INADDR_ANY)
 				return CMD_SUCCESS;
 			inet_ntop(AF_INET, &zvrf->rid_user_assigned.u.prefix4,
 				  addr_name, sizeof(addr_name));

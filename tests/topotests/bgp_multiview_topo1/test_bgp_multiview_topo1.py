@@ -23,7 +23,7 @@
 #
 
 """
-test_bgp_multiview_topo1.py: Simple Quagga/FRR Route-Server Test
+test_bgp_multiview_topo1.py: Simple FRR Route-Server Test
 
 +----------+ +----------+ +----------+ +----------+ +----------+
 |  peer1   | |  peer2   | |  peer3   | |  peer4   | |  peer5   |
@@ -165,7 +165,7 @@ def setup_module(module):
         print("peer%s" % i),
     print("")
 
-    # For debugging after starting Quagga/FRR daemons, uncomment the next line
+    # For debugging after starting FRR daemons, uncomment the next line
     # CLI(net)
 
 
@@ -193,7 +193,7 @@ def test_router_running():
     if fatal_error != "":
         pytest.skip(fatal_error)
 
-    print("\n\n** Check if FRR/Quagga is running on each Router node")
+    print("\n\n** Check if FRR is running on each Router node")
     print("******************************************\n")
 
     # Starting Routers
@@ -201,7 +201,7 @@ def test_router_running():
         fatal_error = net["r%s" % i].checkRouterRunning()
         assert fatal_error == "", fatal_error
 
-    # For debugging after starting FRR/Quagga daemons, uncomment the next line
+    # For debugging after starting FRR daemons, uncomment the next line
     # CLI(net)
 
 
@@ -226,7 +226,7 @@ def test_bgp_converge():
         for i in range(1, 2):
             for view in range(1, 4):
                 notConverged = net["r%s" % i].cmd(
-                    'vtysh -c "show ip bgp view %s summary" 2> /dev/null | grep ^[0-9] | grep -vP " 11\s+(\d+)$"'
+                    'vtysh -c "show ip bgp view %s summary" 2> /dev/null | grep ^[0-9] | grep -vP " 11\s+(\d+)"'
                     % view
                 )
                 if notConverged:
@@ -262,7 +262,7 @@ def test_bgp_converge():
         fatal_error = net["r%s" % i].checkRouterRunning()
         assert fatal_error == "", fatal_error
 
-    # For debugging after starting Quagga/FRR daemons, uncomment the next line
+    # For debugging after starting FRR daemons, uncomment the next line
     # CLI(net)
 
 
@@ -300,7 +300,7 @@ def test_bgp_routingTable():
                         .rstrip()
                     )
 
-                    # Fix inconsitent spaces between 0.99.24 and newer versions of Quagga...
+                    # Fix inconsitent spaces between 0.99.24 and newer versions
                     actual = re.sub("0             0", "0              0", actual)
                     actual = re.sub(
                         r"([0-9])         32768", r"\1          32768", actual
@@ -332,7 +332,7 @@ def test_bgp_routingTable():
 
             if not success:
                 resultstr = "No template matched.\n"
-                for f in diffresult.iterkeys():
+                for f in diffresult.keys():
                     resultstr += (
                         "template %s: r%s failed Routing Table Check for view %s:\n%s\n"
                         % (f, i, view, diffresult[f])
@@ -347,7 +347,7 @@ def test_bgp_routingTable():
         fatal_error = net["r%s" % i].checkRouterRunning()
         assert fatal_error == "", fatal_error
 
-    # For debugging after starting FRR/Quagga daemons, uncomment the next line
+    # For debugging after starting FRR daemons, uncomment the next line
     # CLI(net)
 
 

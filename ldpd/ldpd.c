@@ -604,8 +604,8 @@ main_dispatch_ldpe(struct thread *thread)
 		imsg_event_add(iev);
 	else {
 		/* this pipe is dead, so remove the event handlers and exit */
-		THREAD_READ_OFF(iev->ev_read);
-		THREAD_WRITE_OFF(iev->ev_write);
+		thread_cancel(&iev->ev_read);
+		thread_cancel(&iev->ev_write);
 		ldpe_pid = 0;
 		if (lde_pid == 0)
 			ldpd_shutdown();
@@ -625,6 +625,7 @@ main_dispatch_lde(struct thread *thread)
 	struct imsg	 imsg;
 	ssize_t		 n;
 	int		 shut = 0;
+	struct zapi_rlfa_response *rlfa_labels;
 
 	iev->ev_read = NULL;
 
@@ -691,6 +692,15 @@ main_dispatch_lde(struct thread *thread)
 				fatalx("IMSG_ACL_CHECK imsg with wrong len");
 			ldp_acl_reply(iev, (struct acl_check *)imsg.data);
 			break;
+		case IMSG_RLFA_LABELS:
+			if (imsg.hdr.len != IMSG_HEADER_SIZE +
+			    sizeof(struct zapi_rlfa_response)) {
+				log_warnx("%s: wrong imsg len", __func__);
+				break;
+			}
+			rlfa_labels = imsg.data;
+			ldp_zebra_send_rlfa_labels(rlfa_labels);
+			break;
 		default:
 			log_debug("%s: error handling imsg %d", __func__,
 			    imsg.hdr.type);
@@ -702,8 +712,8 @@ main_dispatch_lde(struct thread *thread)
 		imsg_event_add(iev);
 	else {
 		/* this pipe is dead, so remove the event handlers and exit */
-		THREAD_READ_OFF(iev->ev_read);
-		THREAD_WRITE_OFF(iev->ev_write);
+		thread_cancel(&iev->ev_read);
+		thread_cancel(&iev->ev_write);
 		lde_pid = 0;
 		if (ldpe_pid == 0)
 			ldpd_shutdown();
@@ -728,8 +738,8 @@ ldp_write_handler(struct thread *thread)
 		fatal("msgbuf_write");
 	if (n == 0) {
 		/* this pipe is dead, so remove the event handlers */
-		THREAD_READ_OFF(iev->ev_read);
-		THREAD_WRITE_OFF(iev->ev_write);
+		thread_cancel(&iev->ev_read);
+		thread_cancel(&iev->ev_write);
 		return (0);
 	}
 
@@ -816,7 +826,7 @@ evbuf_init(struct evbuf *eb, int fd, int (*handler)(struct thread *),
 void
 evbuf_clear(struct evbuf *eb)
 {
-	THREAD_WRITE_OFF(eb->ev);
+	thread_cancel(&eb->ev);
 	msgbuf_clear(&eb->wbuf);
 	eb->wbuf.fd = -1;
 }

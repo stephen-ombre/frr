@@ -102,9 +102,6 @@ enum yang_iter_flags {
 
 	/* Filter implicitely created nodes. */
 	YANG_ITER_FILTER_IMPLICIT = (1<<3),
-
-	/* Allow iteration over augmentations. */
-	YANG_ITER_ALLOW_AUGMENTATIONS = (1<<4),
 };
 
 /* Callback used by the yang_snodes_iterate_*() family of functions. */
@@ -168,6 +165,9 @@ extern void yang_module_embed(struct yang_module_embed *embed);
  * snode
  *    YANG schema node to operate on.
  *
+ * module
+ *    When set, iterate over all nodes of the specified module only.
+ *
  * cb
  *    Function to call with each schema node.
  *
@@ -181,14 +181,16 @@ extern void yang_module_embed(struct yang_module_embed *embed);
  *    The return value of the last called callback.
  */
 extern int yang_snodes_iterate_subtree(const struct lys_node *snode,
+				       const struct lys_module *module,
 				       yang_iterate_cb cb, uint16_t flags,
 				       void *arg);
 
 /*
- * Iterate over all libyang schema nodes from the given YANG module.
+ * Iterate over all libyang schema nodes from all loeaded modules of from the
+ * given YANG module.
  *
  * module
- *    YANG module to operate on.
+ *    When set, iterate over all nodes of the specified module only.
  *
  * cb
  *    Function to call with each schema node.
@@ -202,27 +204,8 @@ extern int yang_snodes_iterate_subtree(const struct lys_node *snode,
  * Returns:
  *    The return value of the last called callback.
  */
-extern int yang_snodes_iterate_module(const struct lys_module *module,
-				      yang_iterate_cb cb, uint16_t flags,
-				      void *arg);
-
-/*
- * Iterate over all libyang schema nodes from all loaded YANG modules.
- *
- * cb
- *    Function to call with each schema node.
- *
- * flags
- *    YANG_ITER_* flags to control how the iteration is performed.
- *
- * arg
- *    Arbitrary argument passed as the second parameter in each call to 'cb'.
- *
- * Returns:
- *    The return value of the last called callback.
- */
-extern int yang_snodes_iterate_all(yang_iterate_cb cb, uint16_t flags,
-				   void *arg);
+extern int yang_snodes_iterate(const struct lys_module *module,
+			       yang_iterate_cb cb, uint16_t flags, void *arg);
 
 /*
  * Build schema path or data path of the schema node.
@@ -604,6 +587,11 @@ extern uint32_t yang_get_list_elements_count(const struct lyd_node *node);
 /* To get the immediate child of a dnode */
 const struct lyd_node *yang_dnode_get_child(const struct lyd_node *dnode);
 
+/* API to check if the given node is last node in the list */
+bool yang_is_last_list_dnode(const struct lyd_node *dnode);
+
+/* API to check if the given node is last node in the data tree level */
+bool yang_is_last_level_dnode(const struct lyd_node *dnode);
 
 #ifdef __cplusplus
 }

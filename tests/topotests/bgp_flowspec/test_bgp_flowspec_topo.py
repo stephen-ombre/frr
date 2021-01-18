@@ -124,7 +124,7 @@ def setup_module(module):
     router.start()
 
     peer_list = tgen.exabgp_peers()
-    for pname, peer in peer_list.iteritems():
+    for pname, peer in peer_list.items():
         peer_dir = os.path.join(CWD, pname)
         env_file = os.path.join(CWD, "exabgp.env")
         peer.start(peer_dir, env_file)
@@ -199,6 +199,7 @@ def test_bgp_flowspec():
         assert 0, assertmsg
     else:
         logger.info("Check BGP FS entry for 3::3 with redirect IP OK")
+
 
 if __name__ == "__main__":
 

@@ -258,7 +258,7 @@ static char *ospf6_lsdesc_backlink(struct ospf6_lsa *lsa, caddr_t lsdesc,
 }
 
 static void ospf6_nexthop_calc(struct ospf6_vertex *w, struct ospf6_vertex *v,
-			       caddr_t lsdesc)
+			       caddr_t lsdesc, struct ospf6 *ospf6)
 {
 	int i;
 	ifindex_t ifindex;
@@ -320,7 +320,6 @@ static int ospf6_spf_install(struct ospf6_vertex *v,
 {
 	struct ospf6_route *route, *parent_route;
 	struct ospf6_vertex *prev;
-	char pbuf[PREFIX2STR_BUFFER];
 
 	if (IS_OSPF6_DEBUG_SPF(PROCESS))
 		zlog_debug("SPF install %s (lsa %s) hops %d cost %d", v->name,
@@ -335,12 +334,10 @@ static int ospf6_spf_install(struct ospf6_vertex *v,
 		ospf6_vertex_delete(v);
 		return -1;
 	} else if (route && route->path.cost == v->cost) {
-		if (IS_OSPF6_DEBUG_SPF(PROCESS)) {
-			prefix2str(&route->prefix, pbuf, sizeof(pbuf));
+		if (IS_OSPF6_DEBUG_SPF(PROCESS))
 			zlog_debug(
-				"  another path found to route %s lsa %s, merge",
-				pbuf, v->lsa->name);
-		}
+				"  another path found to route %pFX lsa %s, merge",
+				&route->prefix, v->lsa->name);
 		ospf6_spf_merge_nexthops_to_route(route, v);
 
 		prev = (struct ospf6_vertex *)route->route_option;
@@ -544,7 +541,7 @@ void ospf6_spf_calculation(uint32_t router_id,
 					w->nh_list,
 					ROUTER_LSDESC_GET_IFID(lsdesc), NULL);
 			else if (w->hops == 1 && v->hops == 0)
-				ospf6_nexthop_calc(w, v, lsdesc);
+				ospf6_nexthop_calc(w, v, lsdesc, oa->ospf6);
 			else
 				ospf6_copy_nexthops(w->nh_list, v->nh_list);
 
@@ -915,7 +912,7 @@ int config_write_ospf6_debug_spf(struct vty *vty)
 	return 0;
 }
 
-void ospf6_spf_config_write(struct vty *vty)
+void ospf6_spf_config_write(struct vty *vty, struct ospf6 *ospf6)
 {
 
 	if (ospf6->spf_delay != OSPF_SPF_DELAY_DEFAULT
@@ -1082,9 +1079,9 @@ struct ospf6_lsa *ospf6_create_single_router_lsa(struct ospf6_area *area,
 
 void ospf6_remove_temp_router_lsa(struct ospf6_area *area)
 {
-	struct ospf6_lsa *lsa = NULL;
+	struct ospf6_lsa *lsa = NULL, *lsanext;
 
-	for (ALL_LSDB(area->temp_router_lsa_lsdb, lsa)) {
+	for (ALL_LSDB(area->temp_router_lsa_lsdb, lsa, lsanext)) {
 		if (IS_OSPF6_DEBUG_SPF(PROCESS))
 			zlog_debug(
 				"%s Remove LSA %s lsa->lock %u lsdb count %u",

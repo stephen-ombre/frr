@@ -80,7 +80,7 @@ class NetworkTopo(Topo):
 ##
 #####################################################
 
-
+@pytest.mark.pbr
 def setup_module(module):
     "Setup topology"
     tgen = Topogen(NetworkTopo, module.__name__)
@@ -88,11 +88,11 @@ def setup_module(module):
 
     krel = platform.release()
     if topotest.version_cmp(krel, "4.10") < 0:
-	tgen.errors = "Newer kernel than 4.9 needed for pbr tests"
-	pytest.skip(tgen.errors)
+        tgen.errors = "Newer kernel than 4.9 needed for pbr tests"
+        pytest.skip(tgen.errors)
 
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         # Install vrf into the kernel and slave eth3
         router.run("ip link add vrf-chiyoda type vrf table 1000")
         router.run("ip link set dev {}-eth3 master vrf-chiyoda".format(rname))
@@ -147,11 +147,13 @@ def test_pbr_data():
         expected = json.loads(open(intf_file).read())
 
         # Actual output from router
-        test_func = partial(topotest.router_json_cmp, router, "show pbr interface json", expected)
+        test_func = partial(
+            topotest.router_json_cmp, router, "show pbr interface json", expected
+        )
         _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
         assertmsg = '"show pbr interface" mismatches on {}'.format(router.name)
-	if result is not None:
-	    gather_pbr_data_on_error(router)
+        if result is not None:
+            gather_pbr_data_on_error(router)
             assert result is None, assertmsg
 
         map_file = "{}/{}/pbr-map.json".format(CWD, router.name)
@@ -161,11 +163,13 @@ def test_pbr_data():
         expected = json.loads(open(map_file).read())
 
         # Actual output from router
-        test_func = partial(topotest.router_json_cmp, router, "show pbr map json", expected)
+        test_func = partial(
+            topotest.router_json_cmp, router, "show pbr map json", expected
+        )
         _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
         assertmsg = '"show pbr map" mismatches on {}'.format(router.name)
-	if result is not None:
-	    gather_pbr_data_on_error(router)
+        if result is not None:
+            gather_pbr_data_on_error(router)
             assert result is None, assertmsg
 
         nexthop_file = "{}/{}/pbr-nexthop-groups.json".format(CWD, router.name)
@@ -175,12 +179,15 @@ def test_pbr_data():
         expected = json.loads(open(nexthop_file).read())
 
         # Actual output from router
-        test_func = partial(topotest.router_json_cmp, router, "show pbr nexthop-groups json", expected)
+        test_func = partial(
+            topotest.router_json_cmp, router, "show pbr nexthop-groups json", expected
+        )
         _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
         assertmsg = '"show pbr nexthop-groups" mismatches on {}'.format(router.name)
-	if result is not None:
-	    gather_pbr_data_on_error(router)
+        if result is not None:
+            gather_pbr_data_on_error(router)
             assert result is None, assertmsg
+
 
 def test_pbr_flap():
     "Test PBR interface flapping"
@@ -212,11 +219,13 @@ def test_pbr_flap():
         expected = json.loads(open(intf_file).read())
 
         # Actual output from router
-        test_func = partial(topotest.router_json_cmp, router, "show pbr interface json", expected)
+        test_func = partial(
+            topotest.router_json_cmp, router, "show pbr interface json", expected
+        )
         _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
         assertmsg = '"show pbr interface" mismatches on {}'.format(router.name)
-	if result is not None:
-	    gather_pbr_data_on_error(router)
+        if result is not None:
+            gather_pbr_data_on_error(router)
             assert result is None, assertmsg
 
 
@@ -274,4 +283,3 @@ def gather_pbr_data_on_error(router):
     logger.info(router.run("ip route show table 10005"))
     logger.info(router.run("ip -6 route show table 10005"))
     logger.info(router.run("ip rule show"))
-

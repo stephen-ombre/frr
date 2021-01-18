@@ -187,6 +187,7 @@ babel_interface_address_delete (ZAPI_CALLBACK_ARGS)
     send_request(ifc->ifp, NULL, 0);
     send_update(ifc->ifp, 0, NULL, 0);
 
+    connected_free(&ifc);
     return 0;
 }
 
@@ -1106,6 +1107,7 @@ DEFUN (show_babel_route_addr,
 {
     struct in_addr addr;
     char buf[INET_ADDRSTRLEN + 8];
+    char buf1[INET_ADDRSTRLEN + 8];
     struct route_stream *routes = NULL;
     struct xroute_stream *xroutes = NULL;
     struct prefix prefix;
@@ -1118,7 +1120,8 @@ DEFUN (show_babel_route_addr,
     }
 
     /* Quagga has no convenient prefix constructors. */
-    snprintf(buf, sizeof(buf), "%s/%d", inet_ntoa(addr), 32);
+    snprintf(buf, sizeof(buf), "%s/%d",
+	     inet_ntop(AF_INET, &addr, buf1, sizeof(buf1)), 32);
 
     ret = str2prefix(buf, &prefix);
     if (ret == 0) {

@@ -12,31 +12,43 @@ TESTS_BGPD = \
 	tests/bgpd/test_mp_attr \
 	tests/bgpd/test_mpath \
 	tests/bgpd/test_bgp_table
+IGNORE_BGPD =
 else
 TESTS_BGPD =
+IGNORE_BGPD = --ignore=bgpd/
 endif
 
 if ISISD
-if SOLARIS
-TESTS_ISISD =
-else
 TESTS_ISISD = \
 	tests/isisd/test_fuzz_isis_tlv \
 	tests/isisd/test_isis_lspdb \
 	tests/isisd/test_isis_spf \
 	tests/isisd/test_isis_vertex_queue \
 	# end
-endif
+IGNORE_ISISD =
 else
 TESTS_ISISD =
+IGNORE_ISISD = --ignore=isisd/
 endif
 
 if OSPF6D
 TESTS_OSPF6D = \
 	tests/ospf6d/test_lsdb \
 	# end
+IGNORE_OSPF6D =
 else
 TESTS_OSPF6D =
+IGNORE_OSPF6D = --ignore=ospf6d/
+endif
+
+if ZEBRA
+TESTS_ZEBRA = \
+	tests/zebra/test_lm_plugin \
+	#end
+IGNORE_ZEBRA =
+else
+TESTS_ZEBRA =
+IGNORE_ZEBRA = --ignore=zebra/
 endif
 
 clippy_scan += \
@@ -79,6 +91,7 @@ check_PROGRAMS = \
 	$(TESTS_BGPD) \
 	$(TESTS_ISISD) \
 	$(TESTS_OSPF6D) \
+	$(TESTS_ZEBRA) \
 	# end
 
 if ZEROMQ
@@ -133,6 +146,7 @@ ALL_TESTS_LDADD = lib/libfrr.la $(LIBCAP)
 BGP_TEST_LDADD = bgpd/libbgp.a $(RFPLDADD) $(ALL_TESTS_LDADD) -lm
 ISISD_TEST_LDADD = isisd/libisis.a $(ALL_TESTS_LDADD)
 OSPF6_TEST_LDADD = ospf6d/libospf6.a $(ALL_TESTS_LDADD)
+ZEBRA_TEST_LDADD = zebra/label_manager.o $(ALL_TESTS_LDADD)
 
 tests_bgpd_test_aspath_CFLAGS = $(TESTS_CFLAGS)
 tests_bgpd_test_aspath_CPPFLAGS = $(TESTS_CPPFLAGS)
@@ -166,6 +180,19 @@ tests_bgpd_test_peer_attr_CFLAGS = $(TESTS_CFLAGS)
 tests_bgpd_test_peer_attr_CPPFLAGS = $(TESTS_CPPFLAGS)
 tests_bgpd_test_peer_attr_LDADD = $(BGP_TEST_LDADD)
 tests_bgpd_test_peer_attr_SOURCES = tests/bgpd/test_peer_attr.c
+nodist_tests_bgpd_test_peer_attr_SOURCES = \
+    yang/frr-bgp-types.yang.c \
+    yang/frr-bgp.yang.c \
+    yang/frr-bgp-common-structure.yang.c \
+    yang/frr-bgp-common.yang.c \
+    yang/frr-bgp-common-multiprotocol.yang.c \
+    yang/frr-bgp-neighbor.yang.c \
+    yang/frr-bgp-peer-group.yang.c \
+    yang/frr-bgp-bmp.yang.c \
+    yang/frr-bgp-rpki.yang.c \
+    yang/frr-deviations-bgp-datacenter.yang.c \
+    # end
+
 
 tests_isisd_test_fuzz_isis_tlv_CFLAGS = $(TESTS_CFLAGS) -I$(top_builddir)/tests/isisd
 tests_isisd_test_fuzz_isis_tlv_CPPFLAGS = $(TESTS_CPPFLAGS) -I$(top_builddir)/tests/isisd
@@ -321,6 +348,11 @@ tests_ospf6d_test_lsdb_CPPFLAGS = $(TESTS_CPPFLAGS)
 tests_ospf6d_test_lsdb_LDADD = $(OSPF6_TEST_LDADD)
 tests_ospf6d_test_lsdb_SOURCES = tests/ospf6d/test_lsdb.c tests/lib/cli/common_cli.c
 
+tests_zebra_test_lm_plugin_CFLAGS = $(TESTS_CFLAGS)
+tests_zebra_test_lm_plugin_CPPFLAGS = $(TESTS_CPPFLAGS)
+tests_zebra_test_lm_plugin_LDADD = $(ZEBRA_TEST_LDADD)
+tests_zebra_test_lm_plugin_SOURCES = tests/zebra/test_lm_plugin.c
+
 EXTRA_DIST += \
 	tests/runtests.py \
 	tests/bgpd/test_aspath.py \
@@ -368,11 +400,13 @@ EXTRA_DIST += \
 	tests/ospf6d/test_lsdb.py \
 	tests/ospf6d/test_lsdb.in \
 	tests/ospf6d/test_lsdb.refout \
+	tests/zebra/test_lm_plugin.py \
+	tests/zebra/test_lm_plugin.refout \
 	# end
 
 .PHONY: tests/tests.xml
 tests/tests.xml: $(check_PROGRAMS)
-	( cd tests; $(PYTHON) ../$(srcdir)/tests/runtests.py --junitxml=tests.xml -v ../$(srcdir)/tests; )
+	( cd tests; $(PYTHON) ../$(srcdir)/tests/runtests.py --junitxml=tests.xml -v ../$(srcdir)/tests $(IGNORE_BGPD) $(IGNORE_ISISD) $(IGNORE_OSPF6D); )
 check: tests/tests.xml
 
 clean-local: clean-tests

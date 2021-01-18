@@ -488,10 +488,10 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 			stream_put_in_addr_at(s, offset_nh, mod_v4nh);
 
 		if (bgp_debug_update(peer, NULL, NULL, 0))
-			zlog_debug("u%" PRIu64 ":s%" PRIu64" %s send UPDATE w/ nexthop %s%s",
+			zlog_debug("u%" PRIu64 ":s%" PRIu64
+				   " %s send UPDATE w/ nexthop %pI4%s",
 				   PAF_SUBGRP(paf)->update_group->id,
-				   PAF_SUBGRP(paf)->id, peer->host,
-				   inet_ntoa(*mod_v4nh),
+				   PAF_SUBGRP(paf)->id, peer->host, mod_v4nh,
 				   (nhlen == BGP_ATTR_NHLEN_VPNV4 ? " and RD"
 								  : ""));
 	} else if (nhafi == AFI_IP6) {
@@ -575,7 +575,7 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 		}
 
 		if (IN6_IS_ADDR_UNSPECIFIED(mod_v6nhg)) {
-			if (peer->nexthop.v4.s_addr) {
+			if (peer->nexthop.v4.s_addr != INADDR_ANY) {
 				ipv4_to_ipv4_mapped_ipv6(mod_v6nhg,
 							 peer->nexthop.v4);
 			}
@@ -642,10 +642,10 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 			stream_put_in_addr_at(s, vec->offset + 1, mod_v4nh);
 
 		if (bgp_debug_update(peer, NULL, NULL, 0))
-			zlog_debug("u%" PRIu64 ":s%" PRIu64" %s send UPDATE w/ nexthop %s",
+			zlog_debug("u%" PRIu64 ":s%" PRIu64
+				   " %s send UPDATE w/ nexthop %pI4",
 				   PAF_SUBGRP(paf)->update_group->id,
-				   PAF_SUBGRP(paf)->id, peer->host,
-				   inet_ntoa(*mod_v4nh));
+				   PAF_SUBGRP(paf)->id, peer->host, mod_v4nh);
 	}
 
 	return s;
@@ -888,9 +888,12 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 					pkt_afi = afi_int2iana(afi);
 					pkt_safi = safi_int2iana(safi);
 					zlog_debug(
-						"u%" PRIu64 ":s%" PRIu64" send MP_REACH for afi/safi %d/%d",
+						"u%" PRIu64 ":s%" PRIu64
+						" send MP_REACH for afi/safi %s/%s",
 						subgrp->update_group->id,
-						subgrp->id, pkt_afi, pkt_safi);
+						subgrp->id,
+						iana_afi2str(pkt_afi),
+						iana_safi2str(pkt_safi));
 				}
 
 				send_attr_printed = 1;
@@ -1046,9 +1049,12 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 				if (bgp_debug_update(NULL, NULL,
 						     subgrp->update_group, 0))
 					zlog_debug(
-						"u%" PRIu64 ":s%" PRIu64" send MP_UNREACH for afi/safi %d/%d",
+						"u%" PRIu64 ":s%" PRIu64
+						" send MP_UNREACH for afi/safi %s/%s",
 						subgrp->update_group->id,
-						subgrp->id, pkt_afi, pkt_safi);
+						subgrp->id,
+						iana_afi2str(pkt_afi),
+						iana_safi2str(pkt_safi));
 			}
 
 			bgp_packet_mpunreach_prefix(s, dest_p, afi, safi, prd,
@@ -1137,7 +1143,6 @@ void subgroup_default_update_packet(struct update_subgroup *subgrp,
 	/* Logging the attribute. */
 	if (bgp_debug_update(NULL, &p, subgrp->update_group, 0)) {
 		char attrstr[BUFSIZ];
-		char buf[PREFIX_STRLEN];
 		/* ' with addpath ID '          17
 		 * max strlen of uint32       + 10
 		 * +/- (just in case)         +  1
@@ -1156,10 +1161,9 @@ void subgroup_default_update_packet(struct update_subgroup *subgrp,
 		else
 			tx_id_buf[0] = '\0';
 
-		zlog_debug("u%" PRIu64 ":s%" PRIu64 " send UPDATE %s%s %s",
-			   (SUBGRP_UPDGRP(subgrp))->id, subgrp->id,
-			   prefix2str(&p, buf, sizeof(buf)), tx_id_buf,
-			   attrstr);
+		zlog_debug("u%" PRIu64 ":s%" PRIu64 " send UPDATE %pFX%s %s",
+			   (SUBGRP_UPDGRP(subgrp))->id, subgrp->id, &p,
+			   tx_id_buf, attrstr);
 	}
 
 	s = stream_new(BGP_MAX_PACKET_SIZE);
@@ -1222,7 +1226,6 @@ void subgroup_default_withdraw_packet(struct update_subgroup *subgrp)
 	p.prefixlen = 0;
 
 	if (bgp_debug_update(NULL, &p, subgrp->update_group, 0)) {
-		char buf[PREFIX_STRLEN];
 		/* ' with addpath ID '          17
 		 * max strlen of uint32       + 10
 		 * +/- (just in case)         +  1
@@ -1235,9 +1238,10 @@ void subgroup_default_withdraw_packet(struct update_subgroup *subgrp)
 				 " with addpath ID %u",
 				 BGP_ADDPATH_TX_ID_FOR_DEFAULT_ORIGINATE);
 
-		zlog_debug("u%" PRIu64 ":s%" PRIu64" send UPDATE %s%s -- unreachable",
-			   (SUBGRP_UPDGRP(subgrp))->id, subgrp->id,
-			   prefix2str(&p, buf, sizeof(buf)), tx_id_buf);
+		zlog_debug("u%" PRIu64 ":s%" PRIu64
+			   " send UPDATE %pFX%s -- unreachable",
+			   (SUBGRP_UPDGRP(subgrp))->id, subgrp->id, &p,
+			   tx_id_buf);
 	}
 
 	s = stream_new(BGP_MAX_PACKET_SIZE);

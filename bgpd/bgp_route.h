@@ -102,6 +102,19 @@ enum bgp_show_adj_route_type {
 #define BGP_NLRI_PARSE_ERROR_EVPN_TYPE1_SIZE -15
 #define BGP_NLRI_PARSE_ERROR -32
 
+/* MAC-IP/type-2 path_info in the VNI routing table is linked to the
+ * destination ES
+ */
+struct bgp_path_es_info {
+	/* back pointer to the route */
+	struct bgp_path_info *pi;
+	vni_t vni;
+	/* destination ES */
+	struct bgp_evpn_es *es;
+	/* memory used for linking the path to the destination ES */
+	struct listnode es_listnode;
+};
+
 /* Ancillary information to struct bgp_path_info,
  * used for uncommonly used data (aggregation, MPLS, etc.)
  * and lazily allocated to save memory.
@@ -110,8 +123,8 @@ struct bgp_path_info_extra {
 	/* Pointer to dampening structure.  */
 	struct bgp_damp_info *damp_info;
 
-	/* This route is suppressed with aggregation.  */
-	int suppress;
+	/** List of aggregations that suppress this path. */
+	struct list *aggr_suppressors;
 
 	/* Nexthop reachability check.  */
 	uint32_t igpmetric;
@@ -188,6 +201,8 @@ struct bgp_path_info_extra {
 	struct list *bgp_fs_pbr;
 	/* presence of FS pbr iprule based entry */
 	struct list *bgp_fs_iprule;
+	/* Destination Ethernet Segment links for EVPN MH */
+	struct bgp_path_es_info *es_info;
 };
 
 struct bgp_path_info {
@@ -379,6 +394,30 @@ struct bgp_aggregate {
 
 	/* SAFI configuration. */
 	safi_t safi;
+
+	/** Match only equal MED. */
+	bool match_med;
+	/* MED matching state. */
+	/** Did we get the first MED value? */
+	bool med_initialized;
+	/** Are there MED mismatches? */
+	bool med_mismatched;
+	/** MED value found in current group. */
+	uint32_t med_matched_value;
+
+	/**
+	 * Test if aggregated address MED of all route match, otherwise
+	 * returns `false`. This macro will also return `true` if MED
+	 * matching is disabled.
+	 */
+#define AGGREGATE_MED_VALID(aggregate)                                         \
+	(((aggregate)->match_med && !(aggregate)->med_mismatched)              \
+	 || !(aggregate)->match_med)
+
+	/** Suppress map route map name (`NULL` when disabled). */
+	char *suppress_map_name;
+	/** Suppress map route map pointer. */
+	struct route_map *suppress_map;
 };
 
 #define BGP_NEXTHOP_AFI_FROM_NHLEN(nhlen)                                      \
@@ -429,6 +468,14 @@ struct bgp_aggregate {
 
 #define UNSUPPRESS_MAP_NAME(F)  ((F)->usmap.name)
 #define UNSUPPRESS_MAP(F)       ((F)->usmap.map)
+
+#define ADVERTISE_MAP_NAME(F)	((F)->advmap.aname)
+#define ADVERTISE_MAP(F)	((F)->advmap.amap)
+
+#define ADVERTISE_CONDITION(F)	((F)->advmap.condition)
+
+#define CONDITION_MAP_NAME(F)	((F)->advmap.cname)
+#define CONDITION_MAP(F)	((F)->advmap.cmap)
 
 /* path PREFIX (addpath rxid NUMBER) */
 #define PATH_ADDPATH_STR_BUFFER PREFIX2STR_BUFFER + 32
@@ -492,6 +539,13 @@ static inline void prep_for_rmap_apply(struct bgp_path_info *dst_pi,
 	}
 }
 
+static inline bool bgp_check_advertise(struct bgp *bgp, struct bgp_dest *dest)
+{
+	return (!(BGP_SUPPRESS_FIB_ENABLED(bgp) &&
+		  CHECK_FLAG(dest->flags, BGP_NODE_FIB_INSTALL_PENDING) &&
+		 (!bgp_option_check(BGP_OPT_NO_FIB))));
+}
+
 /* called before bgp_process() */
 DECLARE_HOOK(bgp_process,
 	     (struct bgp * bgp, afi_t afi, safi_t safi, struct bgp_dest *bn,
@@ -508,7 +562,7 @@ DECLARE_HOOK(bgp_process,
 /* Prototypes. */
 extern void bgp_rib_remove(struct bgp_dest *dest, struct bgp_path_info *pi,
 			   struct peer *peer, afi_t afi, safi_t safi);
-extern void bgp_process_queue_init(void);
+extern void bgp_process_queue_init(struct bgp *bgp);
 extern void bgp_route_init(void);
 extern void bgp_route_finish(void);
 extern void bgp_cleanup_routes(struct bgp *);
@@ -521,6 +575,7 @@ extern void bgp_clear_route(struct peer *, afi_t, safi_t);
 extern void bgp_clear_route_all(struct peer *);
 extern void bgp_clear_adj_in(struct peer *, afi_t, safi_t);
 extern void bgp_clear_stale_route(struct peer *, afi_t, safi_t);
+extern void bgp_set_stale_route(struct peer *peer, afi_t afi, safi_t safi);
 extern bool bgp_outbound_policy_exists(struct peer *, struct bgp_filter *);
 extern bool bgp_inbound_policy_exists(struct peer *, struct bgp_filter *);
 
@@ -639,6 +694,8 @@ extern void route_vty_out_overlay(struct vty *vty, const struct prefix *p,
 				  struct bgp_path_info *path, int display,
 				  json_object *json);
 
+extern void bgp_notify_conditional_adv_scanner(struct update_subgroup *subgrp);
+
 extern void subgroup_process_announce_selected(struct update_subgroup *subgrp,
 					       struct bgp_path_info *selected,
 					       struct bgp_dest *dest,
@@ -647,7 +704,8 @@ extern void subgroup_process_announce_selected(struct update_subgroup *subgrp,
 extern bool subgroup_announce_check(struct bgp_dest *dest,
 				    struct bgp_path_info *pi,
 				    struct update_subgroup *subgrp,
-				    const struct prefix *p, struct attr *attr);
+				    const struct prefix *p, struct attr *attr,
+				    bool skip_rmap_check);
 
 extern void bgp_peer_clear_node_queue_drain_immediate(struct peer *peer);
 extern void bgp_process_queues_drain_immediate(void);
@@ -691,4 +749,36 @@ extern bool bgp_update_martian_nexthop(struct bgp *bgp, afi_t afi, safi_t safi,
 				       struct attr *attr, struct bgp_dest *dest);
 extern int bgp_evpn_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 			     struct bgp_path_info *exist, int *paths_eq);
+extern void bgp_aggregate_toggle_suppressed(struct bgp_aggregate *aggregate,
+					    struct bgp *bgp,
+					    const struct prefix *p, afi_t afi,
+					    safi_t safi, bool suppress);
+extern int bgp_static_set(struct bgp *bgp, const char *negate,
+			  struct prefix *pfx, afi_t afi, safi_t safi,
+			  const char *rmap, int backdoor, uint32_t label_index,
+			  char *errmsg, size_t errmsg_len);
+
+extern int bgp_aggregate_set(struct bgp *bgp, struct prefix *prefix, afi_t afi,
+			     safi_t safi, const char *rmap,
+			     uint8_t summary_only, uint8_t as_set,
+			     uint8_t origin, bool match_med,
+			     const char *suppress_map, char *errmsg,
+			     size_t errmsg_len);
+
+extern int bgp_aggregate_unset(struct bgp *bgp, struct prefix *prefix,
+			       afi_t afi, safi_t safi, char *errmsg,
+			       size_t errmsg_len);
+
+extern void bgp_announce_routes_distance_update(struct bgp *bgp,
+						afi_t update_afi,
+						safi_t update_safi);
+
+extern int bgp_distance_set(uint8_t distance, const char *ip_str,
+			    const char *access_list_str, afi_t afi, safi_t safi,
+			    char *errmsg, size_t errmsg_len);
+
+extern int bgp_distance_unset(uint8_t distance, const char *ip_str,
+			      const char *access_list_str, afi_t afi,
+			      safi_t safi, char *errmsg, size_t errmsg_len);
+extern void subgroup_announce_reset_nhop(uint8_t family, struct attr *attr);
 #endif /* _QUAGGA_BGP_ROUTE_H */

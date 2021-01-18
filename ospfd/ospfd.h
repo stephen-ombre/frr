@@ -303,7 +303,7 @@ struct ospf {
 	uint32_t rx_lsa_count;
 
 	/* Counter of "ip ospf area x.x.x.x" used
-	 * for multual exclusion of network command under
+	 * for mutual exclusion of network command under
 	 * router ospf or ip ospf area x under interface. */
 	uint32_t if_ospf_cli_count;
 
@@ -319,7 +319,57 @@ struct ospf {
 
 	/* Redistributed external information. */
 	struct list *external[ZEBRA_ROUTE_MAX + 1];
-#define EXTERNAL_INFO(E)      (E->external_info)
+#define EXTERNAL_INFO(E) (E->external_info)
+
+	/* Gracefull restart Helper supported configs*/
+	/* Supported grace interval*/
+	uint32_t supported_grace_time;
+
+	/* Helper support
+	 * Supported : True
+	 * Not Supported : False.
+	 */
+	bool is_helper_supported;
+
+	/* Support for strict LSA check.
+	 * if it is set,Helper aborted
+	 * upon a TOPO change.
+	 */
+	bool strict_lsa_check;
+
+	/* Support as HELPER only for
+	 * planned restarts.
+	 */
+	bool only_planned_restart;
+
+	/* This list contains the advertisement
+	 * routerids which are not support for HELPERs.
+	 */
+	struct hash *enable_rtr_list;
+
+	/* HELPER for number of active
+	 * RESTARTERs.
+	 */
+	uint16_t active_restarter_cnt;
+
+	/* last HELPER exit reason */
+	uint32_t last_exit_reason;
+
+	/* delay timer to process external routes
+	 * with summary address.
+	 */
+	struct thread *t_external_aggr;
+
+	/* delay interval in seconds */
+	unsigned int aggr_delay_interval;
+
+	/* Table of configured Aggregate addresses */
+	struct route_table *rt_aggr_tbl;
+
+	/* used as argument for aggr delay
+	 * timer thread.
+	 */
+	int aggr_action;
 
 	/* MPLS LDP-IGP Sync */
 	struct ldp_sync_info_cmd ldp_sync_cmd;
@@ -501,13 +551,7 @@ struct ospf_nbr_nbma {
 #define OSPF_AREA_TIMER_ON(T,F,V) thread_add_timer (master, (F), area, (V), &(T))
 #define OSPF_POLL_TIMER_ON(T,F,V) thread_add_timer (master, (F), nbr_nbma, (V), &(T))
 #define OSPF_POLL_TIMER_OFF(X) OSPF_TIMER_OFF((X))
-#define OSPF_TIMER_OFF(X)                                                      \
-	do {                                                                   \
-		if (X) {                                                       \
-			thread_cancel(X);                                      \
-			(X) = NULL;                                            \
-		}                                                              \
-	} while (0)
+#define OSPF_TIMER_OFF(X) thread_cancel(&(X))
 
 /* Extern variables. */
 extern struct ospf_master *om;
@@ -527,7 +571,11 @@ extern struct ospf *ospf_lookup_by_inst_name(unsigned short instance,
 					     const char *name);
 extern struct ospf *ospf_lookup_by_vrf_id(vrf_id_t vrf_id);
 extern void ospf_finish(struct ospf *);
+extern void ospf_process_refresh_data(struct ospf *ospf, bool reset);
 extern void ospf_router_id_update(struct ospf *ospf);
+extern void ospf_process_reset(struct ospf *ospf);
+extern void ospf_neighbor_reset(struct ospf *ospf, struct in_addr nbr_id,
+				const char *nbr_str);
 extern int ospf_network_set(struct ospf *, struct prefix_ipv4 *, struct in_addr,
 			    int);
 extern int ospf_network_unset(struct ospf *, struct prefix_ipv4 *,
@@ -552,6 +600,7 @@ extern int ospf_area_shortcut_set(struct ospf *, struct ospf_area *, int);
 extern int ospf_area_shortcut_unset(struct ospf *, struct ospf_area *);
 extern int ospf_timers_refresh_set(struct ospf *, int);
 extern int ospf_timers_refresh_unset(struct ospf *);
+void ospf_area_lsdb_discard_delete(struct ospf_area *area);
 extern int ospf_nbr_nbma_set(struct ospf *, struct in_addr);
 extern int ospf_nbr_nbma_unset(struct ospf *, struct in_addr);
 extern int ospf_nbr_nbma_priority_set(struct ospf *, struct in_addr, uint8_t);
@@ -560,7 +609,6 @@ extern int ospf_nbr_nbma_poll_interval_set(struct ospf *, struct in_addr,
 					   unsigned int);
 extern int ospf_nbr_nbma_poll_interval_unset(struct ospf *, struct in_addr);
 extern void ospf_prefix_list_update(struct prefix_list *);
-extern void ospf_init(void);
 extern void ospf_if_update(struct ospf *, struct interface *);
 extern void ospf_ls_upd_queue_empty(struct ospf_interface *);
 extern void ospf_terminate(void);
@@ -580,8 +628,6 @@ extern void ospf_area_del_if(struct ospf_area *, struct ospf_interface *);
 
 extern void ospf_interface_area_set(struct ospf *, struct interface *);
 extern void ospf_interface_area_unset(struct ospf *, struct interface *);
-extern bool ospf_interface_area_is_already_set(struct ospf *ospf,
-					       struct interface *ifp);
 
 extern void ospf_route_map_init(void);
 

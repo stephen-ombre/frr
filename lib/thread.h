@@ -115,8 +115,8 @@ struct thread {
 
 struct cpu_thread_history {
 	int (*func)(struct thread *);
-	atomic_uint_fast32_t total_calls;
-	atomic_uint_fast32_t total_active;
+	atomic_size_t total_calls;
+	atomic_size_t total_active;
 	struct time_stats {
 		atomic_size_t total, max;
 	} real;
@@ -147,17 +147,14 @@ struct cpu_thread_history {
 #define THREAD_FD(X)  ((X)->u.fd)
 #define THREAD_VAL(X) ((X)->u.val)
 
-#define THREAD_OFF(thread)                                                     \
-	do {                                                                   \
-		if (thread) {                                                  \
-			thread_cancel(thread);                                 \
-			thread = NULL;                                         \
-		}                                                              \
+/*
+ * Please consider this macro deprecated, and do not use it in new code.
+ */
+#define THREAD_OFF(thread)                                             \
+	do {                                                           \
+		if ((thread))                                          \
+			thread_cancel(&(thread));                      \
 	} while (0)
-
-#define THREAD_READ_OFF(thread)  THREAD_OFF(thread)
-#define THREAD_WRITE_OFF(thread)  THREAD_OFF(thread)
-#define THREAD_TIMER_OFF(thread)  THREAD_OFF(thread)
 
 #define debugargdef  const char *funcname, const char *schedfrom, int fromln
 
@@ -207,7 +204,7 @@ extern void funcname_thread_execute(struct thread_master *,
 				    debugargdef);
 #undef debugargdef
 
-extern void thread_cancel(struct thread *);
+extern void thread_cancel(struct thread **event);
 extern void thread_cancel_async(struct thread_master *, struct thread **,
 				void *);
 extern void thread_cancel_event(struct thread_master *, void *);
@@ -232,6 +229,9 @@ extern unsigned long thread_consumed_time(RUSAGE_T *after, RUSAGE_T *before,
 extern pthread_key_t thread_current;
 extern char *thread_timer_to_hhmmss(char *buf, int buf_size,
 		struct thread *t_timer);
+
+/* Debug signal mask */
+void debug_signals(const sigset_t *sigs);
 
 #ifdef __cplusplus
 }

@@ -802,44 +802,6 @@ void if_dump_all(void)
 			if_dump(ifp);
 }
 
-#ifdef SUNOS_5
-/* Need to handle upgrade from SUNWzebra to Quagga. SUNWzebra created
- * a seperate struct interface for each logical interface, so config
- * file may be full of 'interface fooX:Y'. Solaris however does not
- * expose logical interfaces via PF_ROUTE, so trying to track logical
- * interfaces can be fruitless, for that reason Quagga only tracks
- * the primary IP interface.
- *
- * We try accomodate SUNWzebra by:
- * - looking up the interface name, to see whether it exists, if so
- *   its useable
- *   - for protocol daemons, this could only because zebra told us of
- *     the interface
- *   - for zebra, only because it learnt from kernel
- * - if not:
- *   - search the name to see if it contains a sub-ipif / logical interface
- *     seperator, the ':' char. If it does:
- *     - text up to that char must be the primary name - get that name.
- *     if not:
- *     - no idea, just get the name in its entirety.
- */
-static struct interface *if_sunwzebra_get(const char *name, vrf_id_t vrf_id)
-{
-	struct interface *ifp;
-	char *cp;
-
-	if ((ifp = if_lookup_by_name(name, vrf_id)) != NULL)
-		return ifp;
-
-	/* hunt the primary interface name... */
-	cp = strchr(name, ':');
-	if (cp)
-		*cp = '\0';
-
-	return if_get_by_name(name, vrf_id);
-}
-#endif /* SUNOS_5 */
-
 #if 0
 /* For debug purpose. */
 DEFUN (show_address,
@@ -864,7 +826,7 @@ DEFUN (show_address,
 			p = ifc->address;
 
 			if (p->family == AF_INET)
-				vty_out (vty, "%s/%d\n", inet_ntoa (p->u.prefix4), p->prefixlen);
+				vty_out (vty, "%pFX\n", p);
 		}
 	}
 	return CMD_SUCCESS;
@@ -896,7 +858,7 @@ DEFUN (show_address_vrf_all,
 				p = ifc->address;
 
 				if (p->family == AF_INET)
-					vty_out (vty, "%s/%d\n", inet_ntoa (p->u.prefix4), p->prefixlen);
+					vty_out (vty, "%pFX\n", p);
 			}
 		}
 	}
@@ -967,10 +929,9 @@ connected_log(struct connected *connected, char *str)
 	p = connected->address;
 
 	vrf = vrf_lookup_by_id(ifp->vrf_id);
-	snprintf(logbuf, sizeof(logbuf), "%s interface %s vrf %s(%u) %s %s/%d ",
+	snprintf(logbuf, sizeof(logbuf), "%s interface %s vrf %s(%u) %s %pFX ",
 		 str, ifp->name, VRF_LOGNAME(vrf), ifp->vrf_id,
-		 prefix_family_str(p),
-		 inet_ntop(p->family, &p->u.prefix, buf, BUFSIZ), p->prefixlen);
+		 prefix_family_str(p), p);
 
 	p = connected->destination;
 	if (p) {
@@ -987,14 +948,12 @@ nbr_connected_log(struct nbr_connected *connected, char *str)
 	struct prefix *p;
 	struct interface *ifp;
 	char logbuf[BUFSIZ];
-	char buf[BUFSIZ];
 
 	ifp = connected->ifp;
 	p = connected->address;
 
-	snprintf(logbuf, sizeof(logbuf), "%s interface %s %s %s/%d ", str,
-		 ifp->name, prefix_family_str(p),
-		 inet_ntop(p->family, &p->u.prefix, buf, BUFSIZ), p->prefixlen);
+	snprintf(logbuf, sizeof(logbuf), "%s interface %s %s %pFX ", str,
+		 ifp->name, prefix_family_str(p), p);
 
 	zlog_info("%s", logbuf);
 }
@@ -1147,8 +1106,8 @@ ifaddr_ipv4_add (struct in_addr *ifaddr, struct interface *ifp)
   if (rn)
     {
       route_unlock_node (rn);
-      zlog_info ("ifaddr_ipv4_add(): address %s is already added",
-		 inet_ntoa (*ifaddr));
+      zlog_info("ifaddr_ipv4_add(): address %pI4 is already added",
+				ifaddr);
       return;
     }
   rn->info = ifp;
@@ -1167,8 +1126,7 @@ ifaddr_ipv4_delete (struct in_addr *ifaddr, struct interface *ifp)
   rn = route_node_lookup (ifaddr_ipv4_table, (struct prefix *) &p);
   if (! rn)
     {
-      zlog_info ("ifaddr_ipv4_delete(): can't find address %s",
-		 inet_ntoa (*ifaddr));
+      zlog_info("%s: can't find address %pI4", __func__, ifaddr);
       return;
     }
   rn->info = NULL;
@@ -1554,11 +1512,7 @@ static int lib_interface_create(struct nb_cb_create_args *args)
 	case NB_EV_APPLY:
 		vrf = vrf_lookup_by_name(vrfname);
 		assert(vrf);
-#ifdef SUNOS_5
-		ifp = if_sunwzebra_get(ifname, vrf->vrf_id);
-#else
 		ifp = if_get_by_name(ifname, vrf->vrf_id);
-#endif /* SUNOS_5 */
 
 		ifp->configured = true;
 		nb_running_set_entry(args->dnode, ifp);

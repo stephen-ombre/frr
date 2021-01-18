@@ -137,6 +137,11 @@ DEFPY(pbr_map_match_src, pbr_map_match_src_cmd,
 {
 	struct pbr_map_sequence *pbrms = VTY_GET_CONTEXT(pbr_map_sequence);
 
+	if (pbrms->dst && pbrms->family && prefix->family != pbrms->family) {
+		vty_out(vty, "Cannot mismatch families within match src/dst\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
 	pbrms->family = prefix->family;
 
 	if (!no) {
@@ -164,6 +169,11 @@ DEFPY(pbr_map_match_dst, pbr_map_match_dst_cmd,
 	"v6 Prefix\n")
 {
 	struct pbr_map_sequence *pbrms = VTY_GET_CONTEXT(pbr_map_sequence);
+
+	if (pbrms->src && pbrms->family && prefix->family != pbrms->family) {
+		vty_out(vty, "Cannot mismatch families within match src/dst\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
 
 	pbrms->family = prefix->family;
 
@@ -648,7 +658,6 @@ pbrms_nexthop_group_write_individual_nexthop(
 static void vty_show_pbrms(struct vty *vty,
 			   const struct pbr_map_sequence *pbrms, bool detail)
 {
-	char buf[PREFIX_STRLEN];
 	char rbuf[64];
 
 	if (pbrms->reason)
@@ -666,11 +675,9 @@ static void vty_show_pbrms(struct vty *vty,
 			pbrms->reason ? rbuf : "Valid");
 
 	if (pbrms->src)
-		vty_out(vty, "        SRC Match: %s\n",
-			prefix2str(pbrms->src, buf, sizeof(buf)));
+		vty_out(vty, "        SRC Match: %pFX\n", pbrms->src);
 	if (pbrms->dst)
-		vty_out(vty, "        DST Match: %s\n",
-			prefix2str(pbrms->dst, buf, sizeof(buf)));
+		vty_out(vty, "        DST Match: %pFX\n", pbrms->dst);
 	if (pbrms->dsfield & PBR_DSFIELD_DSCP)
 		vty_out(vty, "        DSCP Match: %u\n",
 			(pbrms->dsfield & PBR_DSFIELD_DSCP) >> 2);
@@ -910,16 +917,22 @@ DEFPY (show_pbr_interface,
 			if (j)
 				this_iface = json_object_new_object();
 
-			if (!ifp->info)
+			if (!ifp->info) {
+				json_object_free(this_iface);
 				continue;
+			}
 
-			if (name && strcmp(ifp->name, name) != 0)
+			if (name && strcmp(ifp->name, name) != 0) {
+				json_object_free(this_iface);
 				continue;
+			}
 
 			pbr_ifp = ifp->info;
 
-			if (strcmp(pbr_ifp->mapname, "") == 0)
+			if (strcmp(pbr_ifp->mapname, "") == 0) {
+				json_object_free(this_iface);
 				continue;
+			}
 
 			pbrm = pbrm_find(pbr_ifp->mapname);
 
@@ -1058,17 +1071,13 @@ static int pbr_vty_map_config_write_sequence(struct vty *vty,
 					     struct pbr_map *pbrm,
 					     struct pbr_map_sequence *pbrms)
 {
-	char buff[PREFIX_STRLEN];
-
 	vty_out(vty, "pbr-map %s seq %u\n", pbrm->name, pbrms->seqno);
 
 	if (pbrms->src)
-		vty_out(vty, " match src-ip %s\n",
-			prefix2str(pbrms->src, buff, sizeof(buff)));
+		vty_out(vty, " match src-ip %pFX\n", pbrms->src);
 
 	if (pbrms->dst)
-		vty_out(vty, " match dst-ip %s\n",
-			prefix2str(pbrms->dst, buff, sizeof(buff)));
+		vty_out(vty, " match dst-ip %pFX\n", pbrms->dst);
 
 	if (pbrms->dsfield & PBR_DSFIELD_DSCP)
 		vty_out(vty, " match dscp %u\n",
@@ -1145,9 +1154,9 @@ void pbr_vty_init(void)
 
 	/* debug */
 	install_node(&debug_node);
-	install_element(VIEW_NODE, &debug_pbr_cmd);
+	install_element(ENABLE_NODE, &debug_pbr_cmd);
 	install_element(CONFIG_NODE, &debug_pbr_cmd);
-	install_element(VIEW_NODE, &show_debugging_pbr_cmd);
+	install_element(ENABLE_NODE, &show_debugging_pbr_cmd);
 
 	install_default(PBRMAP_NODE);
 

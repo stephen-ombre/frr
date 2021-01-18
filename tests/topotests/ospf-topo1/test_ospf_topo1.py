@@ -23,7 +23,7 @@
 #
 
 """
-test_ospf_topo1.py: Test the FRR/Quagga OSPF routing daemon.
+test_ospf_topo1.py: Test the FRR OSPF routing daemon.
 """
 
 import os
@@ -95,7 +95,7 @@ def setup_module(mod):
         ospf6_config = "ospf6d.conf-pre-v4"
 
     router_list = tgen.routers()
-    for rname, router in router_list.iteritems():
+    for rname, router in router_list.items():
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -146,7 +146,7 @@ def test_ospf_convergence():
     if tgen.routers_have_failure():
         pytest.skip("skipped because of router(s) failure")
 
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         logger.info('Waiting for router "%s" convergence', router)
 
         # Load expected results from the command
@@ -310,7 +310,10 @@ def test_ospf_json():
             # r4 has more interfaces for area 0.0.0.1
             if router.name == "r4":
                 expected["areas"]["0.0.0.1"].update(
-                    {"areaIfActiveCounter": 2, "areaIfTotalCounter": 2,}
+                    {
+                        "areaIfActiveCounter": 2,
+                        "areaIfTotalCounter": 2,
+                    }
                 )
 
         # router 3 has an additional area
@@ -335,7 +338,7 @@ def test_ospf_link_down():
     router3.peer_link_enable("r3-eth0", False)
 
     # Expect convergence on all routers
-    for router, rnode in tgen.routers().iteritems():
+    for router, rnode in tgen.routers().items():
         logger.info('Waiting for router "%s" convergence after link failure', router)
         # Load expected results from the command
         reffile = os.path.join(CWD, "{}/ospfroute_down.txt".format(router))
@@ -372,16 +375,25 @@ def test_ospf_link_down_kernel_route():
         }
         if router.name == "r1" or router.name == "r2":
             expected.update(
-                {"10.0.10.0/24": None, "172.16.0.0/24": None, "172.16.1.0/24": None,}
+                {
+                    "10.0.10.0/24": None,
+                    "172.16.0.0/24": None,
+                    "172.16.1.0/24": None,
+                }
             )
         elif router.name == "r3" or router.name == "r4":
             expected.update(
-                {"10.0.1.0/24": None, "10.0.2.0/24": None,}
+                {
+                    "10.0.1.0/24": None,
+                    "10.0.2.0/24": None,
+                }
             )
         # Route '10.0.3.0' is no longer available for r4 since it is down.
         if router.name == "r4":
             expected.update(
-                {"10.0.3.0/24": None,}
+                {
+                    "10.0.3.0/24": None,
+                }
             )
         assertmsg = 'OSPF IPv4 route mismatch in router "{}" after link down'.format(
             router.name
@@ -443,12 +455,17 @@ def test_ospf6_link_down_kernel_route():
             )
         elif router.name == "r3" or router.name == "r4":
             expected.update(
-                {"2001:db8:1::/64": None, "2001:db8:2::/64": None,}
+                {
+                    "2001:db8:1::/64": None,
+                    "2001:db8:2::/64": None,
+                }
             )
         # Route '2001:db8:3::/64' is no longer available for r4 since it is down.
         if router.name == "r4":
             expected.update(
-                {"2001:db8:3::/64": None,}
+                {
+                    "2001:db8:3::/64": None,
+                }
             )
         assertmsg = 'OSPF IPv6 route mismatch in router "{}" after link down'.format(
             router.name

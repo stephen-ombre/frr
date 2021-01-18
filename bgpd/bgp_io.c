@@ -31,7 +31,7 @@
 #include "network.h"		// for ERRNO_IO_RETRY
 #include "stream.h"		// for stream_get_endp, stream_getw_from, str...
 #include "ringbuf.h"		// for ringbuf_remain, ringbuf_peek, ringbuf_...
-#include "thread.h"		// for THREAD_OFF, THREAD_ARG, thread, thread...
+#include "thread.h"		// for THREAD_OFF, THREAD_ARG, thread...
 #include "zassert.h"		// for assert
 
 #include "bgpd/bgp_io.h"
@@ -39,6 +39,7 @@
 #include "bgpd/bgp_errors.h"	// for expanded error reference information
 #include "bgpd/bgp_fsm.h"	// for BGP_EVENT_ADD, bgp_event
 #include "bgpd/bgp_packet.h"	// for bgp_notify_send_with_data, bgp_notify...
+#include "bgpd/bgp_trace.h"	// for frrtraces
 #include "bgpd/bgpd.h"		// for peer, BGP_MARKER_SIZE, bgp_master, bm
 /* clang-format on */
 
@@ -148,12 +149,17 @@ static int bgp_process_writes(struct thread *thread)
 		fatal = true;
 	}
 
+	/* If suppress fib pending is enabled, route is advertised to peers when
+	 * the status is received from the FIB. The delay is added
+	 * to update group packet generate which will allow more routes to be
+	 * sent in the update message
+	 */
 	if (reschedule) {
 		thread_add_write(fpt->master, bgp_process_writes, peer,
 				 peer->fd, &peer->t_write);
 	} else if (!fatal) {
-		BGP_TIMER_ON(peer->t_generate_updgrp_packets,
-			     bgp_generate_updgrp_packets, 0);
+		BGP_UPDATE_GROUP_TIMER_ON(&peer->t_generate_updgrp_packets,
+					  bgp_generate_updgrp_packets);
 	}
 
 	return 0;
@@ -234,6 +240,7 @@ static int bgp_process_reads(struct thread *thread)
 			assert(ringbuf_get(ibw, pkt->data, pktsize) == pktsize);
 			stream_set_endp(pkt, pktsize);
 
+			frrtrace(2, frr_bgp, packet_read, peer, pkt);
 			frr_with_mutex(&peer->io_mtx) {
 				stream_fifo_push(peer->ibuf, pkt);
 			}

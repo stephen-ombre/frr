@@ -84,7 +84,7 @@ adj_new(struct in_addr lsr_id, struct hello_source *source,
 {
 	struct adj	*adj;
 
-	log_debug("%s: lsr-id %s, %s", __func__, inet_ntoa(lsr_id),
+	log_debug("%s: lsr-id %pI4, %s", __func__, &lsr_id,
 	    log_hello_src(source));
 
 	if ((adj = calloc(1, sizeof(*adj))) == NULL)
@@ -114,7 +114,7 @@ adj_del(struct adj *adj, uint32_t notif_status)
 {
 	struct nbr	*nbr = adj->nbr;
 
-	log_debug("%s: lsr-id %s, %s (%s)", __func__, inet_ntoa(adj->lsr_id),
+	log_debug("%s: lsr-id %pI4, %s (%s)", __func__, &adj->lsr_id,
 	    log_hello_src(&adj->source), af_name(adj_get_af(adj)));
 
 	adj_stop_itimer(adj);
@@ -179,11 +179,12 @@ adj_itimer(struct thread *thread)
 
 	adj->inactivity_timer = NULL;
 
-	log_debug("%s: lsr-id %s", __func__, inet_ntoa(adj->lsr_id));
+	log_debug("%s: lsr-id %pI4", __func__, &adj->lsr_id);
 
 	if (adj->source.type == HELLO_TARGETED) {
 		if (!(adj->source.target->flags & F_TNBR_CONFIGURED) &&
-		    adj->source.target->pw_count == 0) {
+		    adj->source.target->pw_count == 0 &&
+		    adj->source.target->rlfa_count == 0) {
 			/* remove dynamic targeted neighbor */
 			tnbr_del(leconf, adj->source.target);
 			return (0);
@@ -198,7 +199,7 @@ adj_itimer(struct thread *thread)
 void
 adj_start_itimer(struct adj *adj)
 {
-	THREAD_TIMER_OFF(adj->inactivity_timer);
+	thread_cancel(&adj->inactivity_timer);
 	adj->inactivity_timer = NULL;
 	thread_add_timer(master, adj_itimer, adj, adj->holdtime,
 			 &adj->inactivity_timer);
@@ -207,7 +208,7 @@ adj_start_itimer(struct adj *adj)
 void
 adj_stop_itimer(struct adj *adj)
 {
-	THREAD_TIMER_OFF(adj->inactivity_timer);
+	thread_cancel(&adj->inactivity_timer);
 }
 
 /* targeted neighbors */
@@ -259,7 +260,7 @@ struct tnbr *
 tnbr_check(struct ldpd_conf *xconf, struct tnbr *tnbr)
 {
 	if (!(tnbr->flags & (F_TNBR_CONFIGURED|F_TNBR_DYNAMIC)) &&
-	    tnbr->pw_count == 0) {
+	    tnbr->pw_count == 0 && tnbr->rlfa_count == 0) {
 		tnbr_del(xconf, tnbr);
 		return (NULL);
 	}
@@ -359,7 +360,7 @@ tnbr_hello_timer(struct thread *thread)
 static void
 tnbr_start_hello_timer(struct tnbr *tnbr)
 {
-	THREAD_TIMER_OFF(tnbr->hello_timer);
+	thread_cancel(&tnbr->hello_timer);
 	tnbr->hello_timer = NULL;
 	thread_add_timer(master, tnbr_hello_timer, tnbr, tnbr_get_hello_interval(tnbr),
 			 &tnbr->hello_timer);
@@ -368,7 +369,7 @@ tnbr_start_hello_timer(struct tnbr *tnbr)
 static void
 tnbr_stop_hello_timer(struct tnbr *tnbr)
 {
-	THREAD_TIMER_OFF(tnbr->hello_timer);
+	thread_cancel(&tnbr->hello_timer);
 }
 
 struct ctl_adj *

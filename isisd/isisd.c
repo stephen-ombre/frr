@@ -31,6 +31,8 @@
 #include "linklist.h"
 #include "if.h"
 #include "hash.h"
+#include "filter.h"
+#include "plist.h"
 #include "stream.h"
 #include "prefix.h"
 #include "table.h"
@@ -77,6 +79,7 @@ unsigned long debug_bfd;
 unsigned long debug_tx_queue;
 unsigned long debug_sr;
 unsigned long debug_ldp_sync;
+unsigned long debug_lfa;
 
 DEFINE_QOBJ_TYPE(isis_area)
 
@@ -309,6 +312,10 @@ struct isis_area *isis_area_create(const char *area_tag, const char *vrf_name)
 	area->lsp_frag_threshold = 90; /* not currently configurable */
 	area->lsp_mtu =
 		yang_get_default_uint16("/frr-isisd:isis/instance/lsp/mtu");
+	area->lfa_load_sharing[0] = yang_get_default_bool(
+		"/frr-isisd:isis/instance/fast-reroute/level-1/lfa/load-sharing");
+	area->lfa_load_sharing[1] = yang_get_default_bool(
+		"/frr-isisd:isis/instance/fast-reroute/level-2/lfa/load-sharing");
 #else
 	area->max_lsp_lifetime[0] = DEFAULT_LSP_LIFETIME;    /* 1200 */
 	area->max_lsp_lifetime[1] = DEFAULT_LSP_LIFETIME;    /* 1200 */
@@ -323,7 +330,13 @@ struct isis_area *isis_area_create(const char *area_tag, const char *vrf_name)
 	area->newmetric = 1;
 	area->lsp_frag_threshold = 90;
 	area->lsp_mtu = DEFAULT_LSP_MTU;
+	area->lfa_load_sharing[0] = true;
+	area->lfa_load_sharing[1] = true;
 #endif /* ifndef FABRICD */
+	area->lfa_priority_limit[0] = SPF_PREFIX_PRIO_LOW;
+	area->lfa_priority_limit[1] = SPF_PREFIX_PRIO_LOW;
+	isis_lfa_tiebreakers_init(area, ISIS_LEVEL1);
+	isis_lfa_tiebreakers_init(area, ISIS_LEVEL2);
 
 	area_mt_init(area);
 
@@ -441,8 +454,12 @@ void isis_area_destroy(struct isis_area *area)
 
 	spftree_area_del(area);
 
-	THREAD_TIMER_OFF(area->spf_timer[0]);
-	THREAD_TIMER_OFF(area->spf_timer[1]);
+	if (area->spf_timer[0])
+		isis_spf_timer_free(THREAD_ARG(area->spf_timer[0]));
+	thread_cancel(&area->spf_timer[0]);
+	if (area->spf_timer[1])
+		isis_spf_timer_free(THREAD_ARG(area->spf_timer[1]));
+	thread_cancel(&area->spf_timer[1]);
 
 	spf_backoff_free(area->spf_delay_ietf[0]);
 	spf_backoff_free(area->spf_delay_ietf[1]);
@@ -456,9 +473,20 @@ void isis_area_destroy(struct isis_area *area)
 	}
 	area->area_addrs = NULL;
 
-	THREAD_TIMER_OFF(area->t_tick);
-	THREAD_TIMER_OFF(area->t_lsp_refresh[0]);
-	THREAD_TIMER_OFF(area->t_lsp_refresh[1]);
+	for (int i = SPF_PREFIX_PRIO_CRITICAL; i <= SPF_PREFIX_PRIO_MEDIUM;
+	     i++) {
+		struct spf_prefix_priority_acl *ppa;
+
+		ppa = &area->spf_prefix_priorities[i];
+		XFREE(MTYPE_ISIS_ACL_NAME, ppa->name);
+	}
+	isis_lfa_tiebreakers_clear(area, ISIS_LEVEL1);
+	isis_lfa_tiebreakers_clear(area, ISIS_LEVEL2);
+
+	thread_cancel(&area->t_tick);
+	thread_cancel(&area->t_lsp_refresh[0]);
+	thread_cancel(&area->t_lsp_refresh[1]);
+	thread_cancel(&area->t_rlfa_rib_update);
 
 	thread_cancel_event(master, area);
 
@@ -582,6 +610,9 @@ void isis_finish(struct isis *isis)
 			isis_vrf_unlink(isis, vrf);
 	}
 
+	isis_redist_free(isis);
+	list_delete(&isis->area_list);
+	list_delete(&isis->init_circ_list);
 	XFREE(MTYPE_ISIS, isis);
 }
 
@@ -595,6 +626,57 @@ void isis_terminate()
 
 	for (ALL_LIST_ELEMENTS(im->isis, node, nnode, isis))
 		isis_finish(isis);
+}
+
+void isis_filter_update(struct access_list *access)
+{
+	struct isis *isis;
+	struct isis_area *area;
+	struct listnode *node, *anode;
+
+	for (ALL_LIST_ELEMENTS_RO(im->isis, node, isis)) {
+		for (ALL_LIST_ELEMENTS_RO(isis->area_list, anode, area)) {
+			for (int i = SPF_PREFIX_PRIO_CRITICAL;
+			     i <= SPF_PREFIX_PRIO_MEDIUM; i++) {
+				struct spf_prefix_priority_acl *ppa;
+
+				ppa = &area->spf_prefix_priorities[i];
+				ppa->list_v4 =
+					access_list_lookup(AFI_IP, ppa->name);
+				ppa->list_v6 =
+					access_list_lookup(AFI_IP6, ppa->name);
+			}
+			lsp_regenerate_schedule(area, area->is_type, 0);
+		}
+	}
+}
+
+void isis_prefix_list_update(struct prefix_list *plist)
+{
+	struct isis *isis;
+	struct isis_area *area;
+	struct listnode *node, *anode;
+
+	for (ALL_LIST_ELEMENTS_RO(im->isis, node, isis)) {
+		for (ALL_LIST_ELEMENTS_RO(isis->area_list, anode, area)) {
+			for (int level = ISIS_LEVEL1; level <= ISIS_LEVELS;
+			     level++) {
+				const char *plist_name =
+					prefix_list_name(plist);
+
+				if (!area->rlfa_plist_name[level - 1])
+					continue;
+
+				if (!strmatch(area->rlfa_plist_name[level - 1],
+					      plist_name))
+					continue;
+
+				area->rlfa_plist[level - 1] =
+					prefix_list_lookup(AFI_IP, plist_name);
+				lsp_regenerate_schedule(area, area->is_type, 0);
+			}
+		}
+	}
 }
 
 #ifdef FABRICD
@@ -1191,6 +1273,8 @@ void print_debug(struct vty *vty, int flags, int onoff)
 	if (flags & DEBUG_SR)
 		vty_out(vty, "IS-IS Segment Routing events debugging is %s\n",
 			onoffs);
+	if (flags & DEBUG_LFA)
+		vty_out(vty, "IS-IS LFA events debugging is %s\n", onoffs);
 	if (flags & DEBUG_UPDATE_PACKETS)
 		vty_out(vty, "IS-IS Update related packet debugging is %s\n",
 			onoffs);
@@ -1283,6 +1367,10 @@ static int config_write_debug(struct vty *vty)
 	}
 	if (IS_DEBUG_SR) {
 		vty_out(vty, "debug " PROTO_NAME " sr-events\n");
+		write++;
+	}
+	if (IS_DEBUG_LFA) {
+		vty_out(vty, "debug " PROTO_NAME " lfa\n");
 		write++;
 	}
 	if (IS_DEBUG_UPDATE_PACKETS) {
@@ -1511,6 +1599,33 @@ DEFUN (no_debug_isis_srevents,
 {
 	debug_sr &= ~DEBUG_SR;
 	print_debug(vty, DEBUG_SR, 0);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (debug_isis_lfa,
+       debug_isis_lfa_cmd,
+       "debug " PROTO_NAME " lfa",
+       DEBUG_STR
+       PROTO_HELP
+       "IS-IS LFA Events\n")
+{
+	debug_lfa |= DEBUG_LFA;
+	print_debug(vty, DEBUG_LFA, 1);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_debug_isis_lfa,
+       no_debug_isis_lfa_cmd,
+       "no debug " PROTO_NAME " lfa",
+       NO_STR
+       UNDEBUG_STR
+       PROTO_HELP
+       "IS-IS LFA Events\n")
+{
+	debug_lfa &= ~DEBUG_LFA;
+	print_debug(vty, DEBUG_LFA, 0);
 
 	return CMD_SUCCESS;
 }
@@ -2339,12 +2454,15 @@ static void area_resign_level(struct isis_area *area, int level)
 		}
 	}
 
-	THREAD_TIMER_OFF(area->spf_timer[level - 1]);
+	if (area->spf_timer[level - 1])
+		isis_spf_timer_free(THREAD_ARG(area->spf_timer[level - 1]));
+
+	thread_cancel(&area->spf_timer[level - 1]);
 
 	sched_debug(
 		"ISIS (%s): Resigned from L%d - canceling LSP regeneration timer.",
 		area->area_tag, level);
-	THREAD_TIMER_OFF(area->t_lsp_refresh[level - 1]);
+	thread_cancel(&area->t_lsp_refresh[level - 1]);
 	area->lsp_regenerate_pending[level - 1] = 0;
 }
 
@@ -2824,8 +2942,8 @@ void isis_init(void)
 	install_element(VIEW_NODE, &show_isis_neighbor_cmd);
 	install_element(VIEW_NODE, &show_isis_neighbor_detail_cmd);
 	install_element(VIEW_NODE, &show_isis_neighbor_arg_cmd);
-	install_element(VIEW_NODE, &clear_isis_neighbor_cmd);
-	install_element(VIEW_NODE, &clear_isis_neighbor_arg_cmd);
+	install_element(ENABLE_NODE, &clear_isis_neighbor_cmd);
+	install_element(ENABLE_NODE, &clear_isis_neighbor_arg_cmd);
 
 	install_element(VIEW_NODE, &show_hostname_cmd);
 	install_element(VIEW_NODE, &show_database_cmd);
@@ -2848,6 +2966,8 @@ void isis_init(void)
 	install_element(ENABLE_NODE, &no_debug_isis_spfevents_cmd);
 	install_element(ENABLE_NODE, &debug_isis_srevents_cmd);
 	install_element(ENABLE_NODE, &no_debug_isis_srevents_cmd);
+	install_element(ENABLE_NODE, &debug_isis_lfa_cmd);
+	install_element(ENABLE_NODE, &no_debug_isis_lfa_cmd);
 	install_element(ENABLE_NODE, &debug_isis_rtevents_cmd);
 	install_element(ENABLE_NODE, &no_debug_isis_rtevents_cmd);
 	install_element(ENABLE_NODE, &debug_isis_events_cmd);
@@ -2877,6 +2997,8 @@ void isis_init(void)
 	install_element(CONFIG_NODE, &no_debug_isis_spfevents_cmd);
 	install_element(CONFIG_NODE, &debug_isis_srevents_cmd);
 	install_element(CONFIG_NODE, &no_debug_isis_srevents_cmd);
+	install_element(CONFIG_NODE, &debug_isis_lfa_cmd);
+	install_element(CONFIG_NODE, &no_debug_isis_lfa_cmd);
 	install_element(CONFIG_NODE, &debug_isis_rtevents_cmd);
 	install_element(CONFIG_NODE, &no_debug_isis_rtevents_cmd);
 	install_element(CONFIG_NODE, &debug_isis_events_cmd);

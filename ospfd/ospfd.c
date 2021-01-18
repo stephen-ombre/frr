@@ -59,6 +59,7 @@
 #include "ospfd/ospf_flood.h"
 #include "ospfd/ospf_ase.h"
 #include "ospfd/ospf_ldp_sync.h"
+#include "ospfd/ospf_gr_helper.h"
 
 
 DEFINE_QOBJ_TYPE(ospf)
@@ -86,13 +87,15 @@ static void ospf_finish_final(struct ospf *);
 
 #define OSPF_EXTERNAL_LSA_ORIGINATE_DELAY 1
 
-void ospf_router_id_update(struct ospf *ospf)
+void ospf_process_refresh_data(struct ospf *ospf, bool reset)
 {
 	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
 	struct in_addr router_id, router_id_old;
 	struct ospf_interface *oi;
 	struct interface *ifp;
-	struct listnode *node;
+	struct listnode *node, *nnode;
+	struct ospf_area *area;
+	bool rid_change = false;
 
 	if (!ospf->oi_running) {
 		if (IS_DEBUG_OSPF_EVENT)
@@ -102,8 +105,8 @@ void ospf_router_id_update(struct ospf *ospf)
 	}
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("Router-ID[OLD:%s]: Update",
-			   inet_ntoa(ospf->router_id));
+		zlog_debug("Router-ID[OLD:%pI4]: Update",
+			   &ospf->router_id);
 
 	router_id_old = ospf->router_id;
 
@@ -114,19 +117,19 @@ void ospf_router_id_update(struct ospf *ospf)
 		disruptive.
 	     3. Last choice: just go with whatever the zebra daemon recommends.
 	*/
-	if (ospf->router_id_static.s_addr != 0)
+	if (ospf->router_id_static.s_addr != INADDR_ANY)
 		router_id = ospf->router_id_static;
-	else if (ospf->router_id.s_addr != 0)
+	else if (ospf->router_id.s_addr != INADDR_ANY)
 		router_id = ospf->router_id;
 	else
 		router_id = ospf->router_id_zebra;
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("Router-ID[OLD:%s]: Update to %s",
-			   inet_ntoa(ospf->router_id), inet_ntoa(router_id));
+		zlog_debug("Router-ID[OLD:%pI4]: Update to %pI4",
+			   &ospf->router_id, &router_id);
 
-	if (!IPV4_ADDR_SAME(&router_id_old, &router_id)) {
-
+	rid_change = !(IPV4_ADDR_SAME(&router_id_old, &router_id));
+	if (rid_change || (reset)) {
 		for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
 			/* Some nbrs are identified by router_id, these needs
 			 * to be rebuilt. Possible optimization would be to do
@@ -148,21 +151,13 @@ void ospf_router_id_update(struct ospf *ospf)
 				ospf_if_up(oi);
 		}
 
-		/* Flush (inline) all external LSAs based on the OSPF_LSA_SELF
-		 * flag */
-		if (ospf->lsdb) {
-			struct route_node *rn;
-			struct ospf_lsa *lsa;
-
-			LSDB_LOOP (EXTERNAL_LSDB(ospf), rn, lsa)
-				if (IS_LSA_SELF(lsa))
-					ospf_lsa_flush_schedule(ospf, lsa);
-		}
+		/* Flush (inline) all the self originated LSAs */
+		ospf_flush_self_originated_lsas_now(ospf);
 
 		ospf->router_id = router_id;
 		if (IS_DEBUG_OSPF_EVENT)
-			zlog_debug("Router-ID[NEW:%s]: Update",
-				   inet_ntoa(ospf->router_id));
+			zlog_debug("Router-ID[NEW:%pI4]: Update",
+				   &ospf->router_id);
 
 		/* Flush (inline) all external LSAs which now match the new
 		   router-id,
@@ -182,23 +177,80 @@ void ospf_router_id_update(struct ospf *ospf)
 			LSDB_LOOP (EXTERNAL_LSDB(ospf), rn, lsa) {
 				/* AdvRouter and Router ID is the same. */
 				if (IPV4_ADDR_SAME(&lsa->data->adv_router,
-						   &ospf->router_id)) {
+					&ospf->router_id) && rid_change) {
 					SET_FLAG(lsa->flags,
 						 OSPF_LSA_SELF_CHECKED);
 					SET_FLAG(lsa->flags, OSPF_LSA_SELF);
 					ospf_lsa_flush_schedule(ospf, lsa);
 				}
+				/* The above flush will send immediately
+				 * So discard the LSA to originate new
+				 */
+				ospf_discard_from_db(ospf, ospf->lsdb, lsa);
 			}
+
+			LSDB_LOOP (OPAQUE_AS_LSDB(ospf), rn, lsa)
+				ospf_discard_from_db(ospf, ospf->lsdb, lsa);
+
+			ospf_lsdb_delete_all(ospf->lsdb);
 		}
+
+		/* Delete the LSDB */
+		for (ALL_LIST_ELEMENTS(ospf->areas, node, nnode, area))
+			ospf_area_lsdb_discard_delete(area);
 
 		/* update router-lsa's for each area */
 		ospf_router_lsa_update(ospf);
 
 		/* update ospf_interface's */
-		FOR_ALL_INTERFACES (vrf, ifp)
-			ospf_if_update(ospf, ifp);
+		FOR_ALL_INTERFACES (vrf, ifp) {
+			if (reset)
+				ospf_if_reset(ifp);
+			else
+				ospf_if_update(ospf, ifp);
+		}
 
 		ospf_external_lsa_rid_change(ospf);
+	}
+
+	ospf->inst_shutdown = 0;
+}
+
+void ospf_router_id_update(struct ospf *ospf)
+{
+	ospf_process_refresh_data(ospf, false);
+}
+
+void ospf_process_reset(struct ospf *ospf)
+{
+	ospf_process_refresh_data(ospf, true);
+}
+
+void ospf_neighbor_reset(struct ospf *ospf, struct in_addr nbr_id,
+			const char *nbr_str)
+{
+	struct route_node *rn;
+	struct ospf_neighbor *nbr;
+	struct ospf_interface *oi;
+	struct listnode *node;
+
+	/* Clear only a particular nbr with nbr router id as nbr_id */
+	if (nbr_str != NULL) {
+		for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
+			nbr = ospf_nbr_lookup_by_routerid(oi->nbrs, &nbr_id);
+			if (nbr)
+				OSPF_NSM_EVENT_EXECUTE(nbr, NSM_KillNbr);
+		}
+		return;
+	}
+
+	/* send Neighbor event KillNbr to all associated neighbors. */
+	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
+		for (rn = route_top(oi->nbrs); rn; rn = route_next(rn)) {
+			nbr = rn->info;
+			if (nbr && (nbr != oi->nbr_self))
+				OSPF_NSM_EVENT_EXECUTE(nbr, NSM_KillNbr);
+		}
 	}
 }
 
@@ -309,6 +361,10 @@ static struct ospf *ospf_new(unsigned short instance, const char *name)
 
 	new->proactive_arp = OSPF_PROACTIVE_ARP_DEFAULT;
 
+	ospf_gr_helper_init(new);
+
+	ospf_asbr_external_aggregator_init(new);
+
 	QOBJ_REG(new, ospf);
 
 	new->fd = -1;
@@ -379,6 +435,46 @@ struct ospf *ospf_lookup_by_inst_name(unsigned short instance, const char *name)
 	return NULL;
 }
 
+static void ospf_init(struct ospf *ospf)
+{
+	struct vrf *vrf;
+	struct interface *ifp;
+
+	ospf_opaque_type11_lsa_init(ospf);
+
+	if (ospf->vrf_id != VRF_UNKNOWN)
+		ospf->oi_running = 1;
+
+	/* Activate 'ip ospf area x' configured interfaces for given
+	 * vrf. Activate area on vrf x aware interfaces.
+	 * vrf_enable callback calls router_id_update which
+	 * internally will call ospf_if_update to trigger
+	 * network_run_state
+	 */
+	vrf = vrf_lookup_by_id(ospf->vrf_id);
+
+	FOR_ALL_INTERFACES (vrf, ifp) {
+		struct ospf_if_params *params;
+		struct route_node *rn;
+		uint32_t count = 0;
+
+		params = IF_DEF_PARAMS(ifp);
+		if (OSPF_IF_PARAM_CONFIGURED(params, if_area))
+			count++;
+
+		for (rn = route_top(IF_OIFS_PARAMS(ifp)); rn; rn = route_next(rn))
+			if ((params = rn->info) && OSPF_IF_PARAM_CONFIGURED(params, if_area))
+				count++;
+
+		if (count > 0) {
+			ospf_interface_area_set(ospf, ifp);
+			ospf->if_ospf_cli_count += count;
+		}
+	}
+
+	ospf_router_id_update(ospf);
+}
+
 struct ospf *ospf_get(unsigned short instance, const char *name, bool *created)
 {
 	struct ospf *ospf;
@@ -395,10 +491,7 @@ struct ospf *ospf_get(unsigned short instance, const char *name, bool *created)
 		ospf = ospf_new(instance, name);
 		ospf_add(ospf);
 
-		if (ospf->router_id_static.s_addr == INADDR_ANY)
-			ospf_router_id_update(ospf);
-
-		ospf_opaque_type11_lsa_init(ospf);
+		ospf_init(ospf);
 	}
 
 	return ospf;
@@ -414,10 +507,7 @@ struct ospf *ospf_get_instance(unsigned short instance, bool *created)
 		ospf = ospf_new(instance, NULL /* VRF_DEFAULT*/);
 		ospf_add(ospf);
 
-		if (ospf->router_id_static.s_addr == INADDR_ANY)
-			ospf_router_id_update(ospf);
-
-		ospf_opaque_type11_lsa_init(ospf);
+		ospf_init(ospf);
 	}
 
 	return ospf;
@@ -578,11 +668,10 @@ void ospf_finish(struct ospf *ospf)
 /* Final cleanup of ospf instance */
 static void ospf_finish_final(struct ospf *ospf)
 {
-	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
+	struct vrf *vrf;
 	struct route_node *rn;
 	struct ospf_nbr_nbma *nbr_nbma;
 	struct ospf_lsa *lsa;
-	struct interface *ifp;
 	struct ospf_interface *oi;
 	struct ospf_area *area;
 	struct ospf_vl_data *vl_data;
@@ -624,15 +713,6 @@ static void ospf_finish_final(struct ospf *ospf)
 	/* shutdown LDP-Sync */
 	if (ospf->vrf_id == VRF_DEFAULT)
 		ospf_ldp_sync_gbl_exit(ospf, true);
-
-	/* Remove any ospf interface config params */
-	FOR_ALL_INTERFACES (vrf, ifp) {
-		struct ospf_if_params *params;
-
-		params = IF_DEF_PARAMS(ifp);
-		if (OSPF_IF_PARAM_CONFIGURED(params, if_area))
-			UNSET_IF_PARAM(params, if_area);
-	}
 
 	/* Reset interface. */
 	for (ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi))
@@ -695,6 +775,7 @@ static void ospf_finish_final(struct ospf *ospf)
 	OSPF_TIMER_OFF(ospf->t_opaque_lsa_self);
 	OSPF_TIMER_OFF(ospf->t_sr_update);
 	OSPF_TIMER_OFF(ospf->t_default_routemap_timer);
+	OSPF_TIMER_OFF(ospf->t_external_aggr);
 
 	LSDB_LOOP (OPAQUE_AS_LSDB(ospf), rn, lsa)
 		ospf_discard_from_db(ospf, ospf->lsdb, lsa);
@@ -763,8 +844,27 @@ static void ospf_finish_final(struct ospf *ospf)
 	ospf_distance_reset(ospf);
 	route_table_finish(ospf->distance_table);
 
+	/* Release extrenal Aggregator table */
+	for (rn = route_top(ospf->rt_aggr_tbl); rn; rn = route_next(rn)) {
+		struct ospf_external_aggr_rt *aggr;
+
+		aggr = rn->info;
+
+		if (aggr) {
+			ospf_external_aggregator_free(aggr);
+			rn->info = NULL;
+			route_unlock_node(rn);
+		}
+	}
+
+	route_table_finish(ospf->rt_aggr_tbl);
+
+
 	list_delete(&ospf->areas);
 	list_delete(&ospf->oi_write_q);
+
+	/* Reset GR helper data structers */
+	ospf_gr_helper_stop(ospf);
 
 	close(ospf->fd);
 	stream_free(ospf->ibuf);
@@ -821,14 +921,11 @@ static struct ospf_area *ospf_area_new(struct ospf *ospf,
 	return new;
 }
 
-static void ospf_area_free(struct ospf_area *area)
+void ospf_area_lsdb_discard_delete(struct ospf_area *area)
 {
 	struct route_node *rn;
 	struct ospf_lsa *lsa;
 
-	ospf_opaque_type10_lsa_term(area);
-
-	/* Free LSDBs. */
 	LSDB_LOOP (ROUTER_LSDB(area), rn, lsa)
 		ospf_discard_from_db(area->ospf, area->lsdb, lsa);
 	LSDB_LOOP (NETWORK_LSDB(area), rn, lsa)
@@ -846,6 +943,15 @@ static void ospf_area_free(struct ospf_area *area)
 		ospf_discard_from_db(area->ospf, area->lsdb, lsa);
 
 	ospf_lsdb_delete_all(area->lsdb);
+}
+
+static void ospf_area_free(struct ospf_area *area)
+{
+	ospf_opaque_type10_lsa_term(area);
+
+	/* Free LSDBs. */
+	ospf_area_lsdb_discard_delete(area);
+
 	ospf_lsdb_free(area->lsdb);
 
 	ospf_lsa_unlock(&area->router_lsa_self);
@@ -1138,32 +1244,6 @@ void ospf_interface_area_unset(struct ospf *ospf, struct interface *ifp)
 	update_redistributed(ospf, 0); /* interfaces possibly removed */
 }
 
-bool ospf_interface_area_is_already_set(struct ospf *ospf,
-					struct interface *ifp)
-{
-	struct route_node *rn_oi;
-
-	if (!ospf)
-		return false; /* Ospf not ready yet */
-
-	/* Find interfaces that may need to be removed. */
-	for (rn_oi = route_top(IF_OIFS(ifp)); rn_oi;
-	     rn_oi = route_next(rn_oi)) {
-		struct ospf_interface *oi = rn_oi->info;
-
-		if (oi == NULL)
-			continue;
-
-		if (oi->type == OSPF_IFTYPE_VIRTUALLINK)
-			continue;
-		/* at least one route covered by interface
-		 * that implies already done
-		 */
-		return true;
-	}
-	return false;
-}
-
 /* Check whether interface matches given network
  * returns: 1, true. 0, false
  */
@@ -1318,10 +1398,7 @@ void ospf_ls_upd_queue_empty(struct ospf_interface *oi)
 		}
 
 	/* remove update event */
-	if (oi->t_ls_upd_event) {
-		thread_cancel(oi->t_ls_upd_event);
-		oi->t_ls_upd_event = NULL;
-	}
+	thread_cancel(&oi->t_ls_upd_event);
 }
 
 void ospf_if_update(struct ospf *ospf, struct interface *ifp)
@@ -1332,10 +1409,10 @@ void ospf_if_update(struct ospf *ospf, struct interface *ifp)
 
 	if (IS_DEBUG_OSPF_EVENT)
 		zlog_debug(
-			"%s: interface %s ifp->vrf_id %u ospf vrf %s vrf_id %u router_id %s",
+			"%s: interface %s ifp->vrf_id %u ospf vrf %s vrf_id %u router_id %pI4",
 			__func__, ifp->name, ifp->vrf_id,
 			ospf_vrf_id_to_name(ospf->vrf_id), ospf->vrf_id,
-			inet_ntoa(ospf->router_id));
+			&ospf->router_id);
 
 	/* OSPF must be ready. */
 	if (!ospf_is_ready(ospf))
@@ -1372,16 +1449,16 @@ static void ospf_area_type_set(struct ospf_area *area, int type)
 
 	if (area->external_routing == type) {
 		if (IS_DEBUG_OSPF_EVENT)
-			zlog_debug("Area[%s]: Types are the same, ignored.",
-				   inet_ntoa(area->area_id));
+			zlog_debug("Area[%pI4]: Types are the same, ignored.",
+				   &area->area_id);
 		return;
 	}
 
 	area->external_routing = type;
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_debug("Area[%s]: Configured as %s",
-			   inet_ntoa(area->area_id),
+		zlog_debug("Area[%pI4]: Configured as %s",
+			   &area->area_id,
 			   lookup_msg(ospf_area_type_msg, type, NULL));
 
 	switch (area->external_routing) {
@@ -1589,7 +1666,8 @@ int ospf_area_nssa_unset(struct ospf *ospf, struct in_addr area_id, int argc)
 			OSPF_NSSA_TRANS_STABLE_DEFAULT;
 		ospf_area_type_set(area, OSPF_AREA_DEFAULT);
 	} else {
-		area->NSSATranslatorRole = OSPF_NSSA_ROLE_CANDIDATE;
+		ospf_area_nssa_translator_role_set(ospf, area_id,
+						   OSPF_NSSA_ROLE_CANDIDATE);
 	}
 
 	ospf_area_check_free(ospf, area_id);
@@ -1606,7 +1684,19 @@ int ospf_area_nssa_translator_role_set(struct ospf *ospf,
 	if (area == NULL)
 		return 0;
 
-	area->NSSATranslatorRole = role;
+	if (role != area->NSSATranslatorRole) {
+		if ((area->NSSATranslatorRole == OSPF_NSSA_ROLE_ALWAYS)
+		    || (role == OSPF_NSSA_ROLE_ALWAYS)) {
+			/* RFC 3101 3.1
+			 * if new role is OSPF_NSSA_ROLE_ALWAYS we need to set
+			 * Nt bit, if the role was OSPF_NSSA_ROLE_ALWAYS we need
+			 * to clear Nt bit
+			 */
+			area->NSSATranslatorRole = role;
+			ospf_router_lsa_update_area(area);
+		} else
+			area->NSSATranslatorRole = role;
+	}
 
 	return 1;
 }
@@ -2152,7 +2242,7 @@ static int ospf_vrf_disable(struct vrf *vrf)
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug("%s: ospf old_vrf_id %d unlinked", __func__,
 				   old_vrf_id);
-		thread_cancel(ospf->t_read);
+		thread_cancel(&ospf->t_read);
 		close(ospf->fd);
 		ospf->fd = -1;
 	}

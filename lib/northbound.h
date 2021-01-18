@@ -258,6 +258,12 @@ struct nb_cb_rpc_args {
 
 	/* List of output parameters to be populated by the callback. */
 	struct list *output;
+
+	/* Buffer to store human-readable error message in case of error. */
+	char *errmsg;
+
+	/* Size of errmsg. */
+	size_t errmsg_len;
 };
 
 /*
@@ -546,7 +552,7 @@ struct nb_node {
  * from working properly on shared libraries. For those compilers, use a fixed
  * size array to work around the problem.
  */
-#define YANG_MODULE_MAX_NODES 1024
+#define YANG_MODULE_MAX_NODES 1400
 
 struct frr_yang_module_info {
 	/* YANG module name. */
@@ -594,6 +600,7 @@ enum nb_client {
 	NB_CLIENT_CONFD,
 	NB_CLIENT_SYSREPO,
 	NB_CLIENT_GRPC,
+	NB_CLIENT_PCEP,
 };
 
 /* Northbound context. */
@@ -615,6 +622,8 @@ struct nb_context {
 		} sysrepo;
 		struct {
 		} grpc;
+		struct {
+		} pcep;
 	} client_data;
 #endif
 };
@@ -689,7 +698,8 @@ extern const void *nb_callback_lookup_entry(const struct nb_node *nb_node,
 					    const void *parent_list_entry,
 					    const struct yang_list_keys *keys);
 extern int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
-			   const struct list *input, struct list *output);
+			   const struct list *input, struct list *output,
+			   char *errmsg, size_t errmsg_len);
 
 /*
  * Create a northbound node for all YANG schema nodes.
@@ -1229,6 +1239,29 @@ extern const char *nb_err_name(enum nb_error error);
  *    String representation of the given northbound client.
  */
 extern const char *nb_client_name(enum nb_client client);
+
+/*
+ * Validate all northbound callbacks.
+ *
+ * Some errors, like missing callbacks or invalid priorities, are fatal and
+ * can't be recovered from. Other errors, like unneeded callbacks, are logged
+ * but otherwise ignored.
+ *
+ * Whenever a YANG module is loaded after startup, *all* northbound callbacks
+ * need to be validated and not only the callbacks from the newly loaded module.
+ * This is because augmentations can change the properties of the augmented
+ * module, making mandatory the implementation of additional callbacks.
+ */
+void nb_validate_callbacks(void);
+
+/*
+ * Load a YANG module with its corresponding northbound callbacks.
+ *
+ * module_info
+ *    Pointer to structure containing the module name and its northbound
+ *    callbacks.
+ */
+void nb_load_module(const struct frr_yang_module_info *module_info);
 
 /*
  * Initialize the northbound layer. Should be called only once during the

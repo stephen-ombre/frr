@@ -119,6 +119,9 @@ struct ospf_lsa {
 
 	/* VRF Id */
 	vrf_id_t vrf_id;
+
+	/*For topo chg detection in HELPER role*/
+	bool to_be_acknowledged;
 };
 
 /* OSPF LSA Link Type. */
@@ -221,6 +224,11 @@ struct as_external_lsa {
 	if (!(T))                                                              \
 	(T) = thread_add_timer(master, (F), 0, 2)
 
+#define CHECK_LSA_TYPE_1_TO_5_OR_7(type)                                       \
+	((type == OSPF_ROUTER_LSA) || (type == OSPF_NETWORK_LSA)               \
+	 || (type == OSPF_SUMMARY_LSA) || (type == OSPF_ASBR_SUMMARY_LSA)      \
+	 || (type == OSPF_AS_EXTERNAL_LSA) || (type == OSPF_AS_NSSA_LSA))
+
 /* Prototypes. */
 /* XXX: Eek, time functions, similar are in lib/thread.c */
 extern struct timeval int2tv(int);
@@ -305,7 +313,8 @@ extern void ospf_external_lsa_refresh_type(struct ospf *, uint8_t,
 					   unsigned short, int);
 extern struct ospf_lsa *ospf_external_lsa_refresh(struct ospf *,
 						  struct ospf_lsa *,
-						  struct external_info *, int);
+						  struct external_info *, int,
+						  bool aggr);
 extern struct in_addr ospf_lsa_unique_id(struct ospf *, struct ospf_lsdb *,
 					 uint8_t, struct prefix_ipv4 *);
 extern void ospf_schedule_lsa_flood_area(struct ospf_area *, struct ospf_lsa *);
@@ -331,5 +340,6 @@ extern struct ospf_lsa *ospf_translated_nssa_refresh(struct ospf *,
 						     struct ospf_lsa *);
 extern struct ospf_lsa *ospf_translated_nssa_originate(struct ospf *,
 						       struct ospf_lsa *);
-
+extern void ospf_flush_lsa_from_area(struct ospf *ospf, struct in_addr area_id,
+				     int type);
 #endif /* _ZEBRA_OSPF_LSA_H */

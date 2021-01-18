@@ -146,16 +146,12 @@ DEFPY (install_routes_data_dump,
        "Data about what is going on\n"
        "Route Install/Removal Information\n")
 {
-	char buf[PREFIX_STRLEN];
 	struct timeval r;
 
 	timersub(&sg.r.t_end, &sg.r.t_start, &r);
-	vty_out(vty, "Prefix: %s Total: %u %u %u Time: %jd.%ld\n",
-		prefix2str(&sg.r.orig_prefix, buf, sizeof(buf)),
-		sg.r.total_routes,
-		sg.r.installed_routes,
-		sg.r.removed_routes,
-		(intmax_t)r.tv_sec, (long)r.tv_usec);
+	vty_out(vty, "Prefix: %pFX Total: %u %u %u Time: %jd.%ld\n",
+		&sg.r.orig_prefix, sg.r.total_routes, sg.r.installed_routes,
+		sg.r.removed_routes, (intmax_t)r.tv_sec, (long)r.tv_usec);
 
 	return CMD_SUCCESS;
 }
@@ -167,7 +163,7 @@ DEFPY (install_routes,
 	  <nexthop <A.B.C.D$nexthop4|X:X::X:X$nexthop6>|\
 	   nexthop-group NHGNAME$nexthop_group>\
 	  [backup$backup <A.B.C.D$backup_nexthop4|X:X::X:X$backup_nexthop6>] \
-	  (1-1000000)$routes [instance (0-255)$instance] [repeat (2-1000)$rpt]",
+	  (1-1000000)$routes [instance (0-255)$instance] [repeat (2-1000)$rpt] [opaque WORD]",
        "Sharp routing Protocol\n"
        "install some routes\n"
        "Routes to install\n"
@@ -187,11 +183,14 @@ DEFPY (install_routes,
        "Instance to use\n"
        "Instance\n"
        "Should we repeat this command\n"
-       "How many times to repeat this command\n")
+       "How many times to repeat this command\n"
+       "What opaque data to send down\n"
+       "The opaque data\n")
 {
 	struct vrf *vrf;
 	struct prefix prefix;
 	uint32_t rts;
+	uint32_t nhgid = 0;
 
 	sg.r.total_routes = routes;
 	sg.r.installed_routes = 0;
@@ -208,7 +207,7 @@ DEFPY (install_routes,
 	memset(&sg.r.backup_nhop, 0, sizeof(sg.r.nhop));
 	memset(&sg.r.backup_nhop_group, 0, sizeof(sg.r.nhop_group));
 
-	if (start4.s_addr != 0) {
+	if (start4.s_addr != INADDR_ANY) {
 		prefix.family = AF_INET;
 		prefix.prefixlen = 32;
 		prefix.u.prefix4 = start4;
@@ -244,6 +243,8 @@ DEFPY (install_routes,
 			return CMD_WARNING;
 		}
 
+		nhgid = sharp_nhgroup_get_id(nexthop_group);
+		sg.r.nhgid = nhgid;
 		sg.r.nhop_group.nexthop = nhgc->nhg.nexthop;
 
 		/* Use group's backup nexthop info if present */
@@ -293,12 +294,17 @@ DEFPY (install_routes,
 		sg.r.backup_nhop_group.nexthop = &sg.r.backup_nhop;
 	}
 
+	if (opaque)
+		strlcpy(sg.r.opaque, opaque, ZAPI_MESSAGE_OPAQUE_LENGTH);
+	else
+		sg.r.opaque[0] = '\0';
+
 	sg.r.inst = instance;
 	sg.r.vrf_id = vrf->vrf_id;
 	rts = routes;
-	sharp_install_routes_helper(&prefix, sg.r.vrf_id, sg.r.inst,
+	sharp_install_routes_helper(&prefix, sg.r.vrf_id, sg.r.inst, nhgid,
 				    &sg.r.nhop_group, &sg.r.backup_nhop_group,
-				    rts);
+				    rts, sg.r.opaque);
 
 	return CMD_SUCCESS;
 }
@@ -356,7 +362,7 @@ DEFPY (remove_routes,
 
 	memset(&prefix, 0, sizeof(prefix));
 
-	if (start4.s_addr != 0) {
+	if (start4.s_addr != INADDR_ANY) {
 		prefix.family = AF_INET;
 		prefix.prefixlen = 32;
 		prefix.u.prefix4 = start4;
@@ -666,7 +672,7 @@ DEFPY (neigh_discover,
 
 	memset(&prefix, 0, sizeof(prefix));
 
-	if (dst4.s_addr != 0) {
+	if (dst4.s_addr != INADDR_ANY) {
 		prefix.family = AF_INET;
 		prefix.prefixlen = 32;
 		prefix.u.prefix4 = dst4;
@@ -713,7 +719,7 @@ void sharp_vty_init(void)
 	install_element(ENABLE_NODE, &send_opaque_reg_cmd);
 	install_element(ENABLE_NODE, &neigh_discover_cmd);
 
-	install_element(VIEW_NODE, &show_debugging_sharpd_cmd);
+	install_element(ENABLE_NODE, &show_debugging_sharpd_cmd);
 
 	return;
 }

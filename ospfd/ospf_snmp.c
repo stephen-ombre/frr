@@ -1405,7 +1405,8 @@ static int ospf_snmp_if_update(struct interface *ifp)
 		} else {
 			/* Unnumbered interfaces --> Sort them based on
 			 * interface indexes */
-			if (osif->addr.s_addr != 0 || osif->ifindex > ifindex)
+			if (osif->addr.s_addr != INADDR_ANY
+			    || osif->ifindex > ifindex)
 				break;
 		}
 		pn = node;
@@ -2003,11 +2004,12 @@ static struct ospf_neighbor *ospf_snmp_nbr_lookup(struct ospf *ospf,
 
 	for (ALL_LIST_ELEMENTS(ospf->oiflist, node, nnode, oi)) {
 		for (rn = route_top(oi->nbrs); rn; rn = route_next(rn))
-			if ((nbr = rn->info) != NULL && nbr != oi->nbr_self
+			if ((nbr = rn->info) != NULL
+			    && nbr != oi->nbr_self
 			    /* If EXACT match is needed, provide ALL entry found
 					&& nbr->state != NSM_Down
 			     */
-			    && nbr->src.s_addr != 0) {
+			    && nbr->src.s_addr != INADDR_ANY) {
 				if (IPV4_ADDR_SAME(&nbr->src, nbr_addr)) {
 					route_unlock_node(rn);
 					return nbr;
@@ -2033,7 +2035,8 @@ static struct ospf_neighbor *ospf_snmp_nbr_lookup_next(struct in_addr *nbr_addr,
 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, nn, oi)) {
 		for (rn = route_top(oi->nbrs); rn; rn = route_next(rn))
 			if ((nbr = rn->info) != NULL && nbr != oi->nbr_self
-			    && nbr->state != NSM_Down && nbr->src.s_addr != 0) {
+			    && nbr->state != NSM_Down
+			    && nbr->src.s_addr != INADDR_ANY) {
 				if (first) {
 					if (!min)
 						min = nbr;
@@ -2455,8 +2458,8 @@ static void ospfTrapNbrStateChange(struct ospf_neighbor *on)
 
 	ospf_nbr_state_message(on, msgbuf, sizeof(msgbuf));
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_info("%s: trap sent: %s now %s", __func__,
-			  inet_ntoa(on->address.u.prefix4), msgbuf);
+		zlog_info("%s: trap sent: %pI4 now %s", __func__,
+			  &on->address.u.prefix4, msgbuf);
 
 	oid_copy_addr(index, &(on->address.u.prefix4), IN_ADDR_SIZE);
 	index[IN_ADDR_SIZE] = 0;
@@ -2486,20 +2489,25 @@ static void ospfTrapVirtNbrStateChange(struct ospf_neighbor *on)
 static int ospf_snmp_nsm_change(struct ospf_neighbor *nbr, int next_state,
 				int old_state)
 {
-	/* Terminal state or regression */
-	if ((next_state == NSM_Full) || (next_state == NSM_TwoWay)
-	    || (next_state < old_state)) {
-		/* ospfVirtNbrStateChange */
-		if (nbr->oi->type == OSPF_IFTYPE_VIRTUALLINK)
-			ospfTrapVirtNbrStateChange(nbr);
-		/* ospfNbrStateChange trap  */
-		else
-			/* To/From FULL, only managed by DR */
-			if (((next_state != NSM_Full)
-			     && (nbr->state != NSM_Full))
-			    || (nbr->oi->state == ISM_DR))
-			ospfTrapNbrStateChange(nbr);
-	}
+	/* Transition to/from state Full should be handled only by
+	 * DR when in Broadcast or Non-Brodcast Multi-Access networks
+	 */
+	if ((next_state == NSM_Full || old_state == NSM_Full)
+	    && (nbr->oi->state != ISM_DR)
+	    && (nbr->oi->type == OSPF_IFTYPE_BROADCAST
+		|| nbr->oi->type == OSPF_IFTYPE_NBMA))
+		return 0;
+
+	/* State progression to non-terminal state */
+	if (next_state > old_state && next_state != NSM_Full
+	    && next_state != NSM_TwoWay)
+		return 0;
+
+	if (nbr->oi->type == OSPF_IFTYPE_VIRTUALLINK)
+		ospfTrapVirtNbrStateChange(nbr);
+	else
+		ospfTrapNbrStateChange(nbr);
+
 	return 0;
 }
 
@@ -2508,8 +2516,8 @@ static void ospfTrapIfStateChange(struct ospf_interface *oi)
 	oid index[sizeof(oid) * (IN_ADDR_SIZE + 1)];
 
 	if (IS_DEBUG_OSPF_EVENT)
-		zlog_info("%s: trap sent: %s now %s", __func__,
-			  inet_ntoa(oi->address->u.prefix4),
+		zlog_info("%s: trap sent: %pI4 now %s", __func__,
+			  &oi->address->u.prefix4,
 			  lookup_msg(ospf_ism_state_msg, oi->state, NULL));
 
 	oid_copy_addr(index, &(oi->address->u.prefix4), IN_ADDR_SIZE);

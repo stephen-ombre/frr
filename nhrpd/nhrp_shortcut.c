@@ -28,11 +28,9 @@ static void nhrp_shortcut_send_resolution_req(struct nhrp_shortcut *s);
 
 static void nhrp_shortcut_check_use(struct nhrp_shortcut *s)
 {
-	char buf[PREFIX_STRLEN];
-
 	if (s->expiring && s->cache && s->cache->used) {
-		debugf(NHRP_DEBUG_ROUTE, "Shortcut %s used and expiring",
-		       prefix2str(s->p, buf, sizeof(buf)));
+		debugf(NHRP_DEBUG_ROUTE, "Shortcut %pFX used and expiring",
+		       s->p);
 		nhrp_shortcut_send_resolution_req(s);
 	}
 }
@@ -53,8 +51,6 @@ static int nhrp_shortcut_do_expire(struct thread *t)
 static void nhrp_shortcut_cache_notify(struct notifier_block *n,
 				       unsigned long cmd)
 {
-	char buf[PREFIX_STRLEN];
-
 	struct nhrp_shortcut *s =
 		container_of(n, struct nhrp_shortcut, cache_notifier);
 
@@ -62,12 +58,11 @@ static void nhrp_shortcut_cache_notify(struct notifier_block *n,
 	case NOTIFY_CACHE_UP:
 		if (!s->route_installed) {
 			debugf(NHRP_DEBUG_ROUTE,
-			       "Shortcut: route install %s nh (unspec) dev %s",
-			       prefix2str(s->p, buf, sizeof(buf)),
-			       s->cache->ifp->name);
+			       "Shortcut: route install %pFX nh (unspec) dev %s",
+			       s->p, s->cache->ifp->name);
 
 			nhrp_route_announce(1, s->type, s->p, s->cache->ifp,
-					    NULL, 0);
+					    &s->cache->remote_addr, 0);
 			s->route_installed = 1;
 		}
 		break;
@@ -152,13 +147,11 @@ static void nhrp_shortcut_delete(struct nhrp_shortcut *s)
 {
 	struct route_node *rn;
 	afi_t afi = family2afi(PREFIX_FAMILY(s->p));
-	char buf[PREFIX_STRLEN];
 
 	THREAD_OFF(s->t_timer);
 	nhrp_reqid_free(&nhrp_packet_reqid, &s->reqid);
 
-	debugf(NHRP_DEBUG_ROUTE, "Shortcut %s purged",
-	       prefix2str(s->p, buf, sizeof(buf)));
+	debugf(NHRP_DEBUG_ROUTE, "Shortcut %pFX purged", s->p);
 
 	nhrp_shortcut_update_binding(s, NHRP_CACHE_INVALID, NULL, 0);
 
@@ -184,7 +177,6 @@ static struct nhrp_shortcut *nhrp_shortcut_get(struct prefix *p)
 {
 	struct nhrp_shortcut *s;
 	struct route_node *rn;
-	char buf[PREFIX_STRLEN];
 	afi_t afi = family2afi(PREFIX_FAMILY(p));
 
 	if (!shortcut_rib[afi])
@@ -197,8 +189,7 @@ static struct nhrp_shortcut *nhrp_shortcut_get(struct prefix *p)
 		s->type = NHRP_CACHE_INVALID;
 		s->p = &rn->p;
 
-		debugf(NHRP_DEBUG_ROUTE, "Shortcut %s created",
-		       prefix2str(s->p, buf, sizeof(buf)));
+		debugf(NHRP_DEBUG_ROUTE, "Shortcut %pFX created", s->p);
 	} else {
 		s = rn->info;
 		route_unlock_node(rn);
@@ -216,10 +207,11 @@ static void nhrp_shortcut_recv_resolution_rep(struct nhrp_reqid *reqid,
 	struct nhrp_extension_header *ext;
 	struct nhrp_cie_header *cie;
 	struct nhrp_cache *c = NULL;
+	struct nhrp_cache *c_dst_proto = NULL;
 	union sockunion *proto, cie_proto, *nbma, cie_nbma, nat_nbma;
 	struct prefix prefix, route_prefix;
 	struct zbuf extpl;
-	char bufp[PREFIX_STRLEN], buf[4][SU_ADDRSTRLEN];
+	char buf[4][SU_ADDRSTRLEN];
 	int holding_time = pp->if_ad->holdtime;
 
 	nhrp_reqid_free(&nhrp_packet_reqid, &s->reqid);
@@ -287,9 +279,8 @@ static void nhrp_shortcut_recv_resolution_rep(struct nhrp_reqid *reqid,
 	}
 
 	debugf(NHRP_DEBUG_COMMON,
-	       "Shortcut: %s is at proto %s dst_proto %s cie-nbma %s nat-nbma %s cie-holdtime %d",
-	       prefix2str(&prefix, bufp, sizeof(bufp)),
-	       sockunion2str(proto, buf[0], sizeof(buf[0])),
+	       "Shortcut: %pFX is at proto %s dst_proto %s cie-nbma %s nat-nbma %s cie-holdtime %d",
+	       &prefix, sockunion2str(proto, buf[0], sizeof(buf[0])),
 	       sockunion2str(&pp->dst_proto, buf[1], sizeof(buf[1])),
 	       sockunion2str(&cie_nbma, buf[2], sizeof(buf[2])),
 	       sockunion2str(&nat_nbma, buf[3], sizeof(buf[3])),
@@ -313,6 +304,22 @@ static void nhrp_shortcut_recv_resolution_rep(struct nhrp_reqid *reqid,
 		} else {
 			debugf(NHRP_DEBUG_COMMON,
 			       "Shortcut: no cache for nbma %s", buf[2]);
+		}
+
+		/* Update cache binding for dst_proto as well */
+		if (proto != &pp->dst_proto) {
+			c_dst_proto = nhrp_cache_get(pp->ifp, &pp->dst_proto, 1);
+			if (c_dst_proto) {
+				debugf(NHRP_DEBUG_COMMON,
+			       "Shortcut: cache found, update binding");
+				nhrp_cache_update_binding(c_dst_proto, NHRP_CACHE_DYNAMIC,
+						  holding_time,
+						  nhrp_peer_get(pp->ifp, nbma),
+						  htons(cie->mtu), nbma);
+			} else {
+				debugf(NHRP_DEBUG_COMMON,
+			       "Shortcut: no cache for nbma %s", buf[2]);
+			}
 		}
 	}
 
@@ -407,7 +414,9 @@ void nhrp_shortcut_initiate(union sockunion *addr)
 	struct prefix p;
 	struct nhrp_shortcut *s;
 
-	sockunion2hostprefix(addr, &p);
+	if (!sockunion2hostprefix(addr, &p))
+		return;
+
 	s = nhrp_shortcut_get(&p);
 	if (s && s->type != NHRP_CACHE_INCOMPLETE) {
 		s->addr = *addr;

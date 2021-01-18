@@ -141,8 +141,8 @@ bool vty_set_include(struct vty *vty, const char *regexp)
 			  REG_EXTENDED | REG_NEWLINE | REG_NOSUB);
 	if (errcode) {
 		ret = false;
-		regerror(ret, &vty->include, errbuf, sizeof(errbuf));
-		vty_out(vty, "%% Regex compilation error: %s", errbuf);
+		regerror(errcode, &vty->include, errbuf, sizeof(errbuf));
+		vty_out(vty, "%% Regex compilation error: %s\n", errbuf);
 	} else {
 		vty->filter = true;
 	}
@@ -358,15 +358,6 @@ void vty_hello(struct vty *vty)
 			vty_out(vty, "MOTD file not found\n");
 	} else if (host.motd)
 		vty_out(vty, "%s", host.motd);
-
-#if CONFDATE > 20200901
-	CPP_NOTICE("Please remove solaris code from system as it is deprecated");
-#endif
-#ifdef SUNOS_5
-	zlog_warn("If you are using FRR on Solaris, the FRR developers would love to hear from you\n");
-	zlog_warn("Please send email to dev@lists.frrouting.org about this message\n");
-	zlog_warn("We are considering deprecating Solaris and want to find users of Solaris systems\n");
-#endif
 }
 
 /* Put out prompt and wait input from user. */
@@ -1819,7 +1810,12 @@ static int vty_accept(struct thread *thread)
 	set_nonblocking(vty_sock);
 	set_cloexec(vty_sock);
 
-	sockunion2hostprefix(&su, &p);
+	if (!sockunion2hostprefix(&su, &p)) {
+		close(vty_sock);
+		zlog_info("Vty unable to convert prefix from sockunion %s",
+			  sockunion2str(&su, buf, SU_ADDRSTRLEN));
+		return -1;
+	}
 
 	/* VTY's accesslist apply. */
 	if (p.family == AF_INET && vty_accesslist_name) {
