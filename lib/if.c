@@ -351,6 +351,40 @@ struct interface *if_lookup_by_index(ifindex_t ifindex, vrf_id_t vrf_id)
 	return NULL;
 }
 
+/* Interface existance check by index. */
+struct interface *if_vrf_lookup_by_index_next(ifindex_t ifindex,
+					      vrf_id_t vrf_id)
+{
+	struct vrf *vrf = vrf_lookup_by_id(vrf_id);
+	struct interface *tmp_ifp;
+	bool found = false;
+
+	if (!vrf)
+		return NULL;
+
+	if (ifindex == 0) {
+		tmp_ifp = RB_MIN(if_index_head, &vrf->ifaces_by_index);
+		/* skip the vrf interface */
+		if (tmp_ifp && if_is_vrf(tmp_ifp))
+			ifindex = tmp_ifp->ifindex;
+		else
+			return tmp_ifp;
+	}
+
+	RB_FOREACH (tmp_ifp, if_index_head, &vrf->ifaces_by_index) {
+		if (found) {
+			/* skip the vrf interface */
+			if (tmp_ifp && if_is_vrf(tmp_ifp))
+				continue;
+			else
+				return tmp_ifp;
+		}
+		if (tmp_ifp->ifindex == ifindex)
+			found = true;
+	}
+	return NULL;
+}
+
 const char *ifindex2ifname(ifindex_t ifindex, vrf_id_t vrf_id)
 {
 	struct interface *ifp;
@@ -802,70 +836,6 @@ void if_dump_all(void)
 			if_dump(ifp);
 }
 
-#if 0
-/* For debug purpose. */
-DEFUN (show_address,
-       show_address_cmd,
-       "show address [vrf NAME]",
-       SHOW_STR
-       "address\n"
-       VRF_CMD_HELP_STR)
-{
-	int idx_vrf = 3;
-	struct listnode *node;
-	struct interface *ifp;
-	struct connected *ifc;
-	struct prefix *p;
-	vrf_id_t vrf_id = VRF_DEFAULT;
-
-	if (argc > 2)
-		VRF_GET_ID (vrf_id, argv[idx_vrf]->arg);
-
-	FOR_ALL_INTERFACES (vrf, ifp) {
-		for (ALL_LIST_ELEMENTS_RO (ifp->connected, node, ifc)) {
-			p = ifc->address;
-
-			if (p->family == AF_INET)
-				vty_out (vty, "%pFX\n", p);
-		}
-	}
-	return CMD_SUCCESS;
-}
-
-DEFUN (show_address_vrf_all,
-       show_address_vrf_all_cmd,
-       "show address vrf all",
-       SHOW_STR
-       "address\n"
-       VRF_ALL_CMD_HELP_STR)
-{
-	struct vrf *vrf;
-	struct listnode *node;
-	struct interface *ifp;
-	struct connected *ifc;
-	struct prefix *p;
-
-	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name)
-	{
-		if (RB_EMPTY (if_name_head, &vrf->ifaces_by_name))
-			continue;
-
-		vty_out (vty, "\nVRF %s(%u)\n\n",
-			 VRF_LOGNAME(vrf), vrf->vrf_id);
-
-		FOR_ALL_INTERFACES (vrf, ifp) {
-			for (ALL_LIST_ELEMENTS_RO (ifp->connected, node, ifc)) {
-				p = ifc->address;
-
-				if (p->family == AF_INET)
-					vty_out (vty, "%pFX\n", p);
-			}
-		}
-	}
-	return CMD_SUCCESS;
-}
-#endif
-
 /* Allocate connected structure. */
 struct connected *connected_new(void)
 {
@@ -1082,84 +1052,6 @@ struct connected *connected_get_linklocal(struct interface *ifp)
 	}
 	return c;
 }
-
-#if 0  /* this route_table of struct connected's is unused                     \
-	* however, it would be good to use a route_table rather than           \
-	* a list..                                                             \
-	*/
-/* Interface looking up by interface's address. */
-/* Interface's IPv4 address reverse lookup table. */
-struct route_table *ifaddr_ipv4_table;
-/* struct route_table *ifaddr_ipv6_table; */
-
-static void
-ifaddr_ipv4_add (struct in_addr *ifaddr, struct interface *ifp)
-{
-  struct route_node *rn;
-  struct prefix_ipv4 p;
-
-  p.family = AF_INET;
-  p.prefixlen = IPV4_MAX_PREFIXLEN;
-  p.prefix = *ifaddr;
-
-  rn = route_node_get (ifaddr_ipv4_table, (struct prefix *) &p);
-  if (rn)
-    {
-      route_unlock_node (rn);
-      zlog_info("ifaddr_ipv4_add(): address %pI4 is already added",
-				ifaddr);
-      return;
-    }
-  rn->info = ifp;
-}
-
-static void
-ifaddr_ipv4_delete (struct in_addr *ifaddr, struct interface *ifp)
-{
-  struct route_node *rn;
-  struct prefix_ipv4 p;
-
-  p.family = AF_INET;
-  p.prefixlen = IPV4_MAX_PREFIXLEN;
-  p.prefix = *ifaddr;
-
-  rn = route_node_lookup (ifaddr_ipv4_table, (struct prefix *) &p);
-  if (! rn)
-    {
-      zlog_info("%s: can't find address %pI4", __func__, ifaddr);
-      return;
-    }
-  rn->info = NULL;
-  route_unlock_node (rn);
-  route_unlock_node (rn);
-}
-
-/* Lookup interface by interface's IP address or interface index. */
-static struct interface *
-ifaddr_ipv4_lookup (struct in_addr *addr, ifindex_t ifindex)
-{
-  struct prefix_ipv4 p;
-  struct route_node *rn;
-  struct interface *ifp;
-
-  if (addr)
-    {
-      p.family = AF_INET;
-      p.prefixlen = IPV4_MAX_PREFIXLEN;
-      p.prefix = *addr;
-
-      rn = route_node_lookup (ifaddr_ipv4_table, (struct prefix *) &p);
-      if (! rn)
-	return NULL;
-
-      ifp = rn->info;
-      route_unlock_node (rn);
-      return ifp;
-    }
-  else
-    return if_lookup_by_index(ifindex, VRF_DEFAULT);
-}
-#endif /* ifaddr_ipv4_table */
 
 void if_terminate(struct vrf *vrf)
 {

@@ -7,7 +7,7 @@
 ##
 AC_PREREQ([2.60])
 
-AC_INIT([frr], [7.6-dev], [https://github.com/frrouting/frr/issues])
+AC_INIT([frr], [7.7-dev], [https://github.com/frrouting/frr/issues])
 PACKAGE_URL="https://frrouting.org/"
 AC_SUBST([PACKAGE_URL])
 PACKAGE_FULLNAME="FRRouting"
@@ -410,6 +410,21 @@ else
 #endif
   ])
 fi
+
+AC_MSG_CHECKING([whether linker supports __start/stop_section symbols])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+#include <stdio.h>
+int __attribute__((section("secttest"))) var = 1;
+extern int __start_secttest, __stop_secttest;
+]], [[
+  void *a = &var, *b = &__start_secttest, *c = &__stop_secttest;
+  printf("%p %p %p\n", a, b, c);
+]])], [
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(HAVE_SECTION_SYMS, 1, [have __start/stop_section symbols])
+], [
+  AC_MSG_RESULT(no)
+])
 
 dnl ----------
 dnl Essentials
@@ -2548,6 +2563,8 @@ AC_CONFIG_FILES([tools/frr], [chmod +x tools/frr])
 AC_CONFIG_FILES([tools/watchfrr.sh], [chmod +x tools/watchfrr.sh])
 AC_CONFIG_FILES([tools/frrinit.sh], [chmod +x tools/frrinit.sh])
 AC_CONFIG_FILES([tools/frrcommon.sh])
+AC_CONFIG_FILES([tools/frr.service])
+AC_CONFIG_FILES([tools/frr@.service])
 
 AS_IF([test "$with_pkg_git_version" = "yes"], [
     AC_CONFIG_COMMANDS([lib/gitversion.h], [

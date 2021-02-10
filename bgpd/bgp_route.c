@@ -93,6 +93,10 @@
 #include "bgpd/bgp_route_clippy.c"
 #endif
 
+DEFINE_HOOK(bgp_snmp_update_stats,
+	    (struct bgp_node *rn, struct bgp_path_info *pi, bool added),
+	    (rn, pi, added))
+
 /* Extern from bgp_dump.c */
 extern const char *bgp_origin_str[];
 extern const char *bgp_origin_long_str[];
@@ -402,6 +406,7 @@ void bgp_path_info_add(struct bgp_dest *dest, struct bgp_path_info *pi)
 	bgp_dest_lock_node(dest);
 	peer_lock(pi->peer); /* bgp_path_info peer reference */
 	bgp_dest_set_defer_flag(dest, false);
+	hook_call(bgp_snmp_update_stats, dest, pi, true);
 }
 
 /* Do the actual removal of info from RIB, for use by bgp_process
@@ -417,6 +422,7 @@ void bgp_path_info_reap(struct bgp_dest *dest, struct bgp_path_info *pi)
 
 	bgp_path_info_mpath_dequeue(pi);
 	bgp_path_info_unlock(pi);
+	hook_call(bgp_snmp_update_stats, dest, pi, false);
 	bgp_dest_unlock_node(dest);
 }
 
@@ -1836,7 +1842,8 @@ bool subgroup_announce_check(struct bgp_dest *dest, struct bgp_path_info *pi,
 	/* If community is not disabled check the no-export and local. */
 	if (!transparent && bgp_community_filter(peer, piattr)) {
 		if (bgp_debug_update(NULL, p, subgrp->update_group, 0))
-			zlog_debug("%s: community filter check fail", __func__);
+			zlog_debug("%s: community filter check fail for %pFX",
+				   __func__, p);
 		return false;
 	}
 
@@ -3505,6 +3512,36 @@ bool bgp_update_martian_nexthop(struct bgp *bgp, afi_t afi, safi_t safi,
 	return ret;
 }
 
+static void bgp_attr_add_no_export_community(struct attr *attr)
+{
+	struct community *old;
+	struct community *new;
+	struct community *merge;
+	struct community *no_export;
+
+	old = attr->community;
+	no_export = community_str2com("no-export");
+
+	assert(no_export);
+
+	if (old) {
+		merge = community_merge(community_dup(old), no_export);
+
+		if (!old->refcnt)
+			community_free(&old);
+
+		new = community_uniq_sort(merge);
+		community_free(&merge);
+	} else {
+		new = community_dup(no_export);
+	}
+
+	community_free(&no_export);
+
+	attr->community = new;
+	attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_COMMUNITIES);
+}
+
 int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 	       struct attr *attr, afi_t afi, safi_t safi, int type,
 	       int sub_type, struct prefix_rd *prd, mpls_label_t *label,
@@ -3697,6 +3734,20 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 
 	if (peer->sort == BGP_PEER_EBGP) {
 
+		/* rfc7999:
+		 * A BGP speaker receiving an announcement tagged with the
+		 * BLACKHOLE community SHOULD add the NO_ADVERTISE or
+		 * NO_EXPORT community as defined in RFC1997, or a
+		 * similar community, to prevent propagation of the
+		 * prefix outside the local AS. The community to prevent
+		 * propagation SHOULD be chosen according to the operator's
+		 * routing policy.
+		 */
+		if (new_attr.community
+		    && community_include(new_attr.community,
+					 COMMUNITY_BLACKHOLE))
+			bgp_attr_add_no_export_community(&new_attr);
+
 		/* If we receive the graceful-shutdown community from an eBGP
 		 * peer we must lower local-preference */
 		if (new_attr.community
@@ -3754,7 +3805,7 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 
 		/* Same attribute comes in. */
 		if (!CHECK_FLAG(pi->flags, BGP_PATH_REMOVED)
-		    && attrhash_cmp(pi->attr, attr_new)
+		    && same_attr
 		    && (!has_valid_label
 			|| memcmp(&(bgp_path_info_extra_get(pi))->label, label,
 				  num_labels * sizeof(mpls_label_t))
@@ -4017,7 +4068,7 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 			nh_afi = BGP_ATTR_NH_AFI(afi, pi->attr);
 
 			if (bgp_find_or_add_nexthop(bgp, bgp_nexthop, nh_afi,
-						    pi, NULL, connected)
+						    safi, pi, NULL, connected)
 			    || CHECK_FLAG(peer->flags, PEER_FLAG_IS_RFAPI_HD))
 				bgp_path_info_set_flag(dest, pi,
 						       BGP_PATH_VALID);
@@ -4162,7 +4213,7 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 
 		nh_afi = BGP_ATTR_NH_AFI(afi, new->attr);
 
-		if (bgp_find_or_add_nexthop(bgp, bgp, nh_afi, new, NULL,
+		if (bgp_find_or_add_nexthop(bgp, bgp, nh_afi, safi, new, NULL,
 					    connected)
 		    || CHECK_FLAG(peer->flags, PEER_FLAG_IS_RFAPI_HD))
 			bgp_path_info_set_flag(dest, new, BGP_PATH_VALID);
@@ -5400,7 +5451,8 @@ void bgp_static_update(struct bgp *bgp, const struct prefix *p,
 					bgp_nexthop = pi->extra->bgp_orig;
 
 				if (bgp_find_or_add_nexthop(bgp, bgp_nexthop,
-							    afi, pi, NULL, 0))
+							    afi, safi, pi, NULL,
+							    0))
 					bgp_path_info_set_flag(dest, pi,
 							       BGP_PATH_VALID);
 				else {
@@ -5452,7 +5504,7 @@ void bgp_static_update(struct bgp *bgp, const struct prefix *p,
 	/* Nexthop reachability check. */
 	if (CHECK_FLAG(bgp->flags, BGP_FLAG_IMPORT_CHECK)
 	    && (safi == SAFI_UNICAST || safi == SAFI_LABELED_UNICAST)) {
-		if (bgp_find_or_add_nexthop(bgp, bgp, afi, new, NULL, 0))
+		if (bgp_find_or_add_nexthop(bgp, bgp, afi, safi, new, NULL, 0))
 			bgp_path_info_set_flag(dest, new, BGP_PATH_VALID);
 		else {
 			if (BGP_DEBUG(nht, NHT)) {
@@ -6657,6 +6709,9 @@ static void bgp_aggregate_install(
 
 		if (!attr) {
 			bgp_aggregate_delete(bgp, p, afi, safi, aggregate);
+			if (BGP_DEBUG(update_groups, UPDATE_GROUPS))
+				zlog_debug("%s: %pFX null attribute", __func__,
+					   p);
 			return;
 		}
 
@@ -7175,6 +7230,13 @@ static void bgp_add_route_to_aggregate(struct bgp *bgp,
 	struct ecommunity *ecommunity = NULL;
 	struct lcommunity *lcommunity = NULL;
 
+	/* If the bgp instance is being deleted or self peer is deleted
+	 * then do not create aggregate route
+	 */
+	if (CHECK_FLAG(bgp->flags, BGP_FLAG_DELETE_IN_PROGRESS)
+	    || (bgp->peer_self == NULL))
+		return;
+
 	/* ORIGIN attribute: If at least one route among routes that are
 	 * aggregated has ORIGIN with the value INCOMPLETE, then the
 	 * aggregated route must have the ORIGIN attribute with the value
@@ -7290,6 +7352,13 @@ static void bgp_remove_route_from_aggregate(struct bgp *bgp, afi_t afi,
 	struct ecommunity *ecommunity = NULL;
 	struct lcommunity *lcommunity = NULL;
 	unsigned long match = 0;
+
+	/* If the bgp instance is being deleted or self peer is deleted
+	 * then do not create aggregate route
+	 */
+	if (CHECK_FLAG(bgp->flags, BGP_FLAG_DELETE_IN_PROGRESS)
+	    || (bgp->peer_self == NULL))
+		return;
 
 	if (BGP_PATH_HOLDDOWN(pi))
 		return;
@@ -7486,6 +7555,13 @@ int bgp_aggregate_unset(struct bgp *bgp, struct prefix *prefix, afi_t afi,
 {
 	struct bgp_dest *dest;
 	struct bgp_aggregate *aggregate;
+
+	/* If the bgp instance is being deleted or self peer is deleted
+	 * then do not create aggregate route
+	 */
+	if (CHECK_FLAG(bgp->flags, BGP_FLAG_DELETE_IN_PROGRESS)
+	    || (bgp->peer_self == NULL))
+		return 0;
 
 	apply_mask(prefix);
 	/* Old configuration check. */
@@ -9589,22 +9665,9 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 					       inet_ntop(AF_INET,
 							 &attr->aggregator_addr,
 							 buf, sizeof(buf)));
-			if (attr->aggregator_as == BGP_AS_ZERO)
-				json_object_boolean_true_add(
-					json_path, "aggregatorAsMalformed");
-			else
-				json_object_boolean_false_add(
-					json_path, "aggregatorAsMalformed");
 		} else {
-			if (attr->aggregator_as == BGP_AS_ZERO)
-				vty_out(vty,
-					", (aggregated by %u(malformed) %pI4)",
-					attr->aggregator_as,
-					&attr->aggregator_addr);
-			else
-				vty_out(vty, ", (aggregated by %u %pI4)",
-					attr->aggregator_as,
-					&attr->aggregator_addr);
+			vty_out(vty, ", (aggregated by %u %pI4)",
+				attr->aggregator_as, &attr->aggregator_addr);
 		}
 	}
 
@@ -11262,8 +11325,13 @@ static int bgp_show_route_in_table(struct vty *vty, struct bgp *bgp,
 					   vty,
 					   use_json,
 					   json_paths);
-		if (use_json && display)
-			json_object_object_add(json, "paths", json_paths);
+		if (use_json) {
+			if (display)
+				json_object_object_add(json, "paths",
+						       json_paths);
+			else
+				json_object_free(json_paths);
+		}
 	} else {
 		if ((dest = bgp_node_match(rib, &match)) != NULL) {
 			const struct prefix *dest_p = bgp_dest_get_prefix(dest);
@@ -12239,22 +12307,6 @@ struct bgp_table_stats {
 	double total_space;
 };
 
-#if 0
-#define TALLY_SIGFIG 100000
-static unsigned long
-ravg_tally (unsigned long count, unsigned long oldavg, unsigned long newval)
-{
-  unsigned long newtot = (count-1) * oldavg + (newval * TALLY_SIGFIG);
-  unsigned long res = (newtot * TALLY_SIGFIG) / count;
-  unsigned long ret = newtot / count;
-
-  if ((res % TALLY_SIGFIG) > (TALLY_SIGFIG/2))
-    return ret + 1;
-  else
-    return ret;
-}
-#endif
-
 static void bgp_table_stats_rn(struct bgp_dest *dest, struct bgp_dest *top,
 			       struct bgp_table_stats *ts, unsigned int space)
 {
@@ -12268,13 +12320,6 @@ static void bgp_table_stats_rn(struct bgp_dest *dest, struct bgp_dest *top,
 	rn_p = bgp_dest_get_prefix(dest);
 	ts->counts[BGP_STATS_PREFIXES]++;
 	ts->counts[BGP_STATS_TOTPLEN] += rn_p->prefixlen;
-
-#if 0
-      ts->counts[BGP_STATS_AVGPLEN]
-        = ravg_tally (ts->counts[BGP_STATS_PREFIXES],
-                      ts->counts[BGP_STATS_AVGPLEN],
-                      rn_p->prefixlen);
-#endif
 
 	/* check if the prefix is included by any other announcements */
 	while (pdest && !bgp_dest_has_bgp_path_info_data(pdest))
@@ -12312,16 +12357,6 @@ static void bgp_table_stats_rn(struct bgp_dest *dest, struct bgp_dest *top,
 
 			ts->counts[BGP_STATS_ASPATH_TOTHOPS] += hops;
 			ts->counts[BGP_STATS_ASPATH_TOTSIZE] += size;
-#if 0
-              ts->counts[BGP_STATS_ASPATH_AVGHOPS]
-                = ravg_tally (ts->counts[BGP_STATS_ASPATH_COUNT],
-                              ts->counts[BGP_STATS_ASPATH_AVGHOPS],
-                              hops);
-              ts->counts[BGP_STATS_ASPATH_AVGSIZE]
-                = ravg_tally (ts->counts[BGP_STATS_ASPATH_COUNT],
-                              ts->counts[BGP_STATS_ASPATH_AVGSIZE],
-                              size);
-#endif
 			if (highest > ts->counts[BGP_STATS_ASN_HIGHEST])
 				ts->counts[BGP_STATS_ASN_HIGHEST] = highest;
 		}
@@ -12431,15 +12466,6 @@ static int bgp_table_stats_single(struct vty *vty, struct bgp *bgp, afi_t afi,
 			continue;
 
 		switch (i) {
-#if 0
-          case BGP_STATS_ASPATH_AVGHOPS:
-          case BGP_STATS_ASPATH_AVGSIZE:
-          case BGP_STATS_AVGPLEN:
-            vty_out (vty, "%-30s: ", table_stats_strs[i]);
-            vty_out (vty, "%12.2f",
-                     (float)ts.counts[i] / (float)TALLY_SIGFIG);
-            break;
-#endif
 		case BGP_STATS_ASPATH_TOTHOPS:
 		case BGP_STATS_ASPATH_TOTSIZE:
 			if (!json) {
@@ -12742,6 +12768,7 @@ static int bgp_peer_counts(struct vty *vty, struct peer *peer, afi_t afi,
 				"No such neighbor or address family");
 			vty_out(vty, "%s\n", json_object_to_json_string(json));
 			json_object_free(json);
+			json_object_free(json_loop);
 		} else
 			vty_out(vty, "%% No such neighbor or address family\n");
 

@@ -407,6 +407,14 @@ If no option is chosen, then the *Linux VRF* implementation as references in
 https://www.kernel.org/doc/Documentation/networking/vrf.txt will be mapped over
 the *Zebra* VRF. The routing table associated to that VRF is a Linux table
 identifier located in the same *Linux network namespace* where *Zebra* started.
+Please note when using the *Linux VRF* routing table it is expected that a
+default Kernel route will be installed that has a metric as outlined in the
+www.kernel.org doc above.  The Linux Kernel does table lookup via a combination
+of rule application of the rule table and then route lookup of the specified
+table.  If no route match is found then the next applicable rule is applied
+to find the next route table to use to look for a route match.  As such if
+your VRF table does not have a default blackhole route with a high metric
+VRF route lookup will leave the table specified by the VRF, which is undesirable.
 
 If the :option:`-n` option is chosen, then the *Linux network namespace* will
 be mapped over the *Zebra* VRF. That implies that *Zebra* is able to configure
@@ -758,6 +766,12 @@ IPv6 example for OSPFv3.
    route-map is created.  Be wary of race conditions if the interface is
    not created at startup.  On Debian, FRR might start before ifupdown
    completes. Consider a reboot test.
+
+.. index:: zebra route-map delay-timer (0-600)
+.. clicmd:: [no] zebra route-map delay-timer (0-600)
+
+   Set the delay before any route-maps are processed in zebra.  The
+   default time for this is 5 seconds.
 
 .. _zebra-fib-push-interface:
 

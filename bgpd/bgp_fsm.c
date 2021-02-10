@@ -110,9 +110,9 @@ static int bgp_peer_reg_with_nht(struct peer *peer)
 	    && !CHECK_FLAG(peer->bgp->flags, BGP_FLAG_DISABLE_NH_CONNECTED_CHK))
 		connected = 1;
 
-	return bgp_find_or_add_nexthop(
-		peer->bgp, peer->bgp, family2afi(peer->su.sa.sa_family),
-		NULL, peer, connected);
+	return bgp_find_or_add_nexthop(peer->bgp, peer->bgp,
+				       family2afi(peer->su.sa.sa_family),
+				       SAFI_UNICAST, NULL, peer, connected);
 }
 
 static void peer_xfer_stats(struct peer *peer_dst, struct peer *peer_src)
@@ -1419,19 +1419,6 @@ int bgp_stop(struct peer *peer)
 		peer->v_delayopen = peer->bgp->default_delayopen;
 
 	peer->update_time = 0;
-
-/* Until we are sure that there is no problem about prefix count
-   this should be commented out.*/
-#if 0
-  /* Reset prefix count */
-  peer->pcount[AFI_IP][SAFI_UNICAST] = 0;
-  peer->pcount[AFI_IP][SAFI_MULTICAST] = 0;
-  peer->pcount[AFI_IP][SAFI_LABELED_UNICAST] = 0;
-  peer->pcount[AFI_IP][SAFI_MPLS_VPN] = 0;
-  peer->pcount[AFI_IP6][SAFI_UNICAST] = 0;
-  peer->pcount[AFI_IP6][SAFI_MULTICAST] = 0;
-  peer->pcount[AFI_IP6][SAFI_LABELED_UNICAST] = 0;
-#endif /* 0 */
 
 	if (!CHECK_FLAG(peer->flags, PEER_FLAG_CONFIG_NODE)
 	    && !(CHECK_FLAG(peer->flags, PEER_FLAG_DELETE))) {

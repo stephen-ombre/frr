@@ -320,13 +320,6 @@ void pbr_nhgroup_delete_cb(const char *name)
 	pbr_map_check_nh_group_change(name);
 }
 
-#if 0
-static struct pbr_nexthop_cache *pbr_nht_lookup_nexthop(struct nexthop *nexthop)
-{
-	return NULL;
-}
-#endif
-
 static void
 pbr_nht_find_nhg_from_table_update(struct pbr_nexthop_group_cache *pnhgc,
 				   uint32_t table_id, bool installed)
@@ -718,7 +711,6 @@ pbr_nht_individual_nexthop_gw_update(struct pbr_nexthop_cache *pnhc,
 				     struct pbr_nht_individual *pnhi)
 {
 	bool is_valid = pnhc->valid;
-	bool all_done = false;
 
 	/*
 	 * If we have an interface down event, let's note that
@@ -730,43 +722,19 @@ pbr_nht_individual_nexthop_gw_update(struct pbr_nexthop_cache *pnhc,
 	 * interface event.
 	 */
 	if (!pnhi->nhr && pnhi->ifp) {
-		struct connected *connected;
-		struct listnode *node;
-		struct prefix p;
-
 		switch (pnhc->nexthop.type) {
 		case NEXTHOP_TYPE_BLACKHOLE:
-			all_done = true;
-			break;
+		case NEXTHOP_TYPE_IPV4:
+		case NEXTHOP_TYPE_IPV6:
+			goto done;
 		case NEXTHOP_TYPE_IFINDEX:
 		case NEXTHOP_TYPE_IPV4_IFINDEX:
 		case NEXTHOP_TYPE_IPV6_IFINDEX:
-			is_valid = if_is_up(pnhi->ifp);
-			all_done = true;
-			break;
-		case NEXTHOP_TYPE_IPV4:
-			p.family = AF_INET;
-			p.prefixlen = IPV4_MAX_BITLEN;
-			p.u.prefix4 = pnhc->nexthop.gate.ipv4;
-			break;
-		case NEXTHOP_TYPE_IPV6:
-			p.family = AF_INET6;
-			p.prefixlen = IPV6_MAX_BITLEN;
-			memcpy(&p.u.prefix6, &pnhc->nexthop.gate.ipv6,
-			       sizeof(struct in6_addr));
-			break;
-		}
-
-		/* Early exit in a couple of cases. */
-		if (all_done)
-			goto done;
-
-		FOR_ALL_INTERFACES_ADDRESSES (pnhi->ifp, connected, node) {
-			if (prefix_match(connected->address, &p)) {
+			if (pnhc->nexthop.ifindex == pnhi->ifp->ifindex)
 				is_valid = if_is_up(pnhi->ifp);
-				break;
-			}
+			goto done;
 		}
+
 		goto done;
 	}
 

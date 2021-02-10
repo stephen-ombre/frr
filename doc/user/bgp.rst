@@ -435,10 +435,14 @@ Require policy on EBGP
 .. clicmd:: [no] bgp ebgp-requires-policy
 
    This command requires incoming and outgoing filters to be applied
-   for eBGP sessions. Without the incoming filter, no routes will be
-   accepted. Without the outgoing filter, no routes will be announced.
+   for eBGP sessions as part of RFC-8212 compliance. Without the incoming
+   filter, no routes will be accepted. Without the outgoing filter, no
+   routes will be announced.
 
-   This is enabled by default.
+   This is enabled by default for the traditional configuration and
+   turned off by default for datacenter configuration.
+
+   When you enable/disable this option you MUST clear the session.
 
    When the incoming or outgoing filter is missing you will see
    "(Policy)" sign under ``show bgp summary``:
@@ -456,6 +460,22 @@ Require policy on EBGP
       Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt
       192.168.0.2     4      65002         8        10        0    0    0 00:03:09            5 (Policy)
       fe80:1::2222    4      65002         9        11        0    0    0 00:03:09     (Policy) (Policy)
+
+   Additionally a `show bgp neighbor` command would indicate in the `For address family:`
+   block that:
+
+   .. code-block:: frr
+
+      exit1# show bgp neighbor
+      ...
+      For address family: IPv4 Unicast
+       Update group 1, subgroup 1
+       Packet Queue length 0
+       Inbound soft reconfiguration allowed
+       Community attribute sent to this neighbor(all)
+       Inbound updates discarded due to missing policy
+       Outbound updates discarded due to missing policy
+       0 accepted prefixes
 
 Reject routes with AS_SET or AS_CONFED_SET types
 ------------------------------------------------
@@ -1468,6 +1488,9 @@ Configuring Peers
    directly connected and this knob is not enabled, the session will not
    establish.
 
+   If the peer's IP address is not in the RIB and is reachable via the
+   default route, then you have to enable ``ip nht resolve-via-default``.
+
 .. index:: neighbor PEER description ...
 .. clicmd:: [no] neighbor PEER description ...
 
@@ -1967,9 +1990,9 @@ is 4 octet long. The following format is used to define the community value.
    ``0xFFFF029A`` ``65535:666``. :rfc:`7999` documents sending prefixes to
    EBGP peers and upstream for the purpose of blackholing traffic.
    Prefixes tagged with the this community should normally not be
-   re-advertised from neighbors of the originating network. It is
-   recommended upon receiving prefixes tagged with this community to
-   add ``NO_EXPORT`` and ``NO_ADVERTISE``.
+   re-advertised from neighbors of the originating network. Upon receiving
+   ``BLACKHOLE`` community from a BGP speaker, ``NO_ADVERTISE`` community
+   is added automatically.
 
 ``no-export``
    ``no-export`` represents well-known communities value ``NO_EXPORT``
@@ -2740,11 +2763,11 @@ Ethernet Segments
 An Ethernet Segment can be configured by specifying a system-MAC and a
 local discriminatior against the bond interface on the PE (via zebra) -
 
-.. index:: evpn mh es-id [(1-16777215)$es_lid]
-.. clicmd:: [no] evpn mh es-id [(1-16777215)$es_lid]
+.. index:: evpn mh es-id (1-16777215)
+.. clicmd:: [no] evpn mh es-id (1-16777215)
 
-.. index:: evpn mh es-sys-mac [X:X:X:X:X:X$mac]
-.. clicmd:: [no$no] evpn mh es-sys-mac [X:X:X:X:X:X$mac]
+.. index:: evpn mh es-sys-mac X:X:X:X:X:X
+.. clicmd:: [no] evpn mh es-sys-mac X:X:X:X:X:X
 
 The sys-mac and local discriminator are used for generating a 10-byte,
 Type-3 Ethernet Segment ID.
@@ -2767,8 +2790,8 @@ forward BUM traffic received via the overlay network. This implementation
 uses a preference based DF election specified by draft-ietf-bess-evpn-pref-df.
 The DF preference is configurable per-ES (via zebra) -
 
-.. index:: evpn mh es-df-pref [(1-16777215)$df_pref]
-.. clicmd:: [no] evpn mh es-df-pref [(1-16777215)$df_pref]
+.. index:: evpn mh es-df-pref (1-16777215)
+.. clicmd:: [no] evpn mh es-df-pref (1-16777215)
 
 BUM traffic is rxed via the overlay by all PEs attached to a server but
 only the DF can forward the de-capsulated traffic to the access port. To
@@ -2777,6 +2800,20 @@ the traffic.
 
 Similarly traffic received from ES peers via the overlay cannot be forwarded
 to the server. This is split-horizon-filtering with local bias.
+
+Knobs for interop
+"""""""""""""""""
+Some vendors do not send EAD-per-EVI routes. To interop with them we
+need to relax the dependency on EAD-per-EVI routes and activate a remote
+ES-PE based on just the EAD-per-ES route.
+
+Note that by default we advertise and expect EAD-per-EVI routes.
+
+.. index:: disable-ead-evi-rx
+.. clicmd:: [no] disable-ead-evi-rx
+
+.. index:: disable-ead-evi-tx
+.. clicmd:: [no] disable-ead-evi-tx
 
 Fast failover
 """""""""""""
@@ -2791,14 +2828,14 @@ been introduced for the express purpose of efficient ES failovers.
   on via the following BGP config -
 
 .. index:: use-es-l3nhg
-.. clicmd:: [no$no] use-es-l3nhg
+.. clicmd:: [no] use-es-l3nhg
 
 - Local ES (MAC/Neigh) failover via ES-redirect.
   On dataplanes that do not have support for ES-redirect the feature can be
   turned off via the following zebra config -
 
 .. index:: evpn mh redirect-off
-.. clicmd:: [no$no] evpn mh redirect-off
+.. clicmd:: [no] evpn mh redirect-off
 
 Uplink/Core tracking
 """"""""""""""""""""
@@ -2819,11 +2856,11 @@ the ES peer (PE2) goes down PE1 continues to advertise hosts learnt from PE2
 for a holdtime during which it attempts to establish local reachability of
 the host. This holdtime is configurable via the following zebra commands -
 
-.. index:: evpn mh neigh-holdtime (0-86400)$duration
-.. clicmd:: [no$no] evpn mh neigh-holdtime (0-86400)$duration
+.. index:: evpn mh neigh-holdtime (0-86400)
+.. clicmd:: [no] evpn mh neigh-holdtime (0-86400)
 
-.. index:: evpn mh mac-holdtime (0-86400)$duration
-.. clicmd:: [no$no] evpn mh mac-holdtime (0-86400)$duration
+.. index:: evpn mh mac-holdtime (0-86400)
+.. clicmd:: [no] evpn mh mac-holdtime (0-86400)
 
 Startup delay
 """""""""""""
@@ -2832,8 +2869,8 @@ and EVPN network to converge before enabling the ESs. For this duration the
 ES bonds are held protodown. The startup delay is configurable via the
 following zebra command -
 
-.. index:: evpn mh startup-delay(0-3600)$duration
-.. clicmd:: [no] evpn mh startup-delay(0-3600)$duration
+.. index:: evpn mh startup-delay (0-3600)
+.. clicmd:: [no] evpn mh startup-delay (0-3600)
 
 +Support with VRF network namespace backend
 +^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -3295,8 +3332,8 @@ Some other commands provide additional options for filtering the output.
    This command displays BGP routes using AS path regular expression
    (:ref:`bgp-regular-expressions`).
 
-.. index:: show [ip] bgp [all] summary [json]
-.. clicmd:: show [ip] bgp [all] summary [json]
+.. index:: show [ip] bgp [all] summary [wide] [json]
+.. clicmd:: show [ip] bgp [all] summary [wide] [json]
 
    Show a bgp peer summary for the specified address family.
 
@@ -3304,6 +3341,25 @@ The old command structure :clicmd:`show ip bgp` may be removed in the future
 and should no longer be used. In order to reach the other BGP routing tables
 other than the IPv6 routing table given by :clicmd:`show bgp`, the new command
 structure is extended with :clicmd:`show bgp [afi] [safi]`.
+
+``wide`` option gives more output like ``LocalAS`` and extended ``Desc`` to
+64 characters.
+
+   .. code-block:: frr
+
+      exit1# show ip bgp summary wide
+
+      IPv4 Unicast Summary:
+      BGP router identifier 192.168.100.1, local AS number 65534 vrf-id 0
+      BGP table version 3
+      RIB entries 5, using 920 bytes of memory
+      Peers 1, using 27 KiB of memory
+
+      Neighbor        V         AS    LocalAS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc
+      192.168.0.2     4      65030        123        15        22        0    0    0 00:07:00            0        1 us-east1-rs1.frrouting.org
+
+      Total number of neighbors 1
+      exit1#
 
 .. index:: show bgp [afi] [safi] [all] [wide|json]
 .. clicmd:: show bgp [afi] [safi] [all] [wide|json]
@@ -3437,7 +3493,7 @@ attribute.
 
    If ``json`` option is specified, output is displayed in JSON format.
 
-.. index:: show bgp labelpool <chunks|inuse|ledger|requests|summary> [json] 
+.. index:: show bgp labelpool <chunks|inuse|ledger|requests|summary> [json]
 .. clicmd:: show bgp labelpool <chunks|inuse|ledger|requests|summary> [json]
 
    These commands display information about the BGP labelpool used for

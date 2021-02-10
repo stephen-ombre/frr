@@ -21,8 +21,10 @@ Installing Mininet Infrastructure
    apt-get install mininet
    apt-get install python-pip
    apt-get install iproute
+   apt-get install iperf
    pip install ipaddr
    pip install "pytest<5"
+   pip install "scapy>=2.4.2"
    pip install exabgp==3.4.17 (Newer 4.0 version of exabgp is not yet
    supported)
    useradd -d /var/run/exabgp/ -s /bin/false exabgp
@@ -48,6 +50,28 @@ Next, update security limits by changing :file:`/etc/security/limits.conf` to::
    root            hard    core          unlimited
 
 Reboot for options to take effect.
+
+SNMP Utilities Installation
+"""""""""""""""""""""""""""
+
+To run SNMP test you need to install SNMP utilities and MIBs. Unfortunately
+there are some errors in the upstream MIBS which need to be patched up. The
+following steps will get you there on Ubuntu 20.04.
+
+.. code:: shell
+	  
+   apt install snmpd snmp
+   apt install snmp-mibs-downloader
+   download-mibs
+   wget http://www.iana.org/assignments/ianaippmmetricsregistry-mib/ianaippmmetricsregistry-mib -O /usr/share/snmp/mibs/iana/IANA-IPPM-METRICS-REGISTRY-MIB
+   wget http://pastebin.com/raw.php?i=p3QyuXzZ -O /usr/share/snmp/mibs/ietf/SNMPv2-PDU
+   wget http://pastebin.com/raw.php?i=gG7j8nyk -O /usr/share/snmp/mibs/ietf/IPATM-IPMC-MIB
+   edit /etc/snmp/snmp.conf to look like this
+   # As the snmp packages come without MIB files due to license reasons, loading   
+   # of MIBs is disabled by default. If you added the MIBs you can reenable        
+   # loading them by commenting out the following line.                            
+   mibs +ALL
+
 
 FRR Installation
 ^^^^^^^^^^^^^^^^
@@ -84,6 +108,7 @@ If you prefer to manually build FRR, then use the following suggested config:
        --enable-user=frr \
        --enable-group=frr \
        --enable-vty-group=frrvty \
+       --enable-snmp=agentx \
        --with-pkg-extra-version=-my-manual-build
 
 And create ``frr`` user and ``frrvty`` group as follows:
@@ -769,6 +794,8 @@ Requirements:
   conforms with this, run it without the :option:`-s` parameter.
 - Use `black <https://github.com/psf/black>`_ code formatter before creating
   a pull request. This ensures we have a unified code style.
+- Mark test modules with pytest markers depending on the daemons used during the
+  tests (s. Markers)
 
 Tips:
 
@@ -926,6 +953,8 @@ Before creating a new topology, make sure that there isn't one already that
 does what you need. If nothing is similar, then you may create a new topology,
 preferably, using the newest template
 (:file:`tests/topotests/example-test/test_template.py`).
+
+.. include:: topotests-markers.rst
 
 .. include:: topotests-snippets.rst
 

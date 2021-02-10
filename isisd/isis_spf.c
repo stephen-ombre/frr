@@ -1046,6 +1046,34 @@ lspfragloop:
 	}
 
 end:
+
+	/* if attach bit set in LSP, attached-bit receive ignore is
+	 * not configured, we are a level-1 area and we have no other
+	 * level-2 | level1-2 areas then add a default route toward
+	 * this neighbor
+	 */
+	if ((lsp->hdr.lsp_bits & LSPBIT_ATT) == LSPBIT_ATT
+	    && !spftree->area->attached_bit_rcv_ignore
+	    && spftree->area->is_type == IS_LEVEL_1
+	    && !isis_area_count(spftree->area->isis, IS_LEVEL_2)) {
+		struct prefix_pair ip_info = { {0} };
+		if (IS_DEBUG_RTE_EVENTS)
+			zlog_debug("ISIS-Spf (%s): add default %s route",
+				   rawlspid_print(lsp->hdr.lsp_id),
+				   spftree->family == AF_INET ? "ipv4"
+							      : "ipv6");
+
+		if (spftree->family == AF_INET) {
+			ip_info.dest.family = AF_INET;
+			vtype = VTYPE_IPREACH_INTERNAL;
+		} else {
+			ip_info.dest.family = AF_INET6;
+			vtype = VTYPE_IP6REACH_INTERNAL;
+		}
+		process_N(spftree, vtype, &ip_info, cost, depth + 1, NULL,
+			  parent);
+	}
+
 	if (fragnode == NULL)
 		fragnode = listhead(lsp->lspu.frags);
 	else

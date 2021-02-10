@@ -114,6 +114,7 @@ extern struct vrf_name_head vrfs_by_name;
 extern struct vrf *vrf_lookup_by_id(vrf_id_t);
 extern struct vrf *vrf_lookup_by_name(const char *);
 extern struct vrf *vrf_get(vrf_id_t, const char *);
+extern struct vrf *vrf_update(vrf_id_t new_vrf_id, const char *name);
 extern const char *vrf_id_to_name(vrf_id_t vrf_id);
 extern vrf_id_t vrf_name_to_id(const char *);
 
@@ -165,6 +166,20 @@ static inline void vrf_set_user_cfged(struct vrf *vrf)
 static inline void vrf_reset_user_cfged(struct vrf *vrf)
 {
 	UNSET_FLAG(vrf->status, VRF_CONFIGURED);
+}
+
+static inline uint32_t vrf_interface_count(struct vrf *vrf)
+{
+	uint32_t count = 0;
+	struct interface *ifp;
+
+	RB_FOREACH (ifp, if_name_head, &vrf->ifaces_by_name) {
+		/* skip the l3mdev */
+		if (strncmp(ifp->name, vrf->name, VRF_NAMSIZ) == 0)
+			continue;
+		count++;
+	}
+	return count;
 }
 
 /*

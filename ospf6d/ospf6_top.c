@@ -51,6 +51,7 @@
 #include "ospf6_intra.h"
 #include "ospf6_spf.h"
 #include "ospf6d.h"
+#include "lib/json.h"
 
 DEFINE_QOBJ_TYPE(ospf6)
 
@@ -266,6 +267,8 @@ static struct ospf6 *ospf6_create(const char *name)
 
 	o->distance_table = route_table_init();
 	o->fd = -1;
+
+	o->max_multipath = MULTIPATH_NUM;
 
 	QOBJ_REG(o, ospf6);
 
@@ -718,39 +721,6 @@ DEFUN (no_ospf6_distance_ospf6,
 	return CMD_SUCCESS;
 }
 
-#if 0
-DEFUN (ospf6_distance_source,
-       ospf6_distance_source_cmd,
-       "distance (1-255) X:X::X:X/M [WORD]",
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n"
-       "Access list name\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf6, o);
-  char *alname = (argc == 4) ? argv[3]->arg : NULL;
-  ospf6_distance_set (vty, o, argv[1]->arg, argv[2]->arg, alname);
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_ospf6_distance_source,
-       no_ospf6_distance_source_cmd,
-       "no distance (1-255) X:X::X:X/M [WORD]",
-       NO_STR
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n"
-       "Access list name\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf6, o);
-  char *alname = (argc == 5) ? argv[4]->arg : NULL;
-  ospf6_distance_unset (vty, o, argv[2]->arg, argv[3]->arg, alname);
-
-  return CMD_SUCCESS;
-}
-#endif
-
 DEFUN (ospf6_interface_area,
        ospf6_interface_area_cmd,
        "interface IFNAME area <A.B.C.D|(0-4294967295)>",
@@ -911,54 +881,61 @@ DEFUN (no_ospf6_stub_router_admin,
 	return CMD_SUCCESS;
 }
 
-#if 0
-DEFUN (ospf6_stub_router_startup,
-       ospf6_stub_router_startup_cmd,
-       "stub-router on-startup (5-86400)",
-       "Make router a stub router\n"
-       "Advertise inability to be a transit router\n"
-       "Automatically advertise as stub-router on startup of OSPF6\n"
-       "Time (seconds) to advertise self as stub-router\n")
+/* Restart OSPF SPF algorithm*/
+static void ospf6_restart_spf(struct ospf6 *ospf6)
 {
-  return CMD_SUCCESS;
+	ospf6_route_remove_all(ospf6->route_table);
+	ospf6_route_remove_all(ospf6->brouter_table);
+	ospf6_route_remove_all(ospf6->external_table);
+
+	/* Trigger SPF */
+	ospf6_spf_schedule(ospf6, OSPF6_SPF_FLAGS_CONFIG_CHANGE);
 }
 
-DEFUN (no_ospf6_stub_router_startup,
-       no_ospf6_stub_router_startup_cmd,
-       "no stub-router on-startup",
-       NO_STR
-       "Make router a stub router\n"
-       "Advertise inability to be a transit router\n"
-       "Automatically advertise as stub-router on startup of OSPF6\n"
-       "Time (seconds) to advertise self as stub-router\n")
+/* Set the max paths */
+static void ospf6_maxpath_set(struct ospf6 *ospf6, uint16_t paths)
 {
-  return CMD_SUCCESS;
+	if (ospf6->max_multipath == paths)
+		return;
+
+	ospf6->max_multipath = paths;
+
+	/* Send deletion to zebra to delete all
+	 * ospf specific routes and reinitiate
+	 * SPF to reflect the new max multipath.
+	 */
+	ospf6_restart_spf(ospf6);
 }
 
-DEFUN (ospf6_stub_router_shutdown,
-       ospf6_stub_router_shutdown_cmd,
-       "stub-router on-shutdown (5-86400)",
-       "Make router a stub router\n"
-       "Advertise inability to be a transit router\n"
-       "Automatically advertise as stub-router before shutdown\n"
-       "Time (seconds) to advertise self as stub-router\n")
+/* Ospf Maximum-paths config support */
+DEFUN(ospf6_max_multipath,
+      ospf6_max_multipath_cmd,
+      "maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM),
+      "Max no of multiple paths for ECMP support\n"
+      "Number of paths\n")
 {
-  return CMD_SUCCESS;
+	VTY_DECLVAR_CONTEXT(ospf6, ospf6);
+	int idx_number = 1;
+	int maximum_paths = strtol(argv[idx_number]->arg, NULL, 10);
+
+	ospf6_maxpath_set(ospf6, maximum_paths);
+
+	return CMD_SUCCESS;
 }
 
-DEFUN (no_ospf6_stub_router_shutdown,
-       no_ospf6_stub_router_shutdown_cmd,
-       "no stub-router on-shutdown",
-       NO_STR
-       "Make router a stub router\n"
-       "Advertise inability to be a transit router\n"
-       "Automatically advertise as stub-router before shutdown\n"
-       "Time (seconds) to advertise self as stub-router\n")
+DEFUN(no_ospf6_max_multipath,
+      no_ospf6_max_multipath_cmd,
+     "no maximum-paths [" CMD_RANGE_STR(1, MULTIPATH_NUM)"]",
+      NO_STR
+      "Max no of multiple paths for ECMP support\n"
+      "Number of paths\n")
 {
-  return CMD_SUCCESS;
-}
-#endif
+	VTY_DECLVAR_CONTEXT(ospf6, ospf6);
 
+	ospf6_maxpath_set(ospf6, MULTIPATH_NUM);
+
+	return CMD_SUCCESS;
+}
 
 static void ospf6_show(struct vty *vty, struct ospf6 *o, json_object *json,
 		       bool use_json)
@@ -998,6 +975,7 @@ static void ospf6_show(struct vty *vty, struct ospf6 *o, json_object *json,
 		json_object_int_add(json, "holdTimeMultiplier",
 				    o->spf_hold_multiplier);
 
+		json_object_int_add(json, "maximumPaths", o->max_multipath);
 
 		if (o->ts_spf.tv_sec || o->ts_spf.tv_usec) {
 			timersub(&now, &o->ts_spf, &result);
@@ -1080,6 +1058,7 @@ static void ospf6_show(struct vty *vty, struct ospf6 *o, json_object *json,
 		vty_out(vty, " LSA minimum arrival %d msecs\n",
 			o->lsa_minarrival);
 
+		vty_out(vty, " Maximum-paths %u\n", o->max_multipath);
 
 		/* Show SPF parameters */
 		vty_out(vty,
@@ -1165,7 +1144,7 @@ DEFUN(show_ipv6_ospf6,
 
 DEFUN (show_ipv6_ospf6_route,
        show_ipv6_ospf6_route_cmd,
-       "show ipv6 ospf6 route [<intra-area|inter-area|external-1|external-2|X:X::X:X|X:X::X:X/M|detail|summary>]",
+       "show ipv6 ospf6 route [<intra-area|inter-area|external-1|external-2|X:X::X:X|X:X::X:X/M|detail|summary>] [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
@@ -1177,41 +1156,44 @@ DEFUN (show_ipv6_ospf6_route,
        "Specify IPv6 address\n"
        "Specify IPv6 prefix\n"
        "Detailed information\n"
-       "Summary of route table\n")
+       "Summary of route table\n"
+       JSON_STR)
 {
 	struct ospf6 *ospf6;
+	bool uj = use_json(argc, argv);
 
 	ospf6 = ospf6_lookup_by_vrf_name(VRF_DEFAULT_NAME);
 	OSPF6_CMD_CHECK_RUNNING(ospf6);
 
-	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table);
+	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table, uj);
 	return CMD_SUCCESS;
 }
 
 DEFUN (show_ipv6_ospf6_route_match,
        show_ipv6_ospf6_route_match_cmd,
-       "show ipv6 ospf6 route X:X::X:X/M <match|longer>",
+       "show ipv6 ospf6 route X:X::X:X/M <match|longer> [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
        ROUTE_STR
        "Specify IPv6 prefix\n"
        "Display routes which match the specified route\n"
-       "Display routes longer than the specified route\n")
+       "Display routes longer than the specified route\n"
+       JSON_STR)
 {
 	struct ospf6 *ospf6;
+	bool uj = use_json(argc, argv);
 
 	ospf6 = ospf6_lookup_by_vrf_name(VRF_DEFAULT_NAME);
 	OSPF6_CMD_CHECK_RUNNING(ospf6);
 
-	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table);
-
+	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table, uj);
 	return CMD_SUCCESS;
 }
 
 DEFUN (show_ipv6_ospf6_route_match_detail,
        show_ipv6_ospf6_route_match_detail_cmd,
-       "show ipv6 ospf6 route X:X::X:X/M match detail",
+       "show ipv6 ospf6 route X:X::X:X/M match detail [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
@@ -1219,21 +1201,22 @@ DEFUN (show_ipv6_ospf6_route_match_detail,
        "Specify IPv6 prefix\n"
        "Display routes which match the specified route\n"
        "Detailed information\n"
-       )
+       JSON_STR)
 {
 	struct ospf6 *ospf6;
+	bool uj = use_json(argc, argv);
 
 	ospf6 = ospf6_lookup_by_vrf_name(VRF_DEFAULT_NAME);
 	OSPF6_CMD_CHECK_RUNNING(ospf6);
 
-	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table);
+	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table, uj);
 	return CMD_SUCCESS;
 }
 
 
 DEFUN (show_ipv6_ospf6_route_type_detail,
        show_ipv6_ospf6_route_type_detail_cmd,
-       "show ipv6 ospf6 route <intra-area|inter-area|external-1|external-2> detail",
+       "show ipv6 ospf6 route <intra-area|inter-area|external-1|external-2> detail [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
@@ -1243,14 +1226,15 @@ DEFUN (show_ipv6_ospf6_route_type_detail,
        "Display Type-1 External routes\n"
        "Display Type-2 External routes\n"
        "Detailed information\n"
-       )
+       JSON_STR)
 {
 	struct ospf6 *ospf6;
+	bool uj = use_json(argc, argv);
 
 	ospf6 = ospf6_lookup_by_vrf_name(VRF_DEFAULT_NAME);
 	OSPF6_CMD_CHECK_RUNNING(ospf6);
 
-	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table);
+	ospf6_route_table_show(vty, 4, argc, argv, ospf6->route_table, uj);
 	return CMD_SUCCESS;
 }
 
@@ -1333,6 +1317,11 @@ static int config_write_ospf6(struct vty *vty)
 			vty_out(vty, " timers lsa min-arrival %d\n",
 				ospf6->lsa_minarrival);
 
+		/* ECMP max path config */
+		if (ospf6->max_multipath != MULTIPATH_NUM)
+			vty_out(vty, " maximum-paths %d\n",
+				ospf6->max_multipath);
+
 		ospf6_stub_router_config_write(vty, ospf6);
 		ospf6_redistribute_config_write(vty, ospf6);
 		ospf6_area_config_write(vty, ospf6);
@@ -1390,20 +1379,13 @@ void ospf6_top_init(void)
 	install_element(OSPF6_NODE, &no_ospf6_interface_area_cmd);
 	install_element(OSPF6_NODE, &ospf6_stub_router_admin_cmd);
 	install_element(OSPF6_NODE, &no_ospf6_stub_router_admin_cmd);
-/* For a later time */
-#if 0
-  install_element (OSPF6_NODE, &ospf6_stub_router_startup_cmd);
-  install_element (OSPF6_NODE, &no_ospf6_stub_router_startup_cmd);
-  install_element (OSPF6_NODE, &ospf6_stub_router_shutdown_cmd);
-  install_element (OSPF6_NODE, &no_ospf6_stub_router_shutdown_cmd);
-#endif
+
+	/* maximum-paths command */
+	install_element(OSPF6_NODE, &ospf6_max_multipath_cmd);
+	install_element(OSPF6_NODE, &no_ospf6_max_multipath_cmd);
 
 	install_element(OSPF6_NODE, &ospf6_distance_cmd);
 	install_element(OSPF6_NODE, &no_ospf6_distance_cmd);
 	install_element(OSPF6_NODE, &ospf6_distance_ospf6_cmd);
 	install_element(OSPF6_NODE, &no_ospf6_distance_ospf6_cmd);
-#if 0
-  install_element (OSPF6_NODE, &ospf6_distance_source_cmd);
-  install_element (OSPF6_NODE, &no_ospf6_distance_source_cmd);
-#endif
 }

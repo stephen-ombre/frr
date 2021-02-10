@@ -210,7 +210,7 @@ void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
 				       struct ospf6_route *route,
 				       struct ospf6 *ospf6)
 {
-	struct ospf6_route *old_route;
+	struct ospf6_route *old_route, *next_route;
 	struct ospf6_path *ecmp_path, *o_path = NULL;
 	struct listnode *anode, *anext;
 	struct listnode *nnode, *rnode, *rnext;
@@ -220,8 +220,10 @@ void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
 	/* check for old entry match with new route origin,
 	 * delete old entry.
 	 */
-	for (old_route = old; old_route; old_route = old_route->next) {
+	for (old_route = old; old_route; old_route = next_route) {
 		bool route_updated = false;
+
+		next_route = old_route->next;
 
 		if (!ospf6_route_is_same(old_route, route)
 		    || (old_route->path.type != route->path.type))
@@ -315,6 +317,8 @@ void ospf6_asbr_update_route_ecmp_path(struct ospf6_route *old,
 						old_route->path.cost,
 						route->path.cost);
 				}
+				if (old == old_route)
+					old = next_route;
 				ospf6_route_remove(old_route,
 						   ospf6->route_table);
 			}
@@ -1439,8 +1443,7 @@ static void ospf6_redistribute_show_config(struct vty *vty, struct ospf6 *ospf6,
 	struct ospf6_redist *red;
 
 	total = 0;
-	for (type = 0; type < ZEBRA_ROUTE_MAX; type++)
-		nroute[type] = 0;
+	memset(nroute, 0, sizeof(nroute));
 	for (route = ospf6_route_head(ospf6->external_table); route;
 	     route = ospf6_route_next(route)) {
 		info = route->route_option;
@@ -1448,12 +1451,11 @@ static void ospf6_redistribute_show_config(struct vty *vty, struct ospf6 *ospf6,
 		total++;
 	}
 
-	if (use_json)
-		json_route = json_object_new_object();
-	else
+	if (!use_json)
 		vty_out(vty, "Redistributing External Routes from:\n");
 
 	for (type = 0; type < ZEBRA_ROUTE_MAX; type++) {
+
 		red = ospf6_redist_lookup(ospf6, type, 0);
 
 		if (!red)
@@ -1462,6 +1464,7 @@ static void ospf6_redistribute_show_config(struct vty *vty, struct ospf6 *ospf6,
 			continue;
 
 		if (use_json) {
+			json_route = json_object_new_object();
 			json_object_string_add(json_route, "routeType",
 					       ZROUTE_NAME(type));
 			json_object_int_add(json_route, "numberOfRoutes",
@@ -1890,7 +1893,8 @@ static char *ospf6_as_external_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 	return (buf);
 }
 
-static int ospf6_as_external_lsa_show(struct vty *vty, struct ospf6_lsa *lsa)
+static int ospf6_as_external_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
+				      json_object *json_obj, bool use_json)
 {
 	struct ospf6_as_external_lsa *external;
 	char buf[64];
@@ -1908,31 +1912,65 @@ static int ospf6_as_external_lsa_show(struct vty *vty, struct ospf6_lsa *lsa)
 		 (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T) ? 'T'
 								      : '-'));
 
-	vty_out(vty, "     Bits: %s\n", buf);
-	vty_out(vty, "     Metric: %5lu\n",
-		(unsigned long)OSPF6_ASBR_METRIC(external));
+	if (use_json) {
+		json_object_string_add(json_obj, "bits", buf);
+		json_object_int_add(json_obj, "metric",
+				    (unsigned long)OSPF6_ASBR_METRIC(external));
+		ospf6_prefix_options_printbuf(external->prefix.prefix_options,
+					      buf, sizeof(buf));
+		json_object_string_add(json_obj, "prefixOptions", buf);
+		json_object_int_add(
+			json_obj, "referenceLsType",
+			ntohs(external->prefix.prefix_refer_lstype));
+		json_object_string_add(json_obj, "prefix",
+				       ospf6_as_external_lsa_get_prefix_str(
+					       lsa, buf, sizeof(buf), 0));
 
-	ospf6_prefix_options_printbuf(external->prefix.prefix_options, buf,
-				      sizeof(buf));
-	vty_out(vty, "     Prefix Options: %s\n", buf);
+		/* Forwarding-Address */
+		json_object_boolean_add(
+			json_obj, "forwardingAddressPresent",
+			CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F));
+		if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F))
+			json_object_string_add(
+				json_obj, "forwardingAddress",
+				ospf6_as_external_lsa_get_prefix_str(
+					lsa, buf, sizeof(buf), 1));
 
-	vty_out(vty, "     Referenced LSType: %d\n",
-		ntohs(external->prefix.prefix_refer_lstype));
+		/* Tag */
+		json_object_boolean_add(
+			json_obj, "tagPresent",
+			CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T));
+		if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T))
+			json_object_int_add(json_obj, "tag",
+					    ospf6_as_external_lsa_get_tag(lsa));
+	} else {
+		vty_out(vty, "     Bits: %s\n", buf);
+		vty_out(vty, "     Metric: %5lu\n",
+			(unsigned long)OSPF6_ASBR_METRIC(external));
 
-	vty_out(vty, "     Prefix: %s\n",
-		ospf6_as_external_lsa_get_prefix_str(lsa, buf, sizeof(buf), 0));
+		ospf6_prefix_options_printbuf(external->prefix.prefix_options,
+					      buf, sizeof(buf));
+		vty_out(vty, "     Prefix Options: %s\n", buf);
 
-	/* Forwarding-Address */
-	if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F)) {
-		vty_out(vty, "     Forwarding-Address: %s\n",
+		vty_out(vty, "     Referenced LSType: %d\n",
+			ntohs(external->prefix.prefix_refer_lstype));
+
+		vty_out(vty, "     Prefix: %s\n",
 			ospf6_as_external_lsa_get_prefix_str(lsa, buf,
-							     sizeof(buf), 1));
-	}
+							     sizeof(buf), 0));
 
-	/* Tag */
-	if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T)) {
-		vty_out(vty, "     Tag: %" ROUTE_TAG_PRI "\n",
-			ospf6_as_external_lsa_get_tag(lsa));
+		/* Forwarding-Address */
+		if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_F)) {
+			vty_out(vty, "     Forwarding-Address: %s\n",
+				ospf6_as_external_lsa_get_prefix_str(
+					lsa, buf, sizeof(buf), 1));
+		}
+
+		/* Tag */
+		if (CHECK_FLAG(external->bits_metric, OSPF6_ASBR_BIT_T)) {
+			vty_out(vty, "     Tag: %" ROUTE_TAG_PRI "\n",
+				ospf6_as_external_lsa_get_tag(lsa));
+		}
 	}
 
 	return 0;

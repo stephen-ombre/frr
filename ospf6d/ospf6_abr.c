@@ -160,35 +160,22 @@ int ospf6_abr_originate_summary_to_area(struct ospf6_route *route,
 	    && route->type != OSPF6_DEST_TYPE_RANGE
 	    && ((route->type != OSPF6_DEST_TYPE_ROUTER)
 		|| !CHECK_FLAG(route->path.router_bits, OSPF6_ROUTER_BIT_E))) {
-#if 0
-		zlog_debug(
-			"Route type is none of network, range nor ASBR, ignore");
-#endif
 		return 0;
 	}
 
 	/* AS External routes are never considered */
 	if (route->path.type == OSPF6_PATH_TYPE_EXTERNAL1
 	    || route->path.type == OSPF6_PATH_TYPE_EXTERNAL2) {
-#if 0
-		zlog_debug("Path type is external, skip");
-#endif
 		return 0;
 	}
 
 	/* do not generate if the path's area is the same as target area */
 	if (route->path.area_id == area->area_id) {
-#if 0
-		zlog_debug("The route is in the area itself, ignore");
-#endif
 		return 0;
 	}
 
 	/* do not generate if the nexthops belongs to the target area */
 	if (ospf6_abr_nexthops_belong_to_area(route, area)) {
-#if 0
-		zlog_debug("The route's nexthop is in the same area, ignore");
-#endif
 		return 0;
 	}
 
@@ -1296,7 +1283,9 @@ static char *ospf6_inter_area_prefix_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 }
 
 static int ospf6_inter_area_prefix_lsa_show(struct vty *vty,
-					    struct ospf6_lsa *lsa)
+					    struct ospf6_lsa *lsa,
+					    json_object *json_obj,
+					    bool use_json)
 {
 	struct ospf6_inter_prefix_lsa *prefix_lsa;
 	char buf[INET6_ADDRSTRLEN];
@@ -1304,16 +1293,29 @@ static int ospf6_inter_area_prefix_lsa_show(struct vty *vty,
 	prefix_lsa = (struct ospf6_inter_prefix_lsa *)OSPF6_LSA_HEADER_END(
 		lsa->header);
 
-	vty_out(vty, "     Metric: %lu\n",
-		(unsigned long)OSPF6_ABR_SUMMARY_METRIC(prefix_lsa));
+	if (use_json) {
+		json_object_int_add(
+			json_obj, "metric",
+			(unsigned long)OSPF6_ABR_SUMMARY_METRIC(prefix_lsa));
+		ospf6_prefix_options_printbuf(prefix_lsa->prefix.prefix_options,
+					      buf, sizeof(buf));
+		json_object_string_add(json_obj, "prefixOptions", buf);
+		json_object_string_add(
+			json_obj, "prefix",
+			ospf6_inter_area_prefix_lsa_get_prefix_str(
+				lsa, buf, sizeof(buf), 0));
+	} else {
+		vty_out(vty, "     Metric: %lu\n",
+			(unsigned long)OSPF6_ABR_SUMMARY_METRIC(prefix_lsa));
 
-	ospf6_prefix_options_printbuf(prefix_lsa->prefix.prefix_options, buf,
-				      sizeof(buf));
-	vty_out(vty, "     Prefix Options: %s\n", buf);
+		ospf6_prefix_options_printbuf(prefix_lsa->prefix.prefix_options,
+					      buf, sizeof(buf));
+		vty_out(vty, "     Prefix Options: %s\n", buf);
 
-	vty_out(vty, "     Prefix: %s\n",
-		ospf6_inter_area_prefix_lsa_get_prefix_str(lsa, buf,
-							   sizeof(buf), 0));
+		vty_out(vty, "     Prefix: %s\n",
+			ospf6_inter_area_prefix_lsa_get_prefix_str(
+				lsa, buf, sizeof(buf), 0));
+	}
 
 	return 0;
 }
@@ -1338,7 +1340,9 @@ static char *ospf6_inter_area_router_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 }
 
 static int ospf6_inter_area_router_lsa_show(struct vty *vty,
-					    struct ospf6_lsa *lsa)
+					    struct ospf6_lsa *lsa,
+					    json_object *json_obj,
+					    bool use_json)
 {
 	struct ospf6_inter_router_lsa *router_lsa;
 	char buf[64];
@@ -1347,12 +1351,22 @@ static int ospf6_inter_area_router_lsa_show(struct vty *vty,
 		lsa->header);
 
 	ospf6_options_printbuf(router_lsa->options, buf, sizeof(buf));
-	vty_out(vty, "     Options: %s\n", buf);
-	vty_out(vty, "     Metric: %lu\n",
-		(unsigned long)OSPF6_ABR_SUMMARY_METRIC(router_lsa));
+	if (use_json) {
+		json_object_string_add(json_obj, "options", buf);
+		json_object_int_add(
+			json_obj, "metric",
+			(unsigned long)OSPF6_ABR_SUMMARY_METRIC(router_lsa));
+	} else {
+		vty_out(vty, "     Options: %s\n", buf);
+		vty_out(vty, "     Metric: %lu\n",
+			(unsigned long)OSPF6_ABR_SUMMARY_METRIC(router_lsa));
+	}
 
 	inet_ntop(AF_INET, &router_lsa->router_id, buf, sizeof(buf));
-	vty_out(vty, "     Destination Router ID: %s\n", buf);
+	if (use_json)
+		json_object_string_add(json_obj, "destinationRouterId", buf);
+	else
+		vty_out(vty, "     Destination Router ID: %s\n", buf);
 
 	return 0;
 }

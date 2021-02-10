@@ -250,6 +250,7 @@ void ospf6_interface_delete(struct ospf6_interface *oi)
 	THREAD_OFF(oi->thread_send_lsupdate);
 	THREAD_OFF(oi->thread_send_lsack);
 	THREAD_OFF(oi->thread_sso);
+	THREAD_OFF(oi->thread_wait_timer);
 
 	ospf6_lsdb_remove_all(oi->lsdb);
 	ospf6_lsdb_remove_all(oi->lsupdate_list);
@@ -304,6 +305,7 @@ void ospf6_interface_disable(struct ospf6_interface *oi)
 	THREAD_OFF(oi->thread_link_lsa);
 	THREAD_OFF(oi->thread_intra_prefix_lsa);
 	THREAD_OFF(oi->thread_as_extern_lsa);
+	THREAD_OFF(oi->thread_wait_timer);
 }
 
 static struct in6_addr *
@@ -793,7 +795,7 @@ int interface_up(struct thread *thread)
 	else {
 		ospf6_interface_state_change(OSPF6_INTERFACE_WAITING, oi);
 		thread_add_timer(master, wait_timer, oi, oi->dead_interval,
-				 NULL);
+				 &oi->thread_wait_timer);
 	}
 
 	return 0;
@@ -1414,7 +1416,7 @@ DEFUN (show_ipv6_ospf6_interface_ifname_prefix,
           [<\
 	    detail\
 	    |<X:X::X:X|X:X::X:X/M> [<match|detail>]\
-	  >]",
+	  >] [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
@@ -1425,12 +1427,14 @@ DEFUN (show_ipv6_ospf6_interface_ifname_prefix,
        OSPF6_ROUTE_ADDRESS_STR
        OSPF6_ROUTE_PREFIX_STR
        OSPF6_ROUTE_MATCH_STR
-       "Display details of the prefixes\n")
+       "Display details of the prefixes\n"
+       JSON_STR)
 {
 	int idx_ifname = 4;
 	int idx_prefix = 6;
 	struct interface *ifp;
 	struct ospf6_interface *oi;
+	bool uj = use_json(argc, argv);
 
 	ifp = if_lookup_by_name(argv[idx_ifname]->arg, VRF_DEFAULT);
 	if (ifp == NULL) {
@@ -1445,8 +1449,8 @@ DEFUN (show_ipv6_ospf6_interface_ifname_prefix,
 		return CMD_WARNING;
 	}
 
-	ospf6_route_table_show(vty, idx_prefix, argc, argv,
-			       oi->route_connected);
+	ospf6_route_table_show(vty, idx_prefix, argc, argv, oi->route_connected,
+			       uj);
 
 	return CMD_SUCCESS;
 }
@@ -1457,7 +1461,7 @@ DEFUN (show_ipv6_ospf6_interface_prefix,
           [<\
 	    detail\
 	    |<X:X::X:X|X:X::X:X/M> [<match|detail>]\
-	  >]",
+	  >] [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
@@ -1467,12 +1471,14 @@ DEFUN (show_ipv6_ospf6_interface_prefix,
        OSPF6_ROUTE_ADDRESS_STR
        OSPF6_ROUTE_PREFIX_STR
        OSPF6_ROUTE_MATCH_STR
-       "Display details of the prefixes\n")
+       "Display details of the prefixes\n"
+       JSON_STR)
 {
 	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
 	int idx_prefix = 5;
 	struct ospf6_interface *oi;
 	struct interface *ifp;
+	bool uj = use_json(argc, argv);
 
 	FOR_ALL_INTERFACES (vrf, ifp) {
 		oi = (struct ospf6_interface *)ifp->info;
@@ -1480,7 +1486,7 @@ DEFUN (show_ipv6_ospf6_interface_prefix,
 			continue;
 
 		ospf6_route_table_show(vty, idx_prefix, argc, argv,
-				       oi->route_connected);
+				       oi->route_connected, uj);
 	}
 
 	return CMD_SUCCESS;

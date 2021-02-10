@@ -2602,6 +2602,43 @@ ALIAS(no_ospf_write_multiplier, no_write_multiplier_cmd,
       "Write multiplier\n"
       "Maximum number of interface serviced per write\n")
 
+DEFUN(ospf_ti_lfa, ospf_ti_lfa_cmd, "fast-reroute ti-lfa [node-protection]",
+      "Fast Reroute for MPLS and IP resilience\n"
+      "Topology Independent LFA (Loop-Free Alternate)\n"
+      "TI-LFA node protection (default is link protection)\n")
+{
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+
+	ospf->ti_lfa_enabled = true;
+
+	if (argc == 3)
+		ospf->ti_lfa_protection_type = OSPF_TI_LFA_NODE_PROTECTION;
+	else
+		ospf->ti_lfa_protection_type = OSPF_TI_LFA_LINK_PROTECTION;
+
+	ospf_spf_calculate_schedule(ospf, SPF_FLAG_CONFIG_CHANGE);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN(no_ospf_ti_lfa, no_ospf_ti_lfa_cmd,
+      "no fast-reroute ti-lfa [node-protection]",
+      NO_STR
+      "Fast Reroute for MPLS and IP resilience\n"
+      "Topology Independent LFA (Loop-Free Alternate)\n"
+      "TI-LFA node protection (default is link protection)\n")
+{
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+
+	ospf->ti_lfa_enabled = false;
+
+	ospf->ti_lfa_protection_type = OSPF_TI_LFA_UNDEFINED_PROTECTION;
+
+	ospf_spf_calculate_schedule(ospf, SPF_FLAG_CONFIG_CHANGE);
+
+	return CMD_SUCCESS;
+}
+
 static const char *const ospf_abr_type_descr_str[] = {
 	"Unknown", "Standard (RFC2328)", "Alternative IBM",
 	"Alternative Cisco", "Alternative Shortcut"
@@ -6369,31 +6406,7 @@ static int show_as_external_lsa_detail(struct vty *vty, struct ospf_lsa *lsa,
 
 	return 0;
 }
-#if 0
-static int
-show_as_external_lsa_stdvty (struct ospf_lsa *lsa)
-{
-  struct as_external_lsa *al = (struct as_external_lsa *) lsa->data;
 
-  /* show_ip_ospf_database_header (vty, lsa); */
-
-  zlog_debug( "  Network Mask: /%d%s",
-	     ip_masklen (al->mask), "\n");
-  zlog_debug( "        Metric Type: %s%s",
-	     IS_EXTERNAL_METRIC (al->e[0].tos) ?
-	     "2 (Larger than any link state path)" : "1", "\n");
-  zlog_debug( "        TOS: 0%s", "\n");
-  zlog_debug( "        Metric: %d%s",
-	     GET_METRIC (al->e[0].metric), "\n");
-  zlog_debug( "        Forward Address: %pI4%s",
-	     &al->e[0].fwd_addr, "\n");
-
-  zlog_debug( "        External Route Tag: %"ROUTE_TAG_PRI"%s%s",
-	     (route_tag_t)ntohl (al->e[0].route_tag), "\n", "\n");
-
-  return 0;
-}
-#endif
 /* Show AS-NSSA-LSA detail information. */
 static int show_as_nssa_lsa_detail(struct vty *vty, struct ospf_lsa *lsa,
 				   json_object *json)
@@ -6681,8 +6694,8 @@ static void show_lsa_detail_adv_router(struct vty *vty, struct ospf *ospf,
 				       json_lstype);
 }
 
-static void show_ip_ospf_database_summary(struct vty *vty, struct ospf *ospf,
-					  int self, json_object *json)
+void show_ip_ospf_database_summary(struct vty *vty, struct ospf *ospf, int self,
+				   json_object *json)
 {
 	struct ospf_lsa *lsa;
 	struct route_node *rn;
@@ -9430,78 +9443,6 @@ DEFUN (ospf_distance_ospf,
 	return CMD_SUCCESS;
 }
 
-#if 0
-DEFUN (ospf_distance_source,
-       ospf_distance_source_cmd,
-       "distance (1-255) A.B.C.D/M",
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf, ospf);
-  int idx_number = 1;
-  int idx_ipv4_prefixlen = 2;
-
-  ospf_distance_set (vty, ospf, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_ospf_distance_source,
-       no_ospf_distance_source_cmd,
-       "no distance (1-255) A.B.C.D/M",
-       NO_STR
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf, ospf);
-  int idx_number = 2;
-  int idx_ipv4_prefixlen = 3;
-
-  ospf_distance_unset (vty, ospf, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, NULL);
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (ospf_distance_source_access_list,
-       ospf_distance_source_access_list_cmd,
-       "distance (1-255) A.B.C.D/M WORD",
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n"
-       "Access list name\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf, ospf);
-  int idx_number = 1;
-  int idx_ipv4_prefixlen = 2;
-  int idx_word = 3;
-
-  ospf_distance_set (vty, ospf, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
-
-  return CMD_SUCCESS;
-}
-
-DEFUN (no_ospf_distance_source_access_list,
-       no_ospf_distance_source_access_list_cmd,
-       "no distance (1-255) A.B.C.D/M WORD",
-       NO_STR
-       "Administrative distance\n"
-       "Distance value\n"
-       "IP source prefix\n"
-       "Access list name\n")
-{
-  VTY_DECLVAR_CONTEXT(ospf, ospf);
-  int idx_number = 2;
-  int idx_ipv4_prefixlen = 3;
-  int idx_word = 4;
-
-  ospf_distance_unset (vty, ospf, argv[idx_number]->arg, argv[idx_ipv4_prefixlen]->arg, argv[idx_word]->arg);
-
-  return CMD_SUCCESS;
-}
-#endif
-
 DEFUN (ip_ospf_mtu_ignore,
        ip_ospf_mtu_ignore_addr_cmd,
        "ip ospf mtu-ignore [A.B.C.D]",
@@ -9981,10 +9922,10 @@ DEFPY(no_ospf_gr_helper_planned_only,
 	return CMD_SUCCESS;
 }
 
-static int ospf_print_vty_helper_dis_rtr_walkcb(struct hash_bucket *backet,
+static int ospf_print_vty_helper_dis_rtr_walkcb(struct hash_bucket *bucket,
 						void *arg)
 {
-	struct advRtr *rtr = backet->data;
+	struct advRtr *rtr = bucket->data;
 	struct vty *vty = (struct vty *)arg;
 	static unsigned int count;
 
@@ -11302,10 +11243,10 @@ static const char *const ospf_abr_type_str[] = {
 static const char *const ospf_shortcut_mode_str[] = {
 	"default", "enable", "disable"
 };
-static int ospf_vty_external_rt_walkcb(struct hash_bucket *backet,
+static int ospf_vty_external_rt_walkcb(struct hash_bucket *bucket,
 					void *arg)
 {
-	struct external_info *ei = backet->data;
+	struct external_info *ei = bucket->data;
 	struct vty *vty = (struct vty *)arg;
 	static unsigned int count;
 
@@ -11321,10 +11262,10 @@ static int ospf_vty_external_rt_walkcb(struct hash_bucket *backet,
 	return HASHWALK_CONTINUE;
 }
 
-static int ospf_json_external_rt_walkcb(struct hash_bucket *backet,
+static int ospf_json_external_rt_walkcb(struct hash_bucket *bucket,
 					void *arg)
 {
-	struct external_info *ei = backet->data;
+	struct external_info *ei = bucket->data;
 	struct json_object *json = (struct json_object *)arg;
 	char buf[PREFIX2STR_BUFFER];
 	char exnalbuf[20];
@@ -12093,10 +12034,10 @@ static int config_write_ospf_redistribute(struct vty *vty, struct ospf *ospf)
 	return 0;
 }
 
-static int ospf_cfg_write_helper_dis_rtr_walkcb(struct hash_bucket *backet,
+static int ospf_cfg_write_helper_dis_rtr_walkcb(struct hash_bucket *bucket,
 						void *arg)
 {
-	struct advRtr *rtr = backet->data;
+	struct advRtr *rtr = bucket->data;
 	struct vty *vty = (struct vty *)arg;
 
 	vty_out(vty, " graceful-restart helper-only %pI4\n",
@@ -12364,6 +12305,14 @@ static int ospf_config_write_one(struct vty *vty, struct ospf *ospf)
 			oi->ifp->name, &oi->address->u.prefix4);
 	}
 
+	/* TI-LFA print. */
+	if (ospf->ti_lfa_enabled) {
+		if (ospf->ti_lfa_protection_type == OSPF_TI_LFA_NODE_PROTECTION)
+			vty_out(vty, " fast-reroute ti-lfa node-protection\n");
+		else
+			vty_out(vty, " fast-reroute ti-lfa\n");
+	}
+
 	/* Network area print. */
 	config_write_network_area(vty, ospf);
 
@@ -12608,13 +12557,6 @@ static void ospf_vty_zebra_init(void)
 			&no_ospf_external_route_aggregation_no_adrvertise_cmd);
 	install_element(OSPF_NODE, &ospf_route_aggregation_timer_cmd);
 	install_element(OSPF_NODE, &no_ospf_route_aggregation_timer_cmd);
-
-#if 0
-  install_element (OSPF_NODE, &ospf_distance_source_cmd);
-  install_element (OSPF_NODE, &no_ospf_distance_source_cmd);
-  install_element (OSPF_NODE, &ospf_distance_source_access_list_cmd);
-  install_element (OSPF_NODE, &no_ospf_distance_source_access_list_cmd);
-#endif /* 0 */
 }
 
 static int ospf_config_write(struct vty *vty);
@@ -12827,6 +12769,10 @@ void ospf_vty_init(void)
 	/* "proactive-arp" commands. */
 	install_element(OSPF_NODE, &ospf_proactive_arp_cmd);
 	install_element(OSPF_NODE, &no_ospf_proactive_arp_cmd);
+
+	/* TI-LFA commands */
+	install_element(OSPF_NODE, &ospf_ti_lfa_cmd);
+	install_element(OSPF_NODE, &no_ospf_ti_lfa_cmd);
 
 	/* Init interface related vty commands. */
 	ospf_vty_if_init();

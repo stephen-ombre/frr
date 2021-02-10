@@ -3704,6 +3704,7 @@ void bgp_free(struct bgp *bgp)
 
 	XFREE(MTYPE_BGP, bgp->name);
 	XFREE(MTYPE_BGP, bgp->name_pretty);
+	XFREE(MTYPE_BGP, bgp->snmp_stats);
 
 	XFREE(MTYPE_BGP, bgp);
 }
@@ -5216,10 +5217,10 @@ int peer_timers_set(struct peer *peer, uint32_t keepalive, uint32_t holdtime)
 	struct peer *member;
 	struct listnode *node, *nnode;
 
-	if (keepalive > 65535)
+	if (keepalive > UINT16_MAX)
 		return BGP_ERR_INVALID_VALUE;
 
-	if (holdtime > 65535)
+	if (holdtime > UINT16_MAX)
 		return BGP_ERR_INVALID_VALUE;
 
 	if (holdtime < 3 && holdtime != 0)
@@ -5296,7 +5297,7 @@ int peer_timers_connect_set(struct peer *peer, uint32_t connect)
 	struct peer *member;
 	struct listnode *node, *nnode;
 
-	if (connect > 65535)
+	if (connect > UINT16_MAX)
 		return BGP_ERR_INVALID_VALUE;
 
 	/* Set flag and configuration on peer. */
@@ -5305,9 +5306,14 @@ int peer_timers_connect_set(struct peer *peer, uint32_t connect)
 	peer->v_connect = connect;
 
 	/* Skip peer-group mechanics for regular peers. */
-	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP))
+	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
+		if (peer->status != Established) {
+			if (peer_active(peer))
+				BGP_EVENT_ADD(peer, BGP_Stop);
+			BGP_EVENT_ADD(peer, BGP_Start);
+		}
 		return 0;
-
+	}
 	/*
 	 * Set flag and configuration on all peer-group members, unless they are
 	 * explicitely overriding peer-group configuration.
@@ -5321,6 +5327,12 @@ int peer_timers_connect_set(struct peer *peer, uint32_t connect)
 		SET_FLAG(member->flags, PEER_FLAG_TIMER_CONNECT);
 		member->connect = connect;
 		member->v_connect = connect;
+
+		if (member->status != Established) {
+			if (peer_active(member))
+				BGP_EVENT_ADD(member, BGP_Stop);
+			BGP_EVENT_ADD(member, BGP_Start);
+		}
 	}
 
 	return 0;
@@ -5348,9 +5360,14 @@ int peer_timers_connect_unset(struct peer *peer)
 		peer->v_connect = peer->bgp->default_connect_retry;
 
 	/* Skip peer-group mechanics for regular peers. */
-	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP))
+	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
+		if (peer->status != Established) {
+			if (peer_active(peer))
+				BGP_EVENT_ADD(peer, BGP_Stop);
+			BGP_EVENT_ADD(peer, BGP_Start);
+		}
 		return 0;
-
+	}
 	/*
 	 * Remove flag and configuration from all peer-group members, unless
 	 * they are explicitely overriding peer-group configuration.
@@ -5364,6 +5381,12 @@ int peer_timers_connect_unset(struct peer *peer)
 		UNSET_FLAG(member->flags, PEER_FLAG_TIMER_CONNECT);
 		member->connect = 0;
 		member->v_connect = peer->bgp->default_connect_retry;
+
+		if (member->status != Established) {
+			if (peer_active(member))
+				BGP_EVENT_ADD(member, BGP_Stop);
+			BGP_EVENT_ADD(member, BGP_Start);
+		}
 	}
 
 	return 0;
@@ -5682,11 +5705,6 @@ int peer_allowas_in_unset(struct peer *peer, afi_t afi, safi_t safi)
 		/* Skip peers with overridden configuration. */
 		if (CHECK_FLAG(member->af_flags_override[afi][safi],
 			       PEER_FLAG_ALLOWAS_IN))
-			continue;
-
-		/* Skip peers where flag is already disabled. */
-		if (!CHECK_FLAG(member->af_flags[afi][safi],
-				PEER_FLAG_ALLOWAS_IN))
 			continue;
 
 		/* Remove flags and configuration on peer-group member. */
