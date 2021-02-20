@@ -250,6 +250,8 @@ static int bgp_ifp_up(struct interface *ifp)
 		bgp_nbr_connected_add(bgp, nc);
 
 	hook_call(bgp_vrf_status_changed, bgp, ifp);
+	bgp_nht_ifp_up(ifp);
+
 	return 0;
 }
 
@@ -305,6 +307,8 @@ static int bgp_ifp_down(struct interface *ifp)
 	}
 
 	hook_call(bgp_vrf_status_changed, bgp, ifp);
+	bgp_nht_ifp_down(ifp);
+
 	return 0;
 }
 
@@ -906,6 +910,7 @@ bgp_path_info_to_ipv6_nexthop(struct bgp_path_info *path, ifindex_t *ifindex)
 			/* Workaround for Cisco's nexthop bug.  */
 			if (IN6_IS_ADDR_UNSPECIFIED(
 				    &path->attr->mp_nexthop_global)
+			    && path->peer->su_remote
 			    && path->peer->su_remote->sa.sa_family
 				       == AF_INET6) {
 				nexthop =
@@ -953,8 +958,11 @@ static bool bgp_table_map_apply(struct route_map *map, const struct prefix *p,
 			zlog_debug(
 				"Zebra rmap deny: IPv6 route %pFX nexthop %s",
 				p,
-				inet_ntop(AF_INET6, nexthop, buf[1],
-					  sizeof(buf[1])));
+				nexthop ? inet_ntop(AF_INET6, nexthop, buf[1],
+						    sizeof(buf[1]))
+					: inet_ntop(AF_INET,
+						    &path->attr->nexthop,
+						    buf[1], sizeof(buf[1])));
 		}
 	}
 	return false;

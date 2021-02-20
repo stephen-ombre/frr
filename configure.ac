@@ -191,6 +191,11 @@ CXXFLAGS="$orig_cxxflags"
 AC_PROG_CC_C99
 dnl NB: see C11 below
 
+dnl Some special handling for ICC later on
+if test "$CC" = "icc"; then
+    cc_is_icc="yes"
+fi
+
 PKG_PROG_PKG_CONFIG
 
 dnl it's 2019, sed is sed.
@@ -252,7 +257,9 @@ AC_DEFUN([AC_LINK_IFELSE_FLAGS], [{
 
 dnl ICC won't bail on unknown options without -diag-error 10006
 dnl need to do this first so we get useful results for the other options
-AC_C_FLAG([-diag-error 10006])
+if test "$cc_is_icc" = "yes"; then
+    AC_C_FLAG([-diag-error 10006])
+fi
 
 dnl AC_PROG_CC_C99 may change CC to include -std=gnu99 or something
 ac_cc="$CC"
@@ -335,7 +342,9 @@ AC_SUBST([CXX_COMPAT_CFLAGS])
 dnl ICC emits a broken warning for const char *x = a ? "b" : "c";
 dnl for some reason the string consts get 'promoted' to char *,
 dnl triggering a const to non-const conversion warning.
-AC_C_FLAG([-diag-disable 3179])
+if test "$cc_is_icc" = "yes"; then
+    AC_C_FLAG([-diag-disable 3179])
+fi
 
 if test "$enable_werror" = "yes" ; then
   WERROR="-Werror"
@@ -2364,6 +2373,29 @@ struct mallinfo ac_x; ac_x = mallinfo ();
 ])
 if test "$frr_cv_mallinfo" = "yes"; then
   AC_DEFINE([HAVE_MALLINFO], [1], [mallinfo])
+fi
+
+AC_CACHE_CHECK([whether mallinfo2 is available], [frr_cv_mallinfo2], [
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([FRR_INCLUDES [
+#ifdef HAVE_MALLOC_H
+#include <malloc.h>
+#endif
+#ifdef HAVE_MALLOC_NP_H
+#include <malloc_np.h>
+#endif
+#ifdef HAVE_MALLOC_MALLOC_H
+#include <malloc/malloc.h>
+#endif
+]], [[
+struct mallinfo2 ac_x; ac_x = mallinfo2 ();
+]])], [
+    frr_cv_mallinfo2=yes
+  ], [
+    frr_cv_mallinfo2=no
+  ])
+])
+if test "$frr_cv_mallinfo2" = "yes"; then
+  AC_DEFINE([HAVE_MALLINFO2], [1], [mallinfo2])
 fi
 
 AC_MSG_CHECKING([whether malloc_usable_size is available])
