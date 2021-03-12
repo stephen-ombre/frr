@@ -97,6 +97,11 @@ DEFINE_HOOK(bgp_snmp_update_stats,
 	    (struct bgp_node *rn, struct bgp_path_info *pi, bool added),
 	    (rn, pi, added))
 
+DEFINE_HOOK(bgp_rpki_prefix_status,
+	    (struct peer *peer, struct attr *attr,
+	     const struct prefix *prefix),
+	    (peer, attr, prefix))
+
 /* Extern from bgp_dump.c */
 extern const char *bgp_origin_str[];
 extern const char *bgp_origin_long_str[];
@@ -525,13 +530,14 @@ static uint32_t bgp_med_value(struct attr *attr, struct bgp *bgp)
 	}
 }
 
-void bgp_path_info_path_with_addpath_rx_str(struct bgp_path_info *pi, char *buf)
+void bgp_path_info_path_with_addpath_rx_str(struct bgp_path_info *pi, char *buf,
+					    size_t buf_len)
 {
 	if (pi->addpath_rx_id)
-		sprintf(buf, "path %s (addpath rxid %d)", pi->peer->host,
-			pi->addpath_rx_id);
+		snprintf(buf, buf_len, "path %s (addpath rxid %d)",
+			 pi->peer->host, pi->addpath_rx_id);
 	else
-		sprintf(buf, "path %s", pi->peer->host);
+		snprintf(buf, buf_len, "path %s", pi->peer->host);
 }
 
 /* Compare two bgp route entity.  If 'new' is preferable over 'exist' return 1.
@@ -582,7 +588,8 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 	}
 
 	if (debug)
-		bgp_path_info_path_with_addpath_rx_str(new, new_buf);
+		bgp_path_info_path_with_addpath_rx_str(new, new_buf,
+						       sizeof(new_buf));
 
 	if (exist == NULL) {
 		*reason = bgp_path_selection_first;
@@ -593,7 +600,8 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 	}
 
 	if (debug) {
-		bgp_path_info_path_with_addpath_rx_str(exist, exist_buf);
+		bgp_path_info_path_with_addpath_rx_str(exist, exist_buf,
+						       sizeof(exist_buf));
 		zlog_debug("%s: Comparing %s flags 0x%x with %s flags 0x%x",
 			   pfx_buf, new_buf, new->flags, exist_buf,
 			   exist->flags);
@@ -621,10 +629,10 @@ static int bgp_path_info_cmp(struct bgp *bgp, struct bgp_path_info *new,
 				prefix2str(
 					bgp_dest_get_prefix(new->net), pfx_buf,
 					sizeof(*pfx_buf) * PREFIX2STR_BUFFER);
-				bgp_path_info_path_with_addpath_rx_str(new,
-								       new_buf);
 				bgp_path_info_path_with_addpath_rx_str(
-					exist, exist_buf);
+					new, new_buf, sizeof(new_buf));
+				bgp_path_info_path_with_addpath_rx_str(
+					exist, exist_buf, sizeof(exist_buf));
 			}
 
 			if (newattr->sticky && !existattr->sticky) {
@@ -2348,7 +2356,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 
 			if (debug) {
 				bgp_path_info_path_with_addpath_rx_str(
-					new_select, path_buf);
+					new_select, path_buf, sizeof(path_buf));
 				zlog_debug(
 					"%pBD: %s is the bestpath from AS %u",
 					dest, path_buf,
@@ -2422,8 +2430,8 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 	 */
 	if (debug) {
 		if (new_select)
-			bgp_path_info_path_with_addpath_rx_str(new_select,
-							       path_buf);
+			bgp_path_info_path_with_addpath_rx_str(
+				new_select, path_buf, sizeof(path_buf));
 		else
 			snprintf(path_buf, sizeof(path_buf), "NONE");
 		zlog_debug(
@@ -2438,7 +2446,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 
 			if (debug)
 				bgp_path_info_path_with_addpath_rx_str(
-					pi, path_buf);
+					pi, path_buf, sizeof(path_buf));
 
 			if (pi == new_select) {
 				if (debug)
@@ -3594,19 +3602,6 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 	if (has_valid_label)
 		assert(label != NULL);
 
-	/* The flag BGP_NODE_FIB_INSTALL_PENDING is for the following
-	 * condition :
-	 * Suppress fib is enabled
-	 * BGP_OPT_NO_FIB is not enabled
-	 * Route type is BGP_ROUTE_NORMAL (peer learnt routes)
-	 * Route is being installed first time (BGP_NODE_FIB_INSTALLED not set)
-	 */
-	if (BGP_SUPPRESS_FIB_ENABLED(bgp) &&
-	    (sub_type == BGP_ROUTE_NORMAL) &&
-	    (!bgp_option_check(BGP_OPT_NO_FIB)) &&
-	    (!CHECK_FLAG(dest->flags, BGP_NODE_FIB_INSTALLED)))
-		SET_FLAG(dest->flags, BGP_NODE_FIB_INSTALL_PENDING);
-
 	/* When peer's soft reconfiguration enabled.  Record input packet in
 	   Adj-RIBs-In.  */
 	if (!soft_reconfig
@@ -3787,6 +3782,19 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 		overlay_index_update(&new_attr,
 				     evpn == NULL ? NULL : &evpn->gw_ip);
 	}
+
+	/* The flag BGP_NODE_FIB_INSTALL_PENDING is for the following
+	 * condition :
+	 * Suppress fib is enabled
+	 * BGP_OPT_NO_FIB is not enabled
+	 * Route type is BGP_ROUTE_NORMAL (peer learnt routes)
+	 * Route is being installed first time (BGP_NODE_FIB_INSTALLED not set)
+	 */
+	if (bgp_fibupd_safi(safi) && BGP_SUPPRESS_FIB_ENABLED(bgp)
+	    && (sub_type == BGP_ROUTE_NORMAL)
+	    && (!bgp_option_check(BGP_OPT_NO_FIB))
+	    && (!CHECK_FLAG(dest->flags, BGP_NODE_FIB_INSTALLED)))
+		SET_FLAG(dest->flags, BGP_NODE_FIB_INSTALL_PENDING);
 
 	attr_new = bgp_attr_intern(&new_attr);
 
@@ -5247,26 +5255,18 @@ int bgp_nlri_parse_ip(struct peer *peer, struct attr *attr,
 		/* Check address. */
 		if (afi == AFI_IP6 && safi == SAFI_UNICAST) {
 			if (IN6_IS_ADDR_LINKLOCAL(&p.u.prefix6)) {
-				char buf[BUFSIZ];
-
 				flog_err(
 					EC_BGP_UPDATE_RCV,
-					"%s: IPv6 unicast NLRI is link-local address %s, ignoring",
-					peer->host,
-					inet_ntop(AF_INET6, &p.u.prefix6, buf,
-						  BUFSIZ));
+					"%s: IPv6 unicast NLRI is link-local address %pI6, ignoring",
+					peer->host, &p.u.prefix6);
 
 				continue;
 			}
 			if (IN6_IS_ADDR_MULTICAST(&p.u.prefix6)) {
-				char buf[BUFSIZ];
-
 				flog_err(
 					EC_BGP_UPDATE_RCV,
-					"%s: IPv6 unicast NLRI is multicast address %s, ignoring",
-					peer->host,
-					inet_ntop(AF_INET6, &p.u.prefix6, buf,
-						  BUFSIZ));
+					"%s: IPv6 unicast NLRI is multicast address %pI6, ignoring",
+					peer->host, &p.u.prefix6);
 
 				continue;
 			}
@@ -6389,7 +6389,8 @@ DEFPY_YANG (bgp_network, bgp_network_cmd,
 		int ret;
 
 		ret = netmask_str2prefix_str(address_str, netmask_str,
-					     addr_prefix_str);
+					     addr_prefix_str,
+					     sizeof(addr_prefix_str));
 		if (!ret) {
 			vty_out(vty, "%% Inconsistent address and mask\n");
 			return CMD_WARNING_CONFIG_FAILED;
@@ -7550,6 +7551,21 @@ static const char *bgp_origin2str(uint8_t origin)
 	return "n/a";
 }
 
+static const char *bgp_rpki_validation2str(int v_state)
+{
+	switch (v_state) {
+	case 1:
+		return "valid";
+	case 2:
+		return "not found";
+	case 3:
+		return "invalid";
+	default:
+		break;
+	}
+	return "ERROR";
+}
+
 int bgp_aggregate_unset(struct bgp *bgp, struct prefix *prefix, afi_t afi,
 			safi_t safi, char *errmsg, size_t errmsg_len)
 {
@@ -7780,7 +7796,8 @@ DEFPY_YANG(
 	char prefix_buf[PREFIX2STR_BUFFER];
 
 	if (addr_str) {
-		if (netmask_str2prefix_str(addr_str, mask_str, prefix_buf)
+		if (netmask_str2prefix_str(addr_str, mask_str, prefix_buf,
+					   sizeof(prefix_buf))
 		    == 0) {
 			vty_out(vty, "%% Inconsistent address and mask\n");
 			return CMD_WARNING_CONFIG_FAILED;
@@ -9563,6 +9580,7 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 	int i;
 	char *nexthop_hostname =
 		bgp_nexthop_hostname(path->peer, path->nexthop);
+	int rpki_validation_state = 0;
 
 	if (json_paths) {
 		json_path = json_object_new_object();
@@ -10159,6 +10177,20 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 			vty_out(vty, " (%s)",
 				bgp_path_selection_reason2str(bn->reason));
 		}
+	}
+
+	const struct prefix *p = bgp_dest_get_prefix(bn);
+	if (p->family == AF_INET || p->family == AF_INET6)
+		rpki_validation_state = hook_call(bgp_rpki_prefix_status,
+						  path->peer, path->attr, p);
+	if (rpki_validation_state) {
+		if (json_paths)
+			json_object_string_add(
+				json_path, "rpkiValidationState",
+				bgp_rpki_validation2str(rpki_validation_state));
+		else
+			vty_out(vty, ", validation-state: %s",
+				bgp_rpki_validation2str(rpki_validation_state));
 	}
 
 	if (json_bestpath)
@@ -12380,6 +12412,9 @@ static int bgp_table_stats_walker(struct thread *t)
 	case AFI_IP6:
 		space = IPV6_MAX_BITLEN;
 		break;
+	case AFI_L2VPN:
+		space = EVPN_ROUTE_PREFIXLEN;
+		break;
 	default:
 		return 0;
 	}
@@ -14308,6 +14343,21 @@ static int bgp_clear_damp_route(struct vty *vty, const char *view_name,
 				while (pi) {
 					if (pi->extra && pi->extra->damp_info) {
 						pi_temp = pi->next;
+						struct bgp_damp_info *bdi =
+							pi->extra->damp_info;
+						if (bdi->lastrecord
+						    == BGP_RECORD_UPDATE) {
+							bgp_aggregate_increment(
+								bgp,
+								&bdi->dest->p,
+								bdi->path,
+								bdi->afi,
+								bdi->safi);
+							bgp_process(bgp,
+								    bdi->dest,
+								    bdi->afi,
+								    bdi->safi);
+						}
 						bgp_damp_info_free(
 							&pi->extra->damp_info,
 							&bgp->damp[afi][safi],
@@ -14334,7 +14384,7 @@ DEFUN (clear_ip_bgp_dampening,
        "Clear route flap dampening information\n")
 {
 	VTY_DECLVAR_CONTEXT(bgp, bgp);
-	bgp_damp_info_clean(&bgp->damp[AFI_IP][SAFI_UNICAST], AFI_IP,
+	bgp_damp_info_clean(bgp, &bgp->damp[AFI_IP][SAFI_UNICAST], AFI_IP,
 			    SAFI_UNICAST);
 	return CMD_SUCCESS;
 }
@@ -14383,7 +14433,7 @@ DEFUN (clear_ip_bgp_dampening_address_mask,
 	char prefix_str[BUFSIZ];
 
 	ret = netmask_str2prefix_str(argv[idx_ipv4]->arg, argv[idx_ipv4_2]->arg,
-				     prefix_str);
+				     prefix_str, sizeof(prefix_str));
 	if (!ret) {
 		vty_out(vty, "%% Inconsistent address and mask\n");
 		return CMD_WARNING;

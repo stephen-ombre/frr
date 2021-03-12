@@ -1099,6 +1099,27 @@ void ospf6_asbr_send_externals_to_area(struct ospf6_area *oa)
 	}
 }
 
+/* When an area is stubified, remove all the external LSAs in the area */
+void ospf6_asbr_remove_externals_from_area(struct ospf6_area *oa)
+{
+	struct ospf6_lsa *lsa, *lsanext;
+	struct listnode *node, *nnode;
+	struct ospf6_area *area;
+	struct ospf6 *ospf6 = oa->ospf6;
+
+
+	/* skip if router is in other non-stub areas */
+	for (ALL_LIST_ELEMENTS(ospf6->area_list, node, nnode, area))
+		if (!IS_AREA_STUB(area))
+			return;
+
+	/* if router is only in a stub area then purge AS-External LSAs */
+	for (ALL_LSDB(oa->ospf6->lsdb, lsa, lsanext)) {
+		if (ntohs(lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL)
+			ospf6_lsdb_remove(lsa, ospf6->lsdb);
+	}
+}
+
 void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 				 struct prefix *prefix,
 				 unsigned int nexthop_num,
@@ -1865,6 +1886,7 @@ static char *ospf6_as_external_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 	struct ospf6_as_external_lsa *external;
 	struct in6_addr in6;
 	int prefix_length = 0;
+	char tbuf[16];
 
 	if (lsa) {
 		external = (struct ospf6_as_external_lsa *)OSPF6_LSA_HEADER_END(
@@ -1885,9 +1907,11 @@ static char *ospf6_as_external_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 		}
 		if (buf) {
 			inet_ntop(AF_INET6, &in6, buf, buflen);
-			if (prefix_length)
-				sprintf(&buf[strlen(buf)], "/%d",
-					prefix_length);
+			if (prefix_length) {
+				snprintf(tbuf, sizeof(tbuf), "/%d",
+					 prefix_length);
+				strlcat(buf, tbuf, buflen);
+			}
 		}
 	}
 	return (buf);

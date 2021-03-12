@@ -75,6 +75,8 @@ from lib.bgp import verify_bgp_convergence, create_router_bgp, verify_bgp_rib
 from lib.topojson import build_topo_from_json, build_config_from_json
 from lib.topotest import version_cmp
 
+pytestmark = [pytest.mark.bgpd, pytest.mark.staticd]
+
 # Reading the data from JSON File for topology creation
 jsonFile = "{}/static_routes_topo2_ibgp.json".format(CWD)
 try:
@@ -163,9 +165,11 @@ def setup_module(mod):
     # Creating configuration from JSON
     build_config_from_json(tgen, topo)
 
-    if version_cmp(platform.release(), '4.19') < 0:
-        error_msg = ('These tests will not run. (have kernel "{}", '
-            'requires kernel >= 4.19)'.format(platform.release()))
+    if version_cmp(platform.release(), "4.19") < 0:
+        error_msg = (
+            'These tests will not run. (have kernel "{}", '
+            "requires kernel >= 4.19)".format(platform.release())
+        )
         pytest.skip(error_msg)
 
     # Checking BGP convergence
@@ -882,9 +886,10 @@ def test_static_route_8nh_diff_AD_bgp_ecmp_p1_tc6_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     step("BGP neighbor remove and add")
@@ -905,9 +910,10 @@ def test_static_route_8nh_diff_AD_bgp_ecmp_p1_tc6_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     dut = "r3"
@@ -915,9 +921,10 @@ def test_static_route_8nh_diff_AD_bgp_ecmp_p1_tc6_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     step("Remove the redistribute static knob")
@@ -1272,9 +1279,10 @@ def test_static_route_8nh_diff_AD_ibgp_ecmp_p1_tc7_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     step("BGP neighbor remove and add")
@@ -1295,9 +1303,10 @@ def test_static_route_8nh_diff_AD_ibgp_ecmp_p1_tc7_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     dut = "r3"
@@ -1305,9 +1314,10 @@ def test_static_route_8nh_diff_AD_ibgp_ecmp_p1_tc7_ibgp(request):
     for addr_type in ADDR_TYPES:
         input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type]}]}}
         result = verify_rib(tgen, addr_type, dut, input_dict_4, protocol=protocol)
-        assert result is True, (
-            "Testcase {} : Failed \n"
-            "Error: Routes are still present in RIB".format(tc_name)
+        assert (
+            result is True
+        ), "Testcase {} : Failed \n" "Error: Routes are still present in RIB".format(
+            tc_name
         )
 
     step("Remove the redistribute static knob")
@@ -1555,7 +1565,15 @@ def test_static_route_8nh_diff_AD_bgp_ecmp_p1_tc10_ibgp(request):
         " value and all the nexthop populated in RIB and FIB again"
     )
     for addr_type in ADDR_TYPES:
-        input_dict_4 = {"r2": {"static_routes": [{"network": PREFIX1[addr_type],}]}}
+        input_dict_4 = {
+            "r2": {
+                "static_routes": [
+                    {
+                        "network": PREFIX1[addr_type],
+                    }
+                ]
+            }
+        }
         nh = NEXT_HOP_IP["nh1"][addr_type]
         result = verify_rib(
             tgen, addr_type, dut, input_dict_4, next_hop=nh, protocol=protocol, fib=True
@@ -1684,9 +1702,10 @@ def test_static_route_8nh_diff_AD_bgp_ecmp_p1_tc10_ibgp(request):
                 protocol=protocol,
                 fib=True,
             )
-            assert result is True, (
-                "Testcase {} : Failed \nError: Route "
-                " is missing in RIB".format(tc_name)
+            assert (
+                result is True
+            ), "Testcase {} : Failed \nError: Route " " is missing in RIB".format(
+                tc_name
             )
 
     step("Remove the redistribute static knob")

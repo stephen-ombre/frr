@@ -62,9 +62,8 @@ Feature support varies by platform; see the :ref:`feature-matrix`.
 System Architecture
 -------------------
 
-.. index:: System architecture
-.. index:: Software architecture
-.. index:: Software internals
+.. index::
+   pair: architecture; FRR
 
 Traditional routing software is made as a one process program which provides
 all of the routing protocol functionalities. FRR takes a different approach.
@@ -114,15 +113,15 @@ data models. When this work is completed, FRR will be a fully programmable
 routing stack.
 
 
+.. index::
+   pair: platforms; FRR
+   pair: operating systems; FRR
+
 .. _supported-platforms:
 
 Supported Platforms
 -------------------
 
-.. index:: Supported platforms
-.. index:: FRR on other systems
-.. index:: Compatibility with other systems
-.. index:: Operating systems that support FRR
 
 Currently FRR supports GNU/Linux and BSD. Porting FRR to other platforms is not
 too difficult as platform dependent code should be mostly limited to the
@@ -149,10 +148,8 @@ Recent versions of the following compilers are well tested:
 
 .. _unsupported-platforms:
 
-UnSupported Platforms
+Unsupported Platforms
 ---------------------
-
-.. index:: UnSupported platforms
 
 In General if the platform you are attempting to use is not listed above then
 FRR does not support being run on that platform.  The only caveat here is that
@@ -264,6 +261,10 @@ Known Kernel Issues
   especially becomes apparent if the route is being transformed from one ECMP
   path to another.
 
+
+.. index::
+   pair: rfcs; FRR
+
 .. _supported-rfcs:
 
 Supported RFCs
@@ -341,6 +342,8 @@ BGP
   :t:`Default External BGP (EBGP) Route Propagation Behavior without Policies. J. Mauch, J. Snijders, G. Hankins. July 2017`
 - :rfc:`8277`
   :t:`Using BGP to Bind MPLS Labels to Address Prefixes. E. Rosen. October 2017`
+- :rfc:`8654`
+  :t:`Extended Message Support for BGP. R. Bush, K. Patel, D. Ward.  October 2019`
 
 
 OSPF
@@ -439,13 +442,14 @@ SNMP
 - :rfc:`2741`
   :t:`Agent Extensibility (AgentX) Protocol. M. Daniele, B. Wijnen. January 2000.`
 
+
+.. index::
+   pair: mailing lists; contact
+
+.. _mailing-lists:
+
 Mailing Lists
 =============
-
-.. index:: How to get in touch with FRR
-.. index:: Contact information
-.. index:: Mailing lists
-
 
 Italicized lists are private.
 
@@ -470,6 +474,7 @@ results of such discussions are reflected in updates, as appropriate, to code
 (i.e., merges), `GitHub issues`_ tracked issues, and for governance or process
 changes, updates to the Development list and either this file or information
 posted at `FRR`_.
+
 
 Bug Reports
 ===========

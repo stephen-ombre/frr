@@ -1181,7 +1181,7 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_ms
 	case NB_EV_APPLY:
 		vrf = nb_running_get_entry(args->dnode, NULL, true);
 		pim = vrf->info;
-		mesh_group_name = yang_dnode_get_string(args->dnode, ".");
+		mesh_group_name = yang_dnode_get_string(args->dnode, "mesh-group-name");
 
 		result = ip_no_msdp_mesh_group_cmd_worker(pim, mesh_group_name,
 				args->errmsg,
@@ -2394,6 +2394,13 @@ int lib_interface_pim_address_family_mroute_oif_modify(
 	struct ipaddr group_addr;
 	const struct lyd_node *if_dnode;
 
+	iif = nb_running_get_entry(args->dnode, NULL, true);
+	pim_iifp = iif->info;
+	pim = pim_iifp->pim;
+
+	oifname = yang_dnode_get_string(args->dnode, NULL);
+	oif = if_lookup_by_name(oifname, pim->vrf_id);
+
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if_dnode = yang_dnode_get_parent(args->dnode, "interface");
@@ -2402,18 +2409,20 @@ int lib_interface_pim_address_family_mroute_oif_modify(
 				 "%% Enable PIM and/or IGMP on this interface first");
 			return NB_ERR_VALIDATION;
 		}
+
+#ifdef PIM_ENFORCE_LOOPFREE_MFC
+		if (oif && (iif->ifindex == oif->ifindex)) {
+			strlcpy(args->errmsg,
+				"% IIF same as OIF and loopfree enforcement is enabled; rejecting",
+				args->errmsg_len);
+			return NB_ERR_VALIDATION;
+		}
+#endif
 		break;
 	case NB_EV_PREPARE:
 	case NB_EV_ABORT:
 		break;
 	case NB_EV_APPLY:
-		iif = nb_running_get_entry(args->dnode, NULL, true);
-		pim_iifp = iif->info;
-		pim = pim_iifp->pim;
-
-		oifname = yang_dnode_get_string(args->dnode, NULL);
-		oif = if_lookup_by_name(oifname, pim->vrf_id);
-
 		if (!oif) {
 			snprintf(args->errmsg, args->errmsg_len,
 				 "No such interface name %s",
@@ -2707,11 +2716,11 @@ int lib_interface_igmp_igmp_enable_modify(struct nb_cb_modify_args *args)
 	switch (args->event) {
 	case NB_EV_VALIDATE:
 		if_dnode = yang_dnode_get_parent(args->dnode, "interface");
-		ifp_name = yang_dnode_get_string(if_dnode, ".");
 		mcast_if_count =
 			yang_get_list_elements_count(if_dnode);
 		/* Limiting mcast interfaces to number of VIFs */
 		if (mcast_if_count == MAXVIFS) {
+			ifp_name = yang_dnode_get_string(if_dnode, "name");
 			snprintf(args->errmsg, args->errmsg_len,
 				 "Max multicast interfaces(%d) Reached. Could not enable IGMP on interface %s",
 				 MAXVIFS, ifp_name);
@@ -2982,7 +2991,7 @@ int lib_interface_igmp_address_family_static_group_create(
 	case NB_EV_VALIDATE:
 		if_dnode =  yang_dnode_get_parent(args->dnode, "interface");
 		if (!is_pim_interface(if_dnode)) {
-			ifp_name = yang_dnode_get_string(if_dnode, ".");
+			ifp_name = yang_dnode_get_string(if_dnode, "name");
 			snprintf(args->errmsg, args->errmsg_len,
 				 "multicast not enabled on interface %s",
 				 ifp_name);

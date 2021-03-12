@@ -84,7 +84,7 @@ static char *ospf6_router_lsa_get_nbr_id(struct ospf6_lsa *lsa, char *buf,
 					  sizeof(buf1));
 				inet_ntop(AF_INET, &lsdesc->neighbor_router_id,
 					  buf2, sizeof(buf2));
-				sprintf(buf, "%s/%s", buf2, buf1);
+				snprintf(buf, buflen, "%s/%s", buf2, buf1);
 
 				return buf;
 			}
@@ -684,11 +684,9 @@ static int ospf6_link_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
 	int prefixnum;
 	char buf[128], options[32];
 	struct ospf6_prefix *prefix;
-	const char *p, *mc, *la, *nu;
 	struct in6_addr in6;
 	json_object *json_loop;
 	json_object *json_arr = NULL;
-	char str[15];
 	char prefix_string[133];
 
 	link_lsa = (struct ospf6_link_lsa *)((caddr_t)lsa->header
@@ -720,26 +718,13 @@ static int ospf6_link_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
 		    || current + OSPF6_PREFIX_SIZE(prefix) > end)
 			break;
 
-		p = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_P)
-			     ? "P"
-			     : "--");
-		mc = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_MC)
-			      ? "MC"
-			      : "--");
-		la = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_LA)
-			      ? "LA"
-			      : "--");
-		nu = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_NU)
-			      ? "NU"
-			      : "--");
+		ospf6_prefix_options_printbuf(prefix->prefix_options, buf,
+					      sizeof(buf));
 		if (use_json) {
 			json_loop = json_object_new_object();
-			snprintf(str, sizeof(str), "%s|%s|%s|%s", p, mc, la,
-				 nu);
-			json_object_string_add(json_loop, "prefixOption", str);
+			json_object_string_add(json_loop, "prefixOption", buf);
 		} else
-			vty_out(vty, "     Prefix Options: %s|%s|%s|%s\n", p,
-				mc, la, nu);
+			vty_out(vty, "     Prefix Options: %s\n", buf);
 
 		memset(&in6, 0, sizeof(in6));
 		memcpy(&in6, OSPF6_PREFIX_BODY(prefix),
@@ -866,6 +851,7 @@ static char *ospf6_intra_prefix_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 	struct in6_addr in6;
 	int prefixnum, cnt = 0;
 	struct ospf6_prefix *prefix;
+	char tbuf[16];
 
 	if (lsa) {
 		intra_prefix_lsa =
@@ -898,8 +884,9 @@ static char *ospf6_intra_prefix_lsa_get_prefix_str(struct ospf6_lsa *lsa,
 				       OSPF6_PREFIX_SPACE(
 					       prefix->prefix_length));
 				inet_ntop(AF_INET6, &in6, buf, buflen);
-				sprintf(&buf[strlen(buf)], "/%d",
-					prefix->prefix_length);
+				snprintf(tbuf, sizeof(tbuf), "/%d",
+					 prefix->prefix_length);
+				strlcat(buf, tbuf, buflen);
 				return (buf);
 			}
 		}
@@ -916,11 +903,9 @@ static int ospf6_intra_prefix_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
 	char buf[128];
 	struct ospf6_prefix *prefix;
 	char id[16], adv_router[16];
-	const char *p, *mc, *la, *nu;
 	struct in6_addr in6;
 	json_object *json_loop;
 	json_object *json_arr = NULL;
-	char str[15];
 	char prefix_string[133];
 
 	intra_prefix_lsa = (struct ospf6_intra_prefix_lsa
@@ -959,26 +944,13 @@ static int ospf6_intra_prefix_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
 		    || current + OSPF6_PREFIX_SIZE(prefix) > end)
 			break;
 
-		p = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_P)
-			     ? "P"
-			     : "--");
-		mc = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_MC)
-			      ? "MC"
-			      : "--");
-		la = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_LA)
-			      ? "LA"
-			      : "--");
-		nu = (CHECK_FLAG(prefix->prefix_options, OSPF6_PREFIX_OPTION_NU)
-			      ? "NU"
-			      : "--");
+		ospf6_prefix_options_printbuf(prefix->prefix_options, buf,
+					      sizeof(buf));
 		if (use_json) {
 			json_loop = json_object_new_object();
-			snprintf(str, sizeof(str), "%s|%s|%s|%s", p, mc, la,
-				 nu);
-			json_object_string_add(json_loop, "prefixOption", str);
+			json_object_string_add(json_loop, "prefixOption", buf);
 		} else
-			vty_out(vty, "     Prefix Options: %s|%s|%s|%s\n", p,
-				mc, la, nu);
+			vty_out(vty, "     Prefix Options: %s\n", buf);
 
 		memset(&in6, 0, sizeof(in6));
 		memcpy(&in6, OSPF6_PREFIX_BODY(prefix),

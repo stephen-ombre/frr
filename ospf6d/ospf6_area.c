@@ -44,6 +44,7 @@
 #include "ospf6_abr.h"
 #include "ospf6_asbr.h"
 #include "ospf6d.h"
+#include "lib/json.h"
 
 DEFINE_MTYPE_STATIC(OSPF6D, OSPF6_PLISTNAME, "Prefix list name")
 
@@ -141,11 +142,12 @@ static void ospf6_area_stub_update(struct ospf6_area *area)
 
 	if (IS_AREA_STUB(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Stubbing out area for if %s", area->name);
+			zlog_debug("Stubbing out area for area %s", area->name);
 		OSPF6_OPT_CLEAR(area->options, OSPF6_OPT_E);
+		ospf6_asbr_remove_externals_from_area(area);
 	} else if (IS_AREA_ENABLED(area)) {
 		if (IS_OSPF6_DEBUG_ORIGINATE(ROUTER))
-			zlog_debug("Normal area for if %s", area->name);
+			zlog_debug("Normal area for area %s", area->name);
 		OSPF6_OPT_SET(area->options, OSPF6_OPT_E);
 		ospf6_asbr_send_externals_to_area(area);
 	}
@@ -850,12 +852,13 @@ DEFUN (no_area_export_list,
 
 DEFUN (show_ipv6_ospf6_spf_tree,
        show_ipv6_ospf6_spf_tree_cmd,
-       "show ipv6 ospf6 spf tree",
+       "show ipv6 ospf6 spf tree [json]",
        SHOW_STR
        IP6_STR
        OSPF6_STR
        "Shortest Path First calculation\n"
-       "Show SPF tree\n")
+       "Show SPF tree\n"
+        JSON_STR)
 {
 	struct listnode *node;
 	struct ospf6_area *oa;
@@ -863,20 +866,52 @@ DEFUN (show_ipv6_ospf6_spf_tree,
 	struct ospf6_route *route;
 	struct prefix prefix;
 	struct ospf6 *ospf6;
+	json_object *json = NULL;
+	json_object *json_area = NULL;
+	json_object *json_head = NULL;
+	bool uj = use_json(argc, argv);
 
 	ospf6 = ospf6_lookup_by_vrf_name(VRF_DEFAULT_NAME);
 	OSPF6_CMD_CHECK_RUNNING(ospf6);
+
+	if (uj)
+		json = json_object_new_object();
 	ospf6_linkstate_prefix(ospf6->router_id, htonl(0), &prefix);
 
 	for (ALL_LIST_ELEMENTS_RO(ospf6->area_list, node, oa)) {
+		if (uj) {
+			json_area = json_object_new_object();
+			json_head = json_object_new_object();
+		}
 		route = ospf6_route_lookup(&prefix, oa->spf_table);
 		if (route == NULL) {
-			vty_out(vty, "LS entry for root not found in area %s\n",
-				oa->name);
+			if (uj) {
+				json_object_string_add(
+					json, oa->name,
+					"LS entry for not not found");
+				json_object_free(json_head);
+				json_object_free(json_area);
+			} else
+				vty_out(vty,
+					"LS entry for root not found in area %s\n",
+					oa->name);
 			continue;
 		}
 		root = (struct ospf6_vertex *)route->route_option;
-		ospf6_spf_display_subtree(vty, "", 0, root);
+		ospf6_spf_display_subtree(vty, "", 0, root, json_head, uj);
+
+		if (uj) {
+			json_object_object_add(json_area, root->name,
+					       json_head);
+			json_object_object_add(json, oa->name, json_area);
+		}
+	}
+
+	if (uj) {
+		vty_out(vty, "%s\n",
+			json_object_to_json_string_ext(
+				json, JSON_C_TO_STRING_PRETTY));
+		json_object_free(json);
 	}
 
 	return CMD_SUCCESS;
@@ -924,7 +959,7 @@ DEFUN (show_ipv6_ospf6_area_spf_tree,
 		return CMD_SUCCESS;
 	}
 	root = (struct ospf6_vertex *)route->route_option;
-	ospf6_spf_display_subtree(vty, "", 0, root);
+	ospf6_spf_display_subtree(vty, "", 0, root, NULL, false);
 
 	return CMD_SUCCESS;
 }
@@ -985,7 +1020,7 @@ DEFUN (show_ipv6_ospf6_simulate_spf_tree_root,
 		return CMD_SUCCESS;
 	}
 	root = (struct ospf6_vertex *)route->route_option;
-	ospf6_spf_display_subtree(vty, "", 0, root);
+	ospf6_spf_display_subtree(vty, "", 0, root, NULL, false);
 
 	ospf6_spf_table_finish(spf_table);
 	ospf6_route_table_delete(spf_table);

@@ -1132,8 +1132,8 @@ static int build_label_stack(struct mpls_label_stack *nh_label,
 
 		if (IS_ZEBRA_DEBUG_KERNEL) {
 			if (!num_labels)
-				sprintf(label_buf, "label %u",
-					nh_label->label[i]);
+				snprintf(label_buf, label_buf_size, "label %u",
+					 nh_label->label[i]);
 			else {
 				snprintf(label_buf1, sizeof(label_buf1), "/%u",
 					 nh_label->label[i]);
@@ -1767,6 +1767,33 @@ ssize_t netlink_route_multipath_msg_encode(int cmd,
 		nl_attr_nest_end(&req->n, nest);
 	}
 
+	/*
+	 * Always install blackhole routes without using nexthops, because of
+	 * the following kernel problems:
+	 * 1. Kernel nexthops don't suport unreachable/prohibit route types.
+	 * 2. Blackhole kernel nexthops are deleted when loopback is down.
+	 */
+	nexthop = dplane_ctx_get_ng(ctx)->nexthop;
+	if (nexthop) {
+		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
+			nexthop = nexthop->resolved;
+
+		if (nexthop->type == NEXTHOP_TYPE_BLACKHOLE) {
+			switch (nexthop->bh_type) {
+			case BLACKHOLE_ADMINPROHIB:
+				req->r.rtm_type = RTN_PROHIBIT;
+				break;
+			case BLACKHOLE_REJECT:
+				req->r.rtm_type = RTN_UNREACHABLE;
+				break;
+			default:
+				req->r.rtm_type = RTN_BLACKHOLE;
+				break;
+			}
+			return NLMSG_ALIGN(req->n.nlmsg_len);
+		}
+	}
+
 	if ((!fpm && kernel_nexthops_supported()
 	     && (!proto_nexthops_only()
 		 || is_proto_nhg(dplane_ctx_get_nhe_id(ctx), 0)))
@@ -1820,27 +1847,6 @@ ssize_t netlink_route_multipath_msg_encode(int cmd,
 	if (nexthop_num == 1) {
 		nexthop_num = 0;
 		for (ALL_NEXTHOPS_PTR(dplane_ctx_get_ng(ctx), nexthop)) {
-			/*
-			 * So we want to cover 2 types of blackhole
-			 * routes here:
-			 * 1) A normal blackhole route( ala from a static
-			 *    install.
-			 * 2) A recursively resolved blackhole route
-			 */
-			if (nexthop->type == NEXTHOP_TYPE_BLACKHOLE) {
-				switch (nexthop->bh_type) {
-				case BLACKHOLE_ADMINPROHIB:
-					req->r.rtm_type = RTN_PROHIBIT;
-					break;
-				case BLACKHOLE_REJECT:
-					req->r.rtm_type = RTN_UNREACHABLE;
-					break;
-				default:
-					req->r.rtm_type = RTN_BLACKHOLE;
-					break;
-				}
-				return NLMSG_ALIGN(req->n.nlmsg_len);
-			}
 			if (CHECK_FLAG(nexthop->flags,
 				       NEXTHOP_FLAG_RECURSIVE)) {
 
@@ -3695,14 +3701,6 @@ static ssize_t netlink_neigh_update_ctx(const struct zebra_dplane_ctx *ctx,
 		/* local neigh */
 		if (update_flags & DPLANE_NEIGH_SET_STATIC)
 			ext_flags |= NTF_E_MH_PEER_SYNC;
-
-		/* the ndm_state set for local entries can be REACHABLE or
-		 * STALE. if the dataplane has already establish reachability
-		 * (in the meantime) FRR must not over-write it with STALE.
-		 * this accidental race/over-write is avoided by using the
-		 * WEAK_OVERRIDE_STATE
-		 */
-		ext_flags |= NTF_E_WEAK_OVERRIDE_STATE;
 	}
 	if (IS_ZEBRA_DEBUG_KERNEL) {
 		char buf[INET6_ADDRSTRLEN];

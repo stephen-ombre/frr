@@ -454,7 +454,10 @@ def test_starg_mroute_p0(request):
     result = verify_ip_mroutes(
         tgen, dut, src_addr, GROUP_ADDRESS, iif, oil, wait=20, expected=False
     )
-    assert result is not True, "Testcase {}:Failed \n Error: {}".format(tc_name, result)
+    assert result is not True, ("Testcase {} : Failed \n "
+        "mroute installed in l1 \n Error: {}".format(
+        tc_name, result
+    ))
 
     # Send BSM again to configure rp
     step("Add back RP by sending BSM from b1")
@@ -695,7 +698,8 @@ def test_RP_priority_p0(request):
     assert (
         rp_add1 == rp2[group]
     ), "Testcase {} :Failed \n Error : rp expected {} rp received {}".format(
-        tc_name, rp_add1,
+        tc_name,
+        rp_add1,
     )
 
     # Verify if that rp is installed
@@ -803,7 +807,10 @@ def test_BSR_election_p0(request):
     # Verify bsr state in FHR
     step("Verify if b2 is not chosen as bsr in f1")
     result = verify_pim_bsr(tgen, topo, "f1", bsr_ip2, expected=False)
-    assert result is not True, "Testcase {} :Failed \n Error {}".format(tc_name, result)
+    assert result is not True, ("Testcase {} : Failed \n "
+        "b2 is chosen as bsr in f1 \n Error: {}".format(
+        tc_name, result
+    ))
 
     # Verify if b1 is still chosen as bsr
     step("Verify if b1 is still chosen as bsr in f1")

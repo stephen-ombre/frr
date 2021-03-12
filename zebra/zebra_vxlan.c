@@ -2852,11 +2852,10 @@ void zebra_vxlan_print_macs_vni(struct vty *vty, struct zebra_vrf *zvrf,
 		vty_out(vty,
 			"Number of MACs (local and remote) known for this VNI: %u\n",
 			num_macs);
-			vty_out(vty,
-				"Flags: N=sync-neighs, I=local-inactive, P=peer-active, X=peer-proxy\n");
-			vty_out(vty, "%-17s %-6s %-5s %-30s %-5s %s\n", "MAC",
-				"Type", "Flags", "Intf/Remote ES/VTEP",
-				"VLAN", "Seq #'s");
+		vty_out(vty,
+			"Flags: N=sync-neighs, I=local-inactive, P=peer-active, X=peer-proxy\n");
+		vty_out(vty, "%-17s %-6s %-5s %-30s %-5s %s\n", "MAC", "Type",
+			"Flags", "Intf/Remote ES/VTEP", "VLAN", "Seq #'s");
 	} else
 		json_object_int_add(json, "numMacs", num_macs);
 
@@ -3503,6 +3502,8 @@ void zebra_vxlan_print_evpn(struct vty *vty, bool uj)
 			zvrf->advertise_gw_macip ? "Yes" : "No");
 		vty_out(vty, "Advertise svi mac-ip: %s\n",
 			zvrf->advertise_svi_macip ? "Yes" : "No");
+		vty_out(vty, "Advertise svi mac: %s\n",
+			zebra_evpn_mh_do_adv_svi_mac() ? "Yes" : "No");
 		vty_out(vty, "Duplicate address detection: %s\n",
 			zebra_evpn_do_dup_addr_detect(zvrf) ? "Enable"
 							    : "Disable");
@@ -4025,6 +4026,7 @@ static int zebra_vxlan_check_del_local_mac(struct interface *ifp,
 	if (!listcount(mac->neigh_list)) {
 		zebra_evpn_mac_del(zevpn, mac);
 	} else {
+		zebra_evpn_mac_clear_fwd_info(mac);
 		UNSET_FLAG(mac->flags, ZEBRA_MAC_ALL_LOCAL_FLAGS);
 		UNSET_FLAG(mac->flags, ZEBRA_MAC_STICKY);
 		SET_FLAG(mac->flags, ZEBRA_MAC_AUTO);
@@ -4121,7 +4123,8 @@ int zebra_vxlan_dp_network_mac_del(struct interface *ifp,
 		if (IS_ZEBRA_DEBUG_VXLAN || IS_ZEBRA_DEBUG_EVPN_MH_MAC)
 			zlog_debug("dpDel local-nw-MAC %pEA VNI %u", macaddr,
 				   vni);
-		return zebra_evpn_del_local_mac(zevpn, mac);
+
+		zebra_evpn_del_local_mac(zevpn, mac, false);
 	}
 
 	return 0;
@@ -4158,7 +4161,7 @@ int zebra_vxlan_local_mac_del(struct interface *ifp, struct interface *br_if,
 	if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
 		return 0;
 
-	return zebra_evpn_del_local_mac(zevpn, mac);
+	return zebra_evpn_del_local_mac(zevpn, mac, false);
 }
 
 /*
@@ -4207,7 +4210,7 @@ int zebra_vxlan_local_mac_add_update(struct interface *ifp,
 
 	return zebra_evpn_add_update_local_mac(zvrf, zevpn, ifp, macaddr, vid,
 					       sticky, local_inactive,
-					       dp_static);
+					       dp_static, NULL);
 }
 
 /*
@@ -4493,6 +4496,16 @@ int zebra_vxlan_add_del_gw_macip(struct interface *ifp, struct prefix *p,
 		return -1;
 	}
 
+	/* VRR IP is advertised only if gw-macip-adv-enabled */
+	if (IS_ZEBRA_IF_MACVLAN(ifp)) {
+		if (!advertise_gw_macip_enabled(zevpn))
+			return 0;
+	} else {
+		/* SVI IP is advertised if gw or svi macip-adv-enabled */
+		if (!advertise_svi_macip_enabled(zevpn)
+		    && !advertise_gw_macip_enabled(zevpn))
+			return 0;
+	}
 
 	memcpy(&macaddr.octet, ifp->hw_addr, ETH_ALEN);
 
@@ -4539,10 +4552,14 @@ int zebra_vxlan_svi_down(struct interface *ifp, struct interface *link_if)
 	} else {
 		zebra_evpn_t *zevpn = NULL;
 
+		/* Unlink the SVI from the access VLAN */
+		zebra_evpn_acc_bd_svi_set(ifp->info, link_if->info, false);
+
 		/* since we dont have svi corresponding to zevpn, we associate it
 		 * to default vrf. Note: the corresponding neigh entries on the
 		 * SVI would have already been deleted */
 		zevpn = zebra_evpn_from_svi(ifp, link_if);
+
 		if (zevpn) {
 			zevpn->vrf_id = VRF_DEFAULT;
 
@@ -4606,6 +4623,9 @@ int zebra_vxlan_svi_up(struct interface *ifp, struct interface *link_if)
 		n_wctx.zevpn = zevpn;
 		hash_iterate(zevpn->neigh_table, zebra_evpn_install_neigh_hash,
 			     &n_wctx);
+
+		/* Link the SVI from the access VLAN */
+		zebra_evpn_acc_bd_svi_set(ifp->info, link_if->info, true);
 	}
 
 	return 0;

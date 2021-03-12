@@ -43,6 +43,16 @@ from mininet.link import Intf
 
 from functools import partial
 
+pytestmark = [
+    pytest.mark.babeld,
+    pytest.mark.bgpd,
+    pytest.mark.isisd,
+    pytest.mark.nhrpd,
+    pytest.mark.ospfd,
+    pytest.mark.pbrd,
+    pytest.mark.ripd,
+]
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import topotest
 
@@ -83,9 +93,6 @@ class NetworkTopo(Topo):
 #####################################################
 
 
-@pytest.mark.isis
-@pytest.mark.ospf
-@pytest.mark.rip
 def setup_module(module):
     global topo, net
     global fatal_error
@@ -339,13 +346,15 @@ def test_converge_protocols():
 
         print("Show that v4 routes are right\n")
         v4_routesFile = "%s/r%s/ipv4_routes.ref" % (thisDir, i)
-        expected = open(v4_routesFile).read().rstrip()
+        expected = net["r%s" % i].cmd(
+            "sort {} 2> /dev/null".format(v4_routesFile)
+        ).rstrip()
         expected = ("\n".join(expected.splitlines()) + "\n").splitlines(1)
 
         actual = (
             net["r%s" % i]
             .cmd(
-                'vtysh -c "show ip route" | sed -e \'/^Codes: /,/^\s*$/d\' | env LC_ALL=en_US.UTF-8 sort 2> /dev/null'
+                "vtysh -c \"show ip route\" | sed -e '/^Codes: /,/^\s*$/d' | sort 2> /dev/null"
             )
             .rstrip()
         )
@@ -370,13 +379,15 @@ def test_converge_protocols():
 
         print("Show that v6 routes are right\n")
         v6_routesFile = "%s/r%s/ipv6_routes.ref" % (thisDir, i)
-        expected = open(v6_routesFile).read().rstrip()
+        expected = net["r%s" % i].cmd(
+            "sort {} 2> /dev/null".format(v6_routesFile)
+        ).rstrip()
         expected = ("\n".join(expected.splitlines()) + "\n").splitlines(1)
 
         actual = (
             net["r%s" % i]
             .cmd(
-                'vtysh -c "show ipv6 route" | sed -e \'/^Codes: /,/^\s*$/d\' | env LC_ALL=en_US.UTF-8 sort 2> /dev/null'
+                "vtysh -c \"show ipv6 route\" | sed -e '/^Codes: /,/^\s*$/d' | sort 2> /dev/null"
             )
             .rstrip()
         )
