@@ -1667,6 +1667,74 @@ and will share updates.
    should not be reflected back to the peer.  This command only is only
    meaningful when there is a single peer defined in the peer-group.
 
+.. clicmd:: show [ip] bgp peer-group [json]
+
+   This command displays configured BGP peer-groups.
+
+      .. code-block:: frr
+
+         exit1-debian-9# show bgp peer-group
+
+         BGP peer-group test1, remote AS 65001
+         Peer-group type is external
+         Configured address-families: IPv4 Unicast; IPv6 Unicast;
+         1 IPv4 listen range(s)
+            192.168.100.0/24
+         2 IPv6 listen range(s)
+            2001:db8:1::/64
+            2001:db8:2::/64
+         Peer-group members:
+            192.168.200.1  Active
+            2001:db8::1  Active
+
+         BGP peer-group test2
+         Peer-group type is external
+         Configured address-families: IPv4 Unicast;
+
+   Optional ``json`` parameter is used to display JSON output.
+
+      .. code-block:: frr
+
+         {
+           "test1":{
+             "remoteAs":65001,
+             "type":"external",
+             "addressFamiliesConfigured":[
+               "IPv4 Unicast",
+               "IPv6 Unicast"
+             ],
+             "dynamicRanges":{
+               "IPv4":{
+                 "count":1,
+                 "ranges":[
+                   "192.168.100.0\/24"
+                 ]
+               },
+               "IPv6":{
+                 "count":2,
+                 "ranges":[
+                   "2001:db8:1::\/64",
+                   "2001:db8:2::\/64"
+                 ]
+               }
+             },
+             "members":{
+               "192.168.200.1":{
+                 "status":"Active"
+               },
+               "2001:db8::1":{
+                 "status":"Active"
+               }
+             }
+           },
+           "test2":{
+              "type":"external",
+              "addressFamiliesConfigured":[
+                "IPv4 Unicast"
+              ]
+           }
+         }
+
 Capability Negotiation
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -1715,7 +1783,7 @@ AS Path Access Lists
 
 AS path access list is user defined AS path.
 
-.. clicmd:: bgp as-path access-list WORD permit|deny LINE
+.. clicmd:: bgp as-path access-list WORD [seq (0-4294967295)] permit|deny LINE
 
    This command defines a new AS path access list.
 
@@ -1731,6 +1799,7 @@ Bogon ASN filter policy configuration example
    bgp as-path access-list 99 permit _0_
    bgp as-path access-list 99 permit _23456_
    bgp as-path access-list 99 permit _1310[0-6][0-9]_|_13107[0-1]_
+   bgp as-path access-list 99 seq 20 permit ^65
 
 .. _bgp-using-as-path-in-route-map:
 
@@ -3529,8 +3598,8 @@ certainly contains silly mistakes, if not serious flaws.
    ip prefix-list pl-peer2-network permit 192.168.2.0/24
    ip prefix-list pl-peer2-network permit 172.16.1/24
    !
-   bgp as-path access-list asp-own-as permit ^$
-   bgp as-path access-list asp-own-as permit _64512_
+   bgp as-path access-list seq 5 asp-own-as permit ^$
+   bgp as-path access-list seq 10 asp-own-as permit _64512_
    !
    ! #################################################################
    ! Match communities we provide actions for, on routes receives from

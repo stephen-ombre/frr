@@ -180,8 +180,9 @@ struct nhg_ctx {
 
 	vrf_id_t vrf_id;
 	afi_t afi;
+
 	/*
-	 * This should only every be ZEBRA_ROUTE_NHG unless we get a a kernel
+	 * This should only ever be ZEBRA_ROUTE_NHG unless we get a a kernel
 	 * created nexthop not made by us.
 	 */
 	int type;
@@ -210,6 +211,10 @@ bool zebra_nhg_kernel_nexthops_enabled(void);
 /* Global control for zebra to only use proto-owned nexthops */
 void zebra_nhg_set_proto_nexthops_only(bool set);
 bool zebra_nhg_proto_nexthops_only(void);
+
+/* Global control for use of activated backups for recursive resolution. */
+void zebra_nhg_set_recursive_use_backups(bool set);
+bool zebra_nhg_recursive_use_backups(void);
 
 /**
  * NHE abstracted tree functions.
