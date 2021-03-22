@@ -45,11 +45,11 @@
 #include "ospf6_zebra.h"
 #include "lib/json.h"
 
-DEFINE_MTYPE_STATIC(OSPF6D, CFG_PLIST_NAME, "configured prefix list names")
-DEFINE_QOBJ_TYPE(ospf6_interface)
+DEFINE_MTYPE_STATIC(OSPF6D, CFG_PLIST_NAME, "configured prefix list names");
+DEFINE_QOBJ_TYPE(ospf6_interface);
 DEFINE_HOOK(ospf6_interface_change,
 	    (struct ospf6_interface * oi, int state, int old_state),
-	    (oi, state, old_state))
+	    (oi, state, old_state));
 
 unsigned char conf_debug_ospf6_interface = 0;
 
@@ -1449,6 +1449,12 @@ DEFUN (show_ipv6_ospf6_interface_ifname_prefix,
 		return CMD_WARNING;
 	}
 
+	if (CHECK_FLAG(oi->flag, OSPF6_INTERFACE_DISABLE)) {
+		vty_out(vty, "Interface %s not attached to area\n",
+			argv[idx_ifname]->arg);
+		return CMD_WARNING;
+	}
+
 	ospf6_route_table_show(vty, idx_prefix, argc, argv, oi->route_connected,
 			       uj);
 
@@ -1482,7 +1488,7 @@ DEFUN (show_ipv6_ospf6_interface_prefix,
 
 	FOR_ALL_INTERFACES (vrf, ifp) {
 		oi = (struct ospf6_interface *)ifp->info;
-		if (oi == NULL)
+		if (oi == NULL || CHECK_FLAG(oi->flag, OSPF6_INTERFACE_DISABLE))
 			continue;
 
 		ospf6_route_table_show(vty, idx_prefix, argc, argv,
