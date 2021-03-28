@@ -1087,6 +1087,9 @@ IPv6 Support
    be used in a setup with two upstreams where each of the upstreams should only
    receive either IPv4 or IPv6 annocuments.
 
+   Using the ``bgp default ipv6-unicast`` configuration, IPv6 unicast
+   address family is enabled by default for all new neighbors.
+
 
 .. _bgp-route-aggregation:
 
@@ -1417,6 +1420,12 @@ Configuring Peers
    This command is deprecated and may be removed in a future release. Its use
    should be avoided.
 
+.. clicmd:: neighbor PEER interface remote-as <internal|external|ASN>
+
+   Configure an unnumbered BGP peer. ``PEER`` should be an interface name. The
+   session will be established via IPv6 link locals. Use ``internal`` for iBGP
+   and ``external`` for eBGP sessions, or specify an ASN if you wish.
+
 .. clicmd:: neighbor PEER next-hop-self [all]
 
    This command specifies an announced route's nexthop as being equivalent to
@@ -1575,6 +1584,12 @@ Configuring Peers
    This command allows the user to specify that v4 peering is turned
    on by default or not.  This command defaults to on and is not displayed.
    The `no bgp default ipv4-unicast` form of the command is displayed.
+
+.. clicmd:: bgp default ipv6-unicast
+
+   This command allows the user to specify that v6 peering is turned
+   on by default or not.  This command defaults to off and is not displayed.
+   The `bgp default ipv6-unicast` form of the command is displayed.
 
 .. clicmd:: bgp default show-hostname
 
@@ -2906,6 +2921,12 @@ Debugging
 
    Display Listen sockets and the vrf that created them.  Useful for debugging of when
    listen is not working and this is considered a developer debug statement.
+
+.. clicmd:: debug bgp bfd
+
+   Enable or disable debugging for BFD events. This will show BFD integration
+   library messages and BGP BFD integration messages that are mostly state
+   transitions and validation problems.
 
 .. clicmd:: debug bgp neighbor-events
 

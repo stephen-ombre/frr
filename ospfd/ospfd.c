@@ -42,6 +42,7 @@
 #include "ldp_sync.h"
 
 #include "ospfd/ospfd.h"
+#include "ospfd/ospf_bfd.h"
 #include "ospfd/ospf_network.h"
 #include "ospfd/ospf_interface.h"
 #include "ospfd/ospf_ism.h"
@@ -1671,6 +1672,7 @@ int ospf_area_nssa_set(struct ospf *ospf, struct in_addr area_id)
 
 		/* set NSSA area defaults */
 		area->no_summary = 0;
+		area->suppress_fa = 0;
 		area->NSSATranslatorRole = OSPF_NSSA_ROLE_CANDIDATE;
 		area->NSSATranslatorState = OSPF_NSSA_TRANSLATE_DISABLED;
 		area->NSSATranslatorStabilityInterval =
@@ -1692,6 +1694,7 @@ int ospf_area_nssa_unset(struct ospf *ospf, struct in_addr area_id, int argc)
 		ospf->anyNSSA--;
 		/* set NSSA area defaults */
 		area->no_summary = 0;
+		area->suppress_fa = 0;
 		area->NSSATranslatorRole = OSPF_NSSA_ROLE_CANDIDATE;
 		area->NSSATranslatorState = OSPF_NSSA_TRANSLATE_DISABLED;
 		area->NSSATranslatorStabilityInterval =
@@ -1703,6 +1706,32 @@ int ospf_area_nssa_unset(struct ospf *ospf, struct in_addr area_id, int argc)
 	}
 
 	ospf_area_check_free(ospf, area_id);
+
+	return 1;
+}
+
+int ospf_area_nssa_suppress_fa_set(struct ospf *ospf, struct in_addr area_id)
+{
+	struct ospf_area *area;
+
+	area = ospf_area_lookup_by_area_id(ospf, area_id);
+	if (area == NULL)
+		return 0;
+
+	area->suppress_fa = 1;
+
+	return 1;
+}
+
+int ospf_area_nssa_suppress_fa_unset(struct ospf *ospf, struct in_addr area_id)
+{
+	struct ospf_area *area;
+
+	area = ospf_area_lookup_by_area_id(ospf, area_id);
+	if (area == NULL)
+		return 0;
+
+	area->suppress_fa = 0;
 
 	return 1;
 }
@@ -1930,6 +1959,9 @@ static void ospf_nbr_nbma_add(struct ospf_nbr_nbma *nbr_nbma,
 		nbr->address = p;
 
 		nbr_nbma->nbr = nbr;
+
+		/* Configure BFD if interface has it. */
+		ospf_neighbor_bfd_apply(nbr);
 
 		OSPF_NSM_EVENT_EXECUTE(nbr, NSM_Start);
 	}

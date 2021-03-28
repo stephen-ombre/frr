@@ -3727,6 +3727,29 @@ DEFPY (no_bgp_bestpath_bw,
 	return CMD_SUCCESS;
 }
 
+/* "no bgp default ipv6-unicast". */
+DEFUN(no_bgp_default_ipv6_unicast, no_bgp_default_ipv6_unicast_cmd,
+      "no bgp default ipv6-unicast", NO_STR
+      "BGP specific commands\n"
+      "Configure BGP defaults\n"
+      "Activate ipv6-unicast for a peer by default\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	UNSET_FLAG(bgp->flags, BGP_FLAG_DEFAULT_IPV6);
+	return CMD_SUCCESS;
+}
+
+DEFUN(bgp_default_ipv6_unicast, bgp_default_ipv6_unicast_cmd,
+      "bgp default ipv6-unicast",
+      "BGP specific commands\n"
+      "Configure BGP defaults\n"
+      "Activate ipv6-unicast for a peer by default\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	SET_FLAG(bgp->flags, BGP_FLAG_DEFAULT_IPV6);
+	return CMD_SUCCESS;
+}
+
 /* "no bgp default ipv4-unicast". */
 DEFUN (no_bgp_default_ipv4_unicast,
        no_bgp_default_ipv4_unicast_cmd,
@@ -4368,10 +4391,10 @@ DEFUN_YANG(neighbor_remote_as,
 	return nb_cli_apply_changes(vty, base_xpath);
 }
 
-int peer_conf_interface_create(struct bgp *bgp, const char *conf_if, afi_t afi,
-			       safi_t safi, bool v6only,
-			       const char *peer_group_name, int as_type,
-			       as_t as, char *errmsg, size_t errmsg_len)
+int peer_conf_interface_create(struct bgp *bgp, const char *conf_if,
+			       bool v6only, const char *peer_group_name,
+			       int as_type, as_t as, char *errmsg,
+			       size_t errmsg_len)
 {
 	struct peer *peer;
 	struct peer_group *group;
@@ -4388,16 +4411,10 @@ int peer_conf_interface_create(struct bgp *bgp, const char *conf_if, afi_t afi,
 	peer = peer_lookup_by_conf_if(bgp, conf_if);
 	if (peer) {
 		if (as_type != AS_UNSPECIFIED)
-			ret = peer_remote_as(bgp, NULL, conf_if, &as, as_type,
-					     afi, safi);
+			ret = peer_remote_as(bgp, NULL, conf_if, &as, as_type);
 	} else {
-		if (CHECK_FLAG(bgp->flags, BGP_FLAG_NO_DEFAULT_IPV4)
-		    && afi == AFI_IP && safi == SAFI_UNICAST)
-			peer = peer_create(NULL, conf_if, bgp, bgp->as, as,
-					   as_type, 0, 0, NULL);
-		else
-			peer = peer_create(NULL, conf_if, bgp, bgp->as, as,
-					   as_type, afi, safi, NULL);
+		peer = peer_create(NULL, conf_if, bgp, bgp->as, as, as_type,
+				   NULL);
 
 		if (!peer) {
 			snprintf(errmsg, errmsg_len,
@@ -6139,10 +6156,28 @@ DEFUN_YANG (neighbor_send_community,
 	    "Send Community attribute to this neighbor\n")
 {
 	int idx_peer = 1;
+	char *peer_str = argv[idx_peer]->arg;
+	char base_xpath[XPATH_MAXLEN];
+	char af_xpath[XPATH_MAXLEN];
+	char std_xpath[XPATH_MAXLEN];
+	afi_t afi = bgp_node_afi(vty);
+	safi_t safi = bgp_node_safi(vty);
 
-	return peer_af_flag_set_vty(vty, argv[idx_peer]->arg, bgp_node_afi(vty),
-				    bgp_node_safi(vty),
-				    PEER_FLAG_SEND_COMMUNITY);
+	snprintf(af_xpath, sizeof(af_xpath), FRR_BGP_AF_XPATH,
+		 yang_afi_safi_value2identity(afi, safi));
+
+	if (peer_and_group_lookup_nb(vty, peer_str, base_xpath,
+				     sizeof(base_xpath), af_xpath)
+	    < 0)
+		return CMD_WARNING_CONFIG_FAILED;
+
+	snprintf(std_xpath, sizeof(std_xpath),
+		 "./%s/send-community/send-community",
+		 bgp_afi_safi_get_container_str(afi, safi));
+
+	nb_cli_enqueue_change(vty, std_xpath, NB_OP_MODIFY, "true");
+
+	return nb_cli_apply_changes(vty, base_xpath);
 }
 
 ALIAS_HIDDEN(neighbor_send_community, neighbor_send_community_hidden_cmd,
@@ -6159,10 +6194,28 @@ DEFUN_YANG (no_neighbor_send_community,
 	    "Send Community attribute to this neighbor\n")
 {
 	int idx_peer = 2;
+	char *peer_str = argv[idx_peer]->arg;
+	char base_xpath[XPATH_MAXLEN];
+	char af_xpath[XPATH_MAXLEN];
+	char std_xpath[XPATH_MAXLEN];
+	afi_t afi = bgp_node_afi(vty);
+	safi_t safi = bgp_node_safi(vty);
 
-	return peer_af_flag_unset_vty(vty, argv[idx_peer]->arg,
-				      bgp_node_afi(vty), bgp_node_safi(vty),
-				      PEER_FLAG_SEND_COMMUNITY);
+	snprintf(af_xpath, sizeof(af_xpath), FRR_BGP_AF_XPATH,
+		 yang_afi_safi_value2identity(afi, safi));
+
+	if (peer_and_group_lookup_nb(vty, peer_str, base_xpath,
+				     sizeof(base_xpath), af_xpath)
+	    < 0)
+		return CMD_WARNING_CONFIG_FAILED;
+
+	snprintf(std_xpath, sizeof(std_xpath),
+		 "./%s/send-community/send-community",
+		 bgp_afi_safi_get_container_str(afi, safi));
+
+	nb_cli_enqueue_change(vty, std_xpath, NB_OP_MODIFY, "false");
+
+	return nb_cli_apply_changes(vty, base_xpath);
 }
 
 ALIAS_HIDDEN(no_neighbor_send_community, no_neighbor_send_community_hidden_cmd,
@@ -14358,7 +14411,8 @@ static void bgp_show_peer(struct vty *vty, struct peer *p, bool use_json,
 		vty_out(vty, "\n");
 
 	/* BFD information. */
-	bgp_bfd_show_info(vty, p, use_json, json_neigh);
+	if (p->bfd_config)
+		bgp_bfd_show_info(vty, p, json_neigh);
 
 	if (use_json) {
 		if (p->conf_if) /* Configured interface name. */
@@ -16765,11 +16819,8 @@ static void bgp_config_write_peer_global(struct vty *vty, struct bgp *bgp,
 			peer->rtt_expected, peer->rtt_keepalive_conf);
 
 	/* bfd */
-	if (peer->bfd_info) {
-		if (!peer_group_active(peer) || !g_peer->bfd_info) {
-			bgp_bfd_peer_config_write(vty, peer, addr);
-		}
-	}
+	if (peer->bfd_config)
+		bgp_bfd_peer_config_write(vty, peer, addr);
 
 	/* password */
 	if (peergroup_flag_check(peer, PEER_FLAG_PASSWORD))
@@ -16966,18 +17017,36 @@ static void bgp_config_write_peer_af(struct vty *vty, struct bgp *bgp,
 		}
 	} else {
 		if (peer->afc[afi][safi]) {
-			if ((afi == AFI_IP) && (safi == SAFI_UNICAST)) {
-				if (CHECK_FLAG(bgp->flags,
-					       BGP_FLAG_NO_DEFAULT_IPV4)) {
+			if ((afi == AFI_IP || afi == AFI_IP6)
+			    && safi == SAFI_UNICAST) {
+				if (afi == AFI_IP
+				    && CHECK_FLAG(bgp->flags,
+						  BGP_FLAG_NO_DEFAULT_IPV4)) {
+					vty_out(vty, "  neighbor %s activate\n",
+						addr);
+				} else if (afi == AFI_IP6
+					   && !CHECK_FLAG(
+						      bgp->flags,
+						      BGP_FLAG_DEFAULT_IPV6)) {
 					vty_out(vty, "  neighbor %s activate\n",
 						addr);
 				}
-			} else
+			} else {
 				vty_out(vty, "  neighbor %s activate\n", addr);
+			}
 		} else {
-			if ((afi == AFI_IP) && (safi == SAFI_UNICAST)) {
-				if (!CHECK_FLAG(bgp->flags,
-						BGP_FLAG_NO_DEFAULT_IPV4)) {
+			if ((afi == AFI_IP || afi == AFI_IP6)
+			    && safi == SAFI_UNICAST) {
+				if (afi == AFI_IP
+				    && !CHECK_FLAG(bgp->flags,
+						  BGP_FLAG_NO_DEFAULT_IPV4)) {
+					vty_out(vty,
+						"  no neighbor %s activate\n",
+						addr);
+				} else if (afi == AFI_IP6
+					   && CHECK_FLAG(
+						      bgp->flags,
+						      BGP_FLAG_DEFAULT_IPV6)) {
 					vty_out(vty,
 						"  no neighbor %s activate\n",
 						addr);
@@ -17410,6 +17479,10 @@ int bgp_config_write(struct vty *vty)
 		/* BGP default ipv4-unicast. */
 		if (CHECK_FLAG(bgp->flags, BGP_FLAG_NO_DEFAULT_IPV4))
 			vty_out(vty, " no bgp default ipv4-unicast\n");
+
+		/* BGP default ipv6-unicast. */
+		if (CHECK_FLAG(bgp->flags, BGP_FLAG_DEFAULT_IPV6))
+			vty_out(vty, " bgp default ipv6-unicast\n");
 
 		/* BGP default local-preference. */
 		if (bgp->default_local_pref != BGP_DEFAULT_LOCAL_PREF)
@@ -18080,6 +18153,10 @@ void bgp_vty_init(void)
 	/* "no bgp default ipv4-unicast" commands. */
 	install_element(BGP_NODE, &no_bgp_default_ipv4_unicast_cmd);
 	install_element(BGP_NODE, &bgp_default_ipv4_unicast_cmd);
+
+	/* "no bgp default ipv6-unicast" commands. */
+	install_element(BGP_NODE, &no_bgp_default_ipv6_unicast_cmd);
+	install_element(BGP_NODE, &bgp_default_ipv6_unicast_cmd);
 
 	/* "bgp network import-check" commands. */
 	install_element(BGP_NODE, &bgp_network_import_check_cmd);

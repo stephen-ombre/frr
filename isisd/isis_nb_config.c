@@ -48,11 +48,13 @@
 #include "isisd/isis_spf.h"
 #include "isisd/isis_spf_private.h"
 #include "isisd/isis_te.h"
-#include "isisd/isis_memory.h"
 #include "isisd/isis_mt.h"
 #include "isisd/isis_redist.h"
 #include "isisd/isis_ldp_sync.h"
 #include "isisd/isis_dr.h"
+
+DEFINE_MTYPE_STATIC(ISISD, ISIS_MPLS_TE,    "ISIS MPLS_TE parameters");
+DEFINE_MTYPE_STATIC(ISISD, ISIS_PLIST_NAME, "ISIS prefix-list name");
 
 extern struct zclient *zclient;
 
@@ -131,7 +133,7 @@ int isis_instance_area_address_create(struct nb_cb_create_args *args)
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
-		area = nb_running_get_entry(args->dnode, NULL, true);
+		area = nb_running_get_entry(args->dnode, NULL, false);
 		if (area == NULL)
 			return NB_ERR_VALIDATION;
 		addr.addr_len = dotformat2buff(buff, net_title);

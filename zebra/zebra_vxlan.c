@@ -46,7 +46,6 @@
 #include "zebra/rt_netlink.h"
 #include "zebra/zebra_errors.h"
 #include "zebra/zebra_l2.h"
-#include "zebra/zebra_memory.h"
 #include "zebra/zebra_ns.h"
 #include "zebra/zebra_vrf.h"
 #include "zebra/zebra_vxlan.h"
@@ -150,6 +149,11 @@ static int host_rb_entry_compare(const struct host_rb_entry *hle1,
 	} else if (hle1->p.family == AF_INET6) {
 		return memcmp(&hle1->p.u.prefix6, &hle2->p.u.prefix6,
 			      IPV6_MAX_BYTELEN);
+	} else if (hle1->p.family == AF_EVPN) {
+		/* a single dummy prefix of route_type BGP_EVPN_AD_ROUTE is
+		 * used for all nexthops associated with a non-zero ESI
+		 */
+		return 0;
 	} else {
 		zlog_debug("%s: Unexpected family type: %d", __func__,
 			   hle1->p.family);

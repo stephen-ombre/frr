@@ -1,15 +1,17 @@
-/* zebra memory type definitions
+/*
+ * bgp_rpki code
+ * Copyright (C) 2021 NVIDIA Corporation and Mellanox Technologies, LTD
+ *                    All Rights Reserved
+ *               Donald Sharp
  *
- * Copyright (C) 2015  David Lamparter
+ * This file is part of FRR.
  *
- * This file is part of Quagga.
- *
- * Quagga is free software; you can redistribute it and/or modify it
+ * FRR is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2, or (at your option) any
  * later version.
  *
- * Quagga is distributed in the hope that it will be useful, but
+ * FRR is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
@@ -18,16 +20,14 @@
  * with this program; see the file COPYING; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
+#ifndef __BGP_RPKI_H__
+#define __BGP_RPKI_H__
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
+enum rpki_states {
+	RPKI_NOT_BEING_USED,
+	RPKI_VALID,
+	RPKI_NOTFOUND,
+	RPKI_INVALID
+};
+
 #endif
-
-#include "zebra_memory.h"
-
-DEFINE_MGROUP(ZEBRA, "zebra");
-DEFINE_MTYPE(ZEBRA, RE, "Route Entry");
-DEFINE_MTYPE(ZEBRA, RIB_DEST, "RIB destination");
-DEFINE_MTYPE(ZEBRA, ZVLAN, "VLAN");
-DEFINE_MTYPE(ZEBRA, ZVLAN_BITMAP, "VLAN bitmap");
-DEFINE_MTYPE(ZEBRA, OPAQUE, "Opaque Data");

@@ -28,6 +28,7 @@
 #include "nexthop.h"
 #include "bgp_table.h"
 #include "bgp_addpath_types.h"
+#include "bgp_rpki.h"
 
 struct bgp_nexthop_cache;
 struct bgp_route_evpn;
@@ -56,6 +57,7 @@ enum bgp_show_type {
 	bgp_show_type_dampend_paths,
 	bgp_show_type_damp_neighbor,
 	bgp_show_type_detail,
+	bgp_show_type_rpki,
 };
 
 enum bgp_show_adj_route_type {
@@ -102,7 +104,9 @@ enum bgp_show_adj_route_type {
 #define BGP_NLRI_PARSE_ERROR_EVPN_TYPE1_SIZE -15
 #define BGP_NLRI_PARSE_ERROR -32
 
-/* MAC-IP/type-2 path_info in the VNI routing table is linked to the
+/* 1. local MAC-IP/type-2 paths in the VNI routing table are linked to the
+ * destination ES
+ * 2. remote MAC-IP paths in the global routing table are linked to the
  * destination ES
  */
 struct bgp_path_es_info {
@@ -113,6 +117,27 @@ struct bgp_path_es_info {
 	struct bgp_evpn_es *es;
 	/* memory used for linking the path to the destination ES */
 	struct listnode es_listnode;
+	uint8_t flags;
+/* Path is linked to the VNI list */
+#define BGP_EVPN_PATH_ES_INFO_VNI_LIST (1 << 0)
+/* Path is linked to the global list */
+#define BGP_EVPN_PATH_ES_INFO_GLOBAL_LIST (1 << 1)
+};
+
+/* IP paths imported into the VRF from an EVPN route source
+ * are linked to the nexthop/VTEP IP
+ */
+struct bgp_path_evpn_nh_info {
+	/* back pointer to the route */
+	struct bgp_path_info *pi;
+	struct bgp_evpn_nh *nh;
+	/* memory used for linking the path to the nexthop */
+	struct listnode nh_listnode;
+};
+
+struct bgp_path_mh_info {
+	struct bgp_path_es_info *es_info;
+	struct bgp_path_evpn_nh_info *nh_info;
 };
 
 /* Ancillary information to struct bgp_path_info,
@@ -202,7 +227,7 @@ struct bgp_path_info_extra {
 	/* presence of FS pbr iprule based entry */
 	struct list *bgp_fs_iprule;
 	/* Destination Ethernet Segment links for EVPN MH */
-	struct bgp_path_es_info *es_info;
+	struct bgp_path_mh_info *mh_info;
 };
 
 struct bgp_path_info {
@@ -740,7 +765,8 @@ extern void route_vty_out_detail_header(struct vty *vty, struct bgp *bgp,
 extern void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 				 struct bgp_dest *bn,
 				 struct bgp_path_info *path, afi_t afi,
-				 safi_t safi, json_object *json_paths);
+				 safi_t safi, enum rpki_states,
+				 json_object *json_paths);
 extern int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 			     struct bgp_table *table, struct prefix_rd *prd,
 			     enum bgp_show_type type, void *output_arg,

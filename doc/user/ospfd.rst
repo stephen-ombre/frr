@@ -390,6 +390,27 @@ Areas
     Prevents an *ospfd* ABR from injecting inter-area
     summaries into the specified stub area.
 
+.. clicmd:: area A.B.C.D nssa
+
+.. clicmd:: area (0-4294967295) nssa
+
+    Configure the area to be a NSSA (Not-So-Stubby Area). This is an area that
+    allows OSPF to import external routes into a stub area via a new LSA type
+    (type 7). An NSSA autonomous system boundary router (ASBR) will generate this
+    type of LSA. The area border router (ABR) translates the LSA type 7 into LSA
+    type 5, which is propagated into the OSPF domain. NSSA areas are defined in
+    RFC 3101.
+
+.. clicmd:: area A.B.C.D nssa suppress-fa
+
+.. clicmd:: area (0-4294967295) nssa suppress-fa
+
+    Configure the router to set the forwarding address to 0.0.0.0 in all LSA type 5
+    translated from LSA type 7. The router needs to be elected the translator of the
+    area for this command to take effect. This feature causes routers that are
+    configured not to advertise forwarding addresses into the backbone to direct
+    forwarded traffic to the NSSA ABR translator.
+
 .. clicmd:: area A.B.C.D default-cost (0-16777215)
 
 
@@ -733,23 +754,25 @@ Showing Information
    Json o/p of this command covers base route information
    i.e all LSAs except opaque lsa info.
 
-.. clicmd:: show ip ospf database [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) LINK-STATE-ID [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) LINK-STATE-ID [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) LINK-STATE-ID adv-router ADV-ROUTER [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) LINK-STATE-ID adv-router ADV-ROUTER [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) adv-router ADV-ROUTER [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) adv-router ADV-ROUTER [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) LINK-STATE-ID self-originate [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) LINK-STATE-ID self-originate [json]
 
-.. clicmd:: show ip ospf database (asbr-summary|external|network|router|summary) self-originate [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (asbr-summary|external|network|router|summary) self-originate [json]
 
-.. clicmd:: show ip ospf database max-age [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database max-age [json]
 
-.. clicmd:: show ip ospf database self-originate [json]
+.. clicmd:: show ip ospf [vrf <NAME|all>] database self-originate [json]
+
+   Show the OSPF database summary.
 
 .. clicmd:: show ip ospf route [json]
 
@@ -780,17 +803,17 @@ Opaque LSA
    extensions that are used with MPLS-TE; it does not support a
    complete RSVP-TE solution.
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external)
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external)
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID adv-router ADV-ROUTER
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID adv-router ADV-ROUTER
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external) adv-router ADV-ROUTER
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external) adv-router ADV-ROUTER
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID self-originate
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external) LINK-STATE-ID self-originate
 
-.. clicmd:: show ip ospf database (opaque-link|opaque-area|opaque-external) self-originate
+.. clicmd:: show ip ospf [vrf <NAME|all>] database (opaque-link|opaque-area|opaque-external) self-originate
 
    Show Opaque LSA from the database.
 
@@ -965,6 +988,12 @@ TI-LFA requires a proper Segment Routing configuration.
 
 Debugging OSPF
 ==============
+
+.. clicmd:: debug ospf bfd
+
+   Enable or disable debugging for BFD events. This will show BFD integration
+   library messages and OSPF BFD integration messages that are mostly state
+   transitions and validation problems.
 
 .. clicmd:: debug ospf packet (hello|dd|ls-request|ls-update|ls-ack|all) (send|recv) [detail]
 

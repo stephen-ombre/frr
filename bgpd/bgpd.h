@@ -45,6 +45,8 @@
 #include "bgp_nexthop.h"
 #include "bgp_damp.h"
 
+#include "lib/bfd.h"
+
 #define BGP_MAX_HOSTNAME 64	/* Linux max, is larger than most other sys */
 #define BGP_PEER_MAX_HASH_SIZE 16384
 
@@ -477,6 +479,7 @@ struct bgp {
 #define BGP_FLAG_SHUTDOWN                 (1 << 27)
 #define BGP_FLAG_SUPPRESS_FIB_PENDING     (1 << 28)
 #define BGP_FLAG_SUPPRESS_DUPLICATES      (1 << 29)
+#define BGP_FLAG_DEFAULT_IPV6             (1 << 30)
 
 	enum global_mode GLOBAL_GR_FSM[BGP_GLOBAL_GR_MODE]
 				      [BGP_GLOBAL_GR_EVENT_CMD];
@@ -660,6 +663,9 @@ struct bgp {
 
 	/* RB tree of ES-VRFs */
 	struct bgp_es_vrf_rb_head es_vrf_rb_tree;
+
+	/* Hash table of EVPN nexthops maintained per-tenant-VRF */
+	struct hash *evpn_nh_table;
 
 	/* vrf flags */
 	uint32_t vrf_flags;
@@ -1557,8 +1563,29 @@ struct peer {
 #define PEER_RMAP_TYPE_EXPORT         (1U << 7) /* neighbor route-map export */
 #define PEER_RMAP_TYPE_AGGREGATE      (1U << 8) /* aggregate-address route-map */
 
-	/* peer specific BFD information */
-	struct bfd_info *bfd_info;
+	/** Peer overwrite configuration. */
+	struct bfd_session_config {
+		/**
+		 * Manual configuration bit.
+		 *
+		 * This flag only makes sense for real peers (and not groups),
+		 * it keeps track if the user explicitly configured BFD for a
+		 * peer.
+		 */
+		bool manual;
+		/** Control Plane Independent. */
+		bool cbit;
+		/** Detection multiplier. */
+		uint8_t detection_multiplier;
+		/** Minimum required RX interval. */
+		uint32_t min_rx;
+		/** Minimum required TX interval. */
+		uint32_t min_tx;
+		/** Profile name. */
+		char profile[BFD_PROFILE_NAME_LEN];
+		/** Peer BFD session */
+		struct bfd_session_params *session;
+	} * bfd_config;
 
 	/* hostname and domainname advertised by host */
 	char *hostname;
@@ -1922,8 +1949,7 @@ extern bool peer_active(struct peer *);
 extern bool peer_active_nego(struct peer *);
 extern void bgp_recalculate_all_bestpaths(struct bgp *bgp);
 extern struct peer *peer_create(union sockunion *, const char *, struct bgp *,
-				as_t, as_t, int, afi_t, safi_t,
-				struct peer_group *);
+				as_t, as_t, int, struct peer_group *);
 extern struct peer *peer_create_accept(struct bgp *);
 extern void peer_xfer_config(struct peer *dst, struct peer *src);
 extern char *peer_uptime(time_t uptime2, char *buf, size_t len, bool use_json,
@@ -1991,7 +2017,7 @@ extern bool bgp_update_delay_configured(struct bgp *);
 extern int bgp_afi_safi_peer_exists(struct bgp *bgp, afi_t afi, safi_t safi);
 extern void peer_as_change(struct peer *, as_t, int);
 extern int peer_remote_as(struct bgp *, union sockunion *, const char *, as_t *,
-			  int, afi_t, safi_t);
+			  int);
 extern int peer_group_remote_as(struct bgp *, const char *, as_t *, int);
 extern int peer_delete(struct peer *peer);
 extern void peer_notify_unconfig(struct peer *peer);
