@@ -480,6 +480,7 @@ struct bgp {
 #define BGP_FLAG_SUPPRESS_FIB_PENDING     (1 << 28)
 #define BGP_FLAG_SUPPRESS_DUPLICATES      (1 << 29)
 #define BGP_FLAG_DEFAULT_IPV6             (1 << 30)
+#define BGP_FLAG_PEERTYPE_MULTIPATH_RELAX (1 << 31)
 
 	enum global_mode GLOBAL_GR_FSM[BGP_GLOBAL_GR_MODE]
 				      [BGP_GLOBAL_GR_EVENT_CMD];
@@ -1823,7 +1824,7 @@ struct bgp_nlri {
 /* BGP Dynamic Neighbors feature */
 #define BGP_DYNAMIC_NEIGHBORS_LIMIT_DEFAULT    100
 #define BGP_DYNAMIC_NEIGHBORS_LIMIT_MIN          1
-#define BGP_DYNAMIC_NEIGHBORS_LIMIT_MAX       5000
+#define BGP_DYNAMIC_NEIGHBORS_LIMIT_MAX      65535
 
 /* Flag for peer_clear_soft().  */
 enum bgp_clear_type {

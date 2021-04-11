@@ -310,11 +310,6 @@ struct ospf {
 	/* Statistics for LSA used for new instantiation. */
 	uint32_t rx_lsa_count;
 
-	/* Counter of "ip ospf area x.x.x.x" used
-	 * for mutual exclusion of network command under
-	 * router ospf or ip ospf area x under interface. */
-	uint32_t if_ospf_cli_count;
-
 	struct route_table *distance_table;
 
 	/* Used during ospf instance going down send LSDB
@@ -378,6 +373,11 @@ struct ospf {
 	 * timer thread.
 	 */
 	int aggr_action;
+
+	/* Max number of multiple paths
+	 * to support ECMP.
+	 */
+	uint16_t max_multipath;
 
 	/* MPLS LDP-IGP Sync */
 	struct ldp_sync_info_cmd ldp_sync_cmd;
@@ -650,6 +650,7 @@ extern struct ospf *ospf_new_alloc(unsigned short instance, const char *name);
 extern struct ospf *ospf_lookup_by_inst_name(unsigned short instance,
 					     const char *name);
 extern struct ospf *ospf_lookup_by_vrf_id(vrf_id_t vrf_id);
+extern uint32_t ospf_count_area_params(struct ospf *ospf);
 extern void ospf_finish(struct ospf *);
 extern void ospf_process_refresh_data(struct ospf *ospf, bool reset);
 extern void ospf_router_id_update(struct ospf *ospf);
@@ -731,4 +732,5 @@ extern int p_spaces_compare_func(const struct p_space *a,
 				 const struct p_space *b);
 extern int q_spaces_compare_func(const struct q_space *a,
 				 const struct q_space *b);
+
 #endif /* _ZEBRA_OSPFD_H */

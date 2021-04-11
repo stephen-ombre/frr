@@ -394,6 +394,13 @@ Route Selection
    other measures were taken to avoid these. The exact behaviour will be
    sensitive to the iBGP and reflection topology.
 
+.. clicmd:: bgp bestpath peer-type multipath-relax
+
+   This command specifies that BGP decision process should consider paths
+   from all peers for multipath computation. If this option is enabled,
+   paths learned from any of eBGP, iBGP, or confederation neighbors will
+   be multipath if they are otherwise considered equal cost.
+
 .. _bgp-distance:
 
 Administrative Distance Metrics
@@ -1356,6 +1363,15 @@ Defining Peers
    ``net.core.optmem_max`` to allow the kernel to allocate the necessary option
    memory.
 
+.. clicmd:: bgp listen limit <1-65535>
+
+   Define the maximum number of peers accepted for one BGP instance. This
+   limit is set to 100 by default. Increasing this value will really be
+   possible if more file descriptors are available in the BGP process. This
+   value is defined by the underlying system (ulimit value), and can be
+   overriden by `--limit-fds`. More information is available in chapter
+   (:ref:`common-invocation-options`).
+
 .. clicmd:: coalesce-time (0-4294967295)
 
    The time in milliseconds that BGP will delay before deciding what peers
@@ -1607,6 +1623,16 @@ Configuring Peers
    Setup the minimum route advertisement interval(mrai) for the
    peer in question.  This number is between 0 and 600 seconds,
    with the default advertisement interval being 0.
+
+.. clicmd:: neighbor PEER timers (0-65535) (0-65535)
+
+   Set keepalive and hold timers for a neighbor. The first value is keepalive
+   and the second is hold time.
+
+.. clicmd:: neighbor PEER connect (1-65535)
+
+   Set connect timer for a neighbor. The connect timer controls how long BGP
+   waits between connection attempts to a neighbor.
 
 .. clicmd:: neighbor PEER timers delayopen (1-240)
 
@@ -3159,17 +3185,15 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
 
 .. clicmd:: show bgp [afi] [safi] [all] [wide|json]
 
-.. clicmd:: show bgp <ipv4|ipv6> <unicast|multicast|vpn|labeled-unicast>
+.. clicmd:: show bgp [<ipv4|ipv6> <unicast|multicast|vpn|labeled-unicast|flowspec> | l2vpn evpn]
 
    These commands display BGP routes for the specific routing table indicated by
    the selected afi and the selected safi. If no afi and no safi value is given,
    the command falls back to the default IPv6 routing table.
-   For EVPN prefixes, you can display the full BGP table for this AFI/SAFI
-   using the standard `show bgp [afi] [safi]` syntax.
 
 .. clicmd:: show bgp l2vpn evpn route [type <macip|2|multicast|3|es|4|prefix|5>]
 
-   Additionally, you can also filter this output by route type.
+   EVPN prefixes can also be filtered by EVPN route type.
 
 .. clicmd:: show bgp [afi] [safi] [all] summary [json]
 
@@ -3186,10 +3210,20 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
    Show a bgp peer summary for peers that are succesfully exchanging routes
    for the specified address family, and subsequent address-family.
 
-.. clicmd:: show bgp [afi] [safi] neighbor [PEER]
+.. clicmd:: show bgp [afi] [safi] [neighbor [PEER] [routes|advertised-routes|received-routes] [json]
 
    This command shows information on a specific BGP peer of the relevant
    afi and safi selected.
+
+   The ``routes`` keyword displays only routes in this address-family's BGP
+   table that were received by this peer and accepted by inbound policy.
+
+   The ``advertised-routes`` keyword displays only the routes in this
+   address-family's BGP table that were permitted by outbound policy and
+   advertised to to this peer.
+
+   The ``received-routes`` keyword displays all routes belonging to this
+   address-family (prior to inbound policy) that were received by this peer.
 
 .. clicmd:: show bgp [afi] [safi] [all] dampening dampened-paths [wide|json]
 
@@ -3351,6 +3385,25 @@ Displaying Routes by AS Path
 .. clicmd:: show bgp ipv6 vpn summary
 
    Print a summary of neighbor connections for the specified AFI/SAFI combination.
+
+Displaying Routes by Route Distinguisher
+----------------------------------------
+
+.. clicmd:: show bgp [<ipv4|ipv6> vpn | l2vpn evpn [route]] rd <all|RD>
+
+   For L3VPN and EVPN address-families, routes can be displayed on a per-RD
+   (Route Distinguisher) basis or for all RD's.
+
+.. clicmd:: show bgp l2vpn evpn rd <all|RD> [overlay | tags]
+
+   Use the ``overlay`` or ``tags`` keywords to display the overlay/tag
+   information about the EVPN prefixes in the selected Route Distinguisher.
+
+.. clicmd:: show bgp l2vpn evpn route rd <all|RD> mac <MAC> [ip <MAC>] [json]
+
+   For EVPN Type 2 (macip) routes, a MAC address (and optionally an IP address)
+   can be supplied to the command to only display matching prefixes in the
+   specified RD.
 
 Displaying Update Group Information
 -----------------------------------

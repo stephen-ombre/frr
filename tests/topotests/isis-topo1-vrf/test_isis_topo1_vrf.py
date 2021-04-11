@@ -41,11 +41,28 @@ from lib import topotest
 from lib.topogen import Topogen, TopoRouter, get_topogen
 from lib.topolog import logger
 from lib.topotest import iproute2_is_vrf_capable
-from lib.common_config import required_linux_kernel_version
+from lib.common_config import (
+    required_linux_kernel_version,
+    adjust_router_l3mdev,
+)
 
 from mininet.topo import Topo
 
 pytestmark = [pytest.mark.isisd]
+
+VERTEX_TYPE_LIST = [
+    "pseudo_IS",
+    "pseudo_TE-IS",
+    "IS",
+    "TE-IS",
+    "ES",
+    "IP internal",
+    "IP external",
+    "IP TE",
+    "IP6 internal",
+    "IP6 external",
+    "UNKNOWN",
+]
 
 
 class ISISTopo1(Topo):
@@ -93,22 +110,6 @@ def setup_module(mod):
     tgen.start_topology()
 
     logger.info("Testing with VRF Lite support")
-    krel = platform.release()
-
-    # May need to adjust handling of vrf traffic depending on kernel version
-    l3mdev_accept = 0
-    if (
-        topotest.version_cmp(krel, "4.15") >= 0
-        and topotest.version_cmp(krel, "4.18") <= 0
-    ):
-        l3mdev_accept = 1
-
-    if topotest.version_cmp(krel, "5.0") >= 0:
-        l3mdev_accept = 1
-
-    logger.info(
-        "krel '{0}' setting net.ipv4.tcp_l3mdev_accept={1}".format(krel, l3mdev_accept)
-    )
 
     cmds = [
         "ip link add {0}-cust1 type vrf table 1001",
@@ -122,15 +123,9 @@ def setup_module(mod):
         # create VRF rx-cust1 and link rx-eth0 to rx-cust1
         for cmd in cmds:
             output = tgen.net[rname].cmd(cmd.format(rname))
-        output = tgen.net[rname].cmd("sysctl -n net.ipv4.tcp_l3mdev_accept")
-        logger.info(
-            "router {0}: existing tcp_l3mdev_accept was {1}".format(rname, output)
-        )
 
-        if l3mdev_accept:
-            output = tgen.net[rname].cmd(
-                "sysctl -w net.ipv4.tcp_l3mdev_accept={}".format(l3mdev_accept)
-            )
+        # adjust handling of vrf traffic
+        adjust_router_l3mdev(tgen, rname)
 
     for rname, router in tgen.routers().items():
         router.load_config(
@@ -316,6 +311,7 @@ def parse_topology(lines, level):
     areas = {}
     area = None
     ipv = None
+    vertex_type_regex = "|".join(VERTEX_TYPE_LIST)
 
     for line in lines:
         area_match = re.match(r"Area (.+):", line)
@@ -335,44 +331,57 @@ def parse_topology(lines, level):
             ipv = "ipv4"
             continue
 
-        item_match = re.match(r"([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)", line)
-        if item_match is not None:
+        item_match = re.match(
+            r"([^\s]+) ([^\s]+) ([^\s]+) ([^\s]+) ([^\s]+) ([^\s]+)", line
+        )
+        if (
+            item_match is not None
+            and item_match.group(1) == "Vertex"
+            and item_match.group(2) == "Type"
+            and item_match.group(3) == "Metric"
+            and item_match.group(4) == "Next-Hop"
+            and item_match.group(5) == "Interface"
+            and item_match.group(6) == "Parent"
+        ):
             # Skip header
-            if (
-                item_match.group(1) == "Vertex"
-                and item_match.group(2) == "Type"
-                and item_match.group(3) == "Metric"
-                and item_match.group(4) == "Next-Hop"
-                and item_match.group(5) == "Interface"
-                and item_match.group(6) == "Parent"
-            ):
-                continue
-
-            areas[area][level][ipv].append(
-                {
-                    "vertex": item_match.group(1),
-                    "type": item_match.group(2),
-                    "metric": item_match.group(3),
-                    "next-hop": item_match.group(4),
-                    "interface": item_match.group(5),
-                    "parent": item_match.group(6),
-                }
-            )
             continue
 
-        item_match = re.match(r"([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)", line)
+        item_match = re.match(
+            r"([^\s]+) ({}) ([0]|([1-9][0-9]*)) ([^\s]+) ([^\s]+) ([^\s]+)".format(
+                vertex_type_regex
+            ),
+            line,
+        )
         if item_match is not None:
             areas[area][level][ipv].append(
                 {
                     "vertex": item_match.group(1),
                     "type": item_match.group(2),
                     "metric": item_match.group(3),
-                    "parent": item_match.group(4),
+                    "next-hop": item_match.group(5),
+                    "interface": item_match.group(6),
+                    "parent": item_match.group(7),
                 }
             )
             continue
 
-        item_match = re.match(r"([^ ]+)", line)
+        item_match = re.match(
+            r"([^\s]+) ({}) ([0]|([1-9][0-9]*)) ([^\s]+)".format(vertex_type_regex),
+            line,
+        )
+
+        if item_match is not None:
+            areas[area][level][ipv].append(
+                {
+                    "vertex": item_match.group(1),
+                    "type": item_match.group(2),
+                    "metric": item_match.group(3),
+                    "parent": item_match.group(5),
+                }
+            )
+            continue
+
+        item_match = re.match(r"([^\s]+)", line)
         if item_match is not None:
             areas[area][level][ipv].append({"vertex": item_match.group(1)})
             continue

@@ -577,6 +577,7 @@ DEFUN (ospf_network_area,
 	struct prefix_ipv4 p;
 	struct in_addr area_id;
 	int ret, format;
+	uint32_t count;
 
 	if (ospf->instance) {
 		vty_out(vty,
@@ -584,14 +585,15 @@ DEFUN (ospf_network_area,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	if (ospf->if_ospf_cli_count > 0) {
+	count = ospf_count_area_params(ospf);
+	if (count > 0) {
 		vty_out(vty,
 			"Please remove all ip ospf area x.x.x.x commands first.\n");
 		if (IS_DEBUG_OSPF_EVENT)
 			zlog_debug(
 				"%s ospf vrf %s num of %u ip ospf area x config",
 				__func__, ospf->name ? ospf->name : "NIL",
-				ospf->if_ospf_cli_count);
+				count);
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
@@ -2697,6 +2699,50 @@ DEFUN(no_ospf_ti_lfa, no_ospf_ti_lfa_cmd,
 	return CMD_SUCCESS;
 }
 
+static void ospf_maxpath_set(struct vty *vty, struct ospf *ospf, uint16_t paths)
+{
+	if (ospf->max_multipath == paths)
+		return;
+
+	ospf->max_multipath = paths;
+
+	/* Send deletion notification to zebra to delete all
+	 * ospf specific routes and reinitiat SPF to reflect
+	 * the new max multipath.
+	 */
+	ospf_restart_spf(ospf);
+}
+
+/* Ospf Maximum multiple paths config support */
+DEFUN (ospf_max_multipath,
+       ospf_max_multipath_cmd,
+       "maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM),
+       "Max no of multiple paths for ECMP support\n"
+       "Number of paths\n")
+{
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+	int idx_number = 1;
+	uint16_t maxpaths;
+
+	maxpaths = strtol(argv[idx_number]->arg, NULL, 10);
+
+	ospf_maxpath_set(vty, ospf, maxpaths);
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf_max_multipath,
+       no_ospf_max_multipath_cmd,
+       "no maximum-paths",
+       NO_STR
+       "Max no of multiple paths for ECMP support\n")
+{
+	VTY_DECLVAR_INSTANCE_CONTEXT(ospf, ospf);
+	uint16_t maxpaths = MULTIPATH_NUM;
+
+	ospf_maxpath_set(vty, ospf, maxpaths);
+	return CMD_SUCCESS;
+}
+
 static const char *const ospf_abr_type_descr_str[] = {
 	"Unknown", "Standard (RFC2328)", "Alternative IBM",
 	"Alternative Cisco", "Alternative Shortcut"
@@ -3226,6 +3272,10 @@ static int show_ip_ospf_common(struct vty *vty, struct ospf *ospf,
 		/* Show refresh parameters. */
 		vty_out(vty, " Refresh timer %d secs\n",
 			ospf->lsa_refresh_interval);
+
+		/* show max multipath */
+		vty_out(vty, " Maximum multiple paths(ECMP) supported  %d\n",
+			ospf->max_multipath);
 	}
 
 	/* Show ABR/ASBR flags. */
@@ -7815,10 +7865,9 @@ DEFUN (ip_ospf_message_digest_key,
 	}
 
 	key_id = strtol(keyid, NULL, 10);
-	if (ospf_crypt_key_lookup(params->auth_crypt, key_id) != NULL) {
-		vty_out(vty, "OSPF: Key %d already exists\n", key_id);
-		return CMD_WARNING;
-	}
+
+	/* Remove existing key, if any */
+	ospf_crypt_key_delete(params->auth_crypt, key_id);
 
 	ck = ospf_crypt_key_new();
 	ck->key_id = (uint8_t)key_id;
@@ -8873,10 +8922,8 @@ DEFUN (ip_ospf_area,
 
 		if (count > 0) {
 			ospf = ospf_lookup_by_vrf_id(ifp->vrf_id);
-			if (ospf) {
+			if (ospf)
 				ospf_interface_area_unset(ospf, ifp);
-				ospf->if_ospf_cli_count -= count;
-			}
 		}
 
 		return CMD_NOT_MY_INSTANCE;
@@ -8920,9 +8967,12 @@ DEFUN (ip_ospf_area,
 		// update/create address-level params
 		params = ospf_get_if_params((ifp), (addr));
 		if (OSPF_IF_PARAM_CONFIGURED(params, if_area)) {
-			vty_out(vty,
-				"Must remove previous area/address config before changing ospf area\n");
-			return CMD_WARNING_CONFIG_FAILED;
+			if (!IPV4_ADDR_SAME(&params->if_area, &area_id)) {
+				vty_out(vty,
+					"Must remove previous area/address config before changing ospf area\n");
+				return CMD_WARNING_CONFIG_FAILED;
+			} else
+				return CMD_SUCCESS;
 		}
 		ospf_if_update_params((ifp), (addr));
 	}
@@ -8934,10 +8984,8 @@ DEFUN (ip_ospf_area,
 		params->if_area_id_fmt = format;
 	}
 
-	if (ospf) {
+	if (ospf)
 		ospf_interface_area_set(ospf, ifp);
-		ospf->if_ospf_cli_count++;
-	}
 
 	return CMD_SUCCESS;
 }
@@ -9003,7 +9051,6 @@ DEFUN (no_ip_ospf_area,
 
 	if (ospf) {
 		ospf_interface_area_unset(ospf, ifp);
-		ospf->if_ospf_cli_count--;
 		ospf_area_check_free(ospf, area_id);
 	}
 
@@ -12277,6 +12324,9 @@ static int ospf_config_write_one(struct vty *vty, struct ospf *ospf)
 		vty_out(vty, " ospf write-multiplier %d\n",
 			ospf->write_oi_count);
 
+	if (ospf->max_multipath != MULTIPATH_NUM)
+		vty_out(vty, " maximum-paths %d\n", ospf->max_multipath);
+
 	/* Max-metric router-lsa print */
 	config_write_stub_router(vty, ospf);
 
@@ -12804,6 +12854,10 @@ void ospf_vty_init(void)
 	/* TI-LFA commands */
 	install_element(OSPF_NODE, &ospf_ti_lfa_cmd);
 	install_element(OSPF_NODE, &no_ospf_ti_lfa_cmd);
+
+	/* Max path configurations */
+	install_element(OSPF_NODE, &ospf_max_multipath_cmd);
+	install_element(OSPF_NODE, &no_ospf_max_multipath_cmd);
 
 	/* Init interface related vty commands. */
 	ospf_vty_if_init();

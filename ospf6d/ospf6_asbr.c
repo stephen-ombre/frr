@@ -30,6 +30,7 @@
 #include "plist.h"
 #include "thread.h"
 #include "linklist.h"
+#include "lib/northbound_cli.h"
 
 #include "ospf6_proto.h"
 #include "ospf6_lsa.h"
@@ -37,6 +38,7 @@
 #include "ospf6_route.h"
 #include "ospf6_zebra.h"
 #include "ospf6_message.h"
+#include "ospf6_spf.h"
 
 #include "ospf6_top.h"
 #include "ospf6_area.h"
@@ -56,6 +58,10 @@ DEFINE_MTYPE_STATIC(OSPF6D, OSPF6_REDISTRIBUTE, "OSPF6 Redistribute arguments");
 static void ospf6_asbr_redistribute_set(int type, vrf_id_t vrf_id);
 static void ospf6_asbr_redistribute_unset(struct ospf6 *ospf6,
 					  struct ospf6_redist *red, int type);
+
+#ifndef VTYSH_EXTRACT_PL
+#include "ospf6d/ospf6_asbr_clippy.c"
+#endif
 
 unsigned char conf_debug_ospf6_asbr = 0;
 
@@ -1047,6 +1053,7 @@ static struct ospf6_redist *ospf6_redist_add(struct ospf6 *ospf6, int type,
 	ROUTEMAP(red) = NULL;
 
 	listnode_add(ospf6->redist[type], red);
+	ospf6->redistribute++;
 
 	return red;
 }
@@ -1060,6 +1067,7 @@ static void ospf6_redist_del(struct ospf6 *ospf6, struct ospf6_redist *red,
 			list_delete(&ospf6->redist[type]);
 		}
 		XFREE(MTYPE_OSPF6_REDISTRIBUTE, red);
+		ospf6->redistribute--;
 	}
 }
 
@@ -1096,8 +1104,10 @@ void ospf6_asbr_send_externals_to_area(struct ospf6_area *oa)
 
 	for (ALL_LSDB(oa->ospf6->lsdb, lsa, lsanext)) {
 		if (ntohs(lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL) {
-			zlog_debug("%s: Flooding AS-External LSA %s",
-				   __func__, lsa->name);
+			if (IS_OSPF6_DEBUG_ASBR)
+				zlog_debug("%s: Flooding AS-External LSA %s",
+					   __func__, lsa->name);
+
 			ospf6_flood_area(NULL, lsa, oa);
 		}
 	}
@@ -1120,11 +1130,41 @@ void ospf6_asbr_remove_externals_from_area(struct ospf6_area *oa)
 	/* if router is only in a stub area then purge AS-External LSAs */
 	iterend = ospf6_lsdb_head(ospf6->lsdb, 0, 0, 0, &lsa);
 	while (lsa != NULL) {
+		assert(lsa->lock > 1);
 		lsanext = ospf6_lsdb_next(iterend, lsa);
 		if (ntohs(lsa->header->type) == OSPF6_LSTYPE_AS_EXTERNAL)
 			ospf6_lsdb_remove(lsa, ospf6->lsdb);
 		lsa = lsanext;
 	}
+}
+
+/* Update ASBR status. */
+static void ospf6_asbr_status_update(struct ospf6 *ospf6, uint8_t status)
+{
+	struct listnode *lnode, *lnnode;
+	struct ospf6_area *oa;
+
+	zlog_info("ASBR[%s:Status:%d]: Update", ospf6->name, status);
+
+	if (status) {
+		if (IS_OSPF6_ASBR(ospf6)) {
+			zlog_info("ASBR[%s:Status:%d]: Already ASBR",
+				  ospf6->name, status);
+			return;
+		}
+		SET_FLAG(ospf6->flag, OSPF6_FLAG_ASBR);
+	} else {
+		if (!IS_OSPF6_ASBR(ospf6)) {
+			zlog_info("ASBR[%s:Status:%d]: Already non ASBR",
+				  ospf6->name, status);
+			return;
+		}
+		UNSET_FLAG(ospf6->flag, OSPF6_FLAG_ASBR);
+	}
+
+	ospf6_spf_schedule(ospf6, OSPF6_SPF_FLAGS_ASBR_STATUS_CHANGE);
+	for (ALL_LIST_ELEMENTS(ospf6->area_list, lnode, lnnode, oa))
+		OSPF6_ROUTER_LSA_SCHEDULE(oa);
 }
 
 void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
@@ -1141,8 +1181,6 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 	struct prefix prefix_id;
 	struct route_node *node;
 	char ibuf[16];
-	struct listnode *lnode, *lnnode;
-	struct ospf6_area *oa;
 	struct ospf6_redist *red;
 
 	red = ospf6_redist_lookup(ospf6, type, 0);
@@ -1150,7 +1188,8 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 	if (!red)
 		return;
 
-	if (!ospf6_zebra_is_redistribute(type, ospf6->vrf_id))
+	if ((type != DEFAULT_ROUTE)
+	    && !ospf6_zebra_is_redistribute(type, ospf6->vrf_id))
 		return;
 
 	memset(&troute, 0, sizeof(troute));
@@ -1203,7 +1242,11 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 				       sizeof(struct in6_addr));
 			info->tag = tinfo.tag;
 		} else {
-			/* If there is no route-map, simply update the tag */
+			/* If there is no route-map, simply update the tag and
+			 * metric fields
+			 */
+			match->path.metric_type = metric_type(ospf6, type, 0);
+			match->path.cost = metric_value(ospf6, type, 0);
 			info->tag = tag;
 		}
 
@@ -1231,6 +1274,7 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 
 		match->path.origin.id = htonl(info->id);
 		ospf6_as_external_lsa_originate(match, ospf6);
+		ospf6_asbr_status_update(ospf6, ospf6->redistribute);
 		return;
 	}
 
@@ -1255,7 +1299,11 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 			       sizeof(struct in6_addr));
 		info->tag = tinfo.tag;
 	} else {
-		/* If there is no route-map, simply set the tag */
+		/* If there is no route-map, simply update the tag and metric
+		 * fields
+		 */
+		route->path.metric_type = metric_type(ospf6, type, 0);
+		route->path.cost = metric_value(ospf6, type, 0);
 		info->tag = tag;
 	}
 
@@ -1284,10 +1332,7 @@ void ospf6_asbr_redistribute_add(int type, ifindex_t ifindex,
 
 	route->path.origin.id = htonl(info->id);
 	ospf6_as_external_lsa_originate(route, ospf6);
-
-	/* Router-Bit (ASBR Flag) may have to be updated */
-	for (ALL_LIST_ELEMENTS(ospf6->area_list, lnode, lnnode, oa))
-		OSPF6_ROUTER_LSA_SCHEDULE(oa);
+	ospf6_asbr_status_update(ospf6, ospf6->redistribute);
 }
 
 void ospf6_asbr_redistribute_remove(int type, ifindex_t ifindex,
@@ -1299,8 +1344,6 @@ void ospf6_asbr_redistribute_remove(int type, ifindex_t ifindex,
 	struct ospf6_lsa *lsa;
 	struct prefix prefix_id;
 	char ibuf[16];
-	struct listnode *lnode, *lnnode;
-	struct ospf6_area *oa;
 
 	match = ospf6_route_lookup(prefix, ospf6->external_table);
 	if (match == NULL) {
@@ -1341,9 +1384,7 @@ void ospf6_asbr_redistribute_remove(int type, ifindex_t ifindex,
 	ospf6_route_remove(match, ospf6->external_table);
 	XFREE(MTYPE_OSPF6_EXTERNAL_INFO, info);
 
-	/* Router-Bit (ASBR Flag) may have to be updated */
-	for (ALL_LIST_ELEMENTS(ospf6->area_list, lnode, lnnode, oa))
-		OSPF6_ROUTER_LSA_SCHEDULE(oa);
+	ospf6_asbr_status_update(ospf6, ospf6->redistribute);
 }
 
 DEFUN (ospf6_redistribute,
@@ -1533,6 +1574,140 @@ static void ospf6_redistribute_show_config(struct vty *vty, struct ospf6 *ospf6,
 		vty_out(vty, "Total %d routes\n", total);
 }
 
+static void ospf6_redistribute_default_set(struct ospf6 *ospf6, int originate)
+{
+	struct prefix_ipv6 p = {};
+	struct in6_addr nexthop = {};
+	int cur_originate = ospf6->default_originate;
+
+	p.family = AF_INET6;
+	p.prefixlen = 0;
+
+	ospf6->default_originate = originate;
+
+	switch (cur_originate) {
+	case DEFAULT_ORIGINATE_NONE:
+		break;
+	case DEFAULT_ORIGINATE_ZEBRA:
+		zclient_redistribute_default(ZEBRA_REDISTRIBUTE_DEFAULT_DELETE,
+					     zclient, AFI_IP6, ospf6->vrf_id);
+		ospf6_asbr_redistribute_remove(DEFAULT_ROUTE, 0,
+					       (struct prefix *)&p, ospf6);
+
+		break;
+	case DEFAULT_ORIGINATE_ALWAYS:
+		ospf6_asbr_redistribute_remove(DEFAULT_ROUTE, 0,
+					       (struct prefix *)&p, ospf6);
+		break;
+	}
+
+	switch (originate) {
+	case DEFAULT_ORIGINATE_NONE:
+		break;
+	case DEFAULT_ORIGINATE_ZEBRA:
+		zclient_redistribute_default(ZEBRA_REDISTRIBUTE_DEFAULT_ADD,
+					     zclient, AFI_IP6, ospf6->vrf_id);
+
+		break;
+	case DEFAULT_ORIGINATE_ALWAYS:
+		ospf6_asbr_redistribute_add(DEFAULT_ROUTE, 0,
+					    (struct prefix *)&p, 0, &nexthop, 0,
+					    ospf6);
+		break;
+	}
+}
+
+/* Default Route originate. */
+DEFPY (ospf6_default_route_originate,
+       ospf6_default_route_originate_cmd,
+       "default-information originate [{always$always|metric (0-16777214)$mval|metric-type (1-2)$mtype|route-map WORD$rtmap}]",
+       "Control distribution of default route\n"
+       "Distribute a default route\n"
+       "Always advertise default route\n"
+       "OSPFv3 default metric\n"
+       "OSPFv3 metric\n"
+       "OSPFv3 metric type for default routes\n"
+       "Set OSPFv3 External Type 1/2 metrics\n"
+       "Route map reference\n"
+       "Pointer to route-map entries\n")
+{
+	int default_originate = DEFAULT_ORIGINATE_ZEBRA;
+	struct ospf6_redist *red;
+	bool sameRtmap = false;
+
+	VTY_DECLVAR_CONTEXT(ospf6, ospf6);
+
+	int cur_originate = ospf6->default_originate;
+
+	OSPF6_CMD_CHECK_RUNNING(ospf6);
+
+	red = ospf6_redist_add(ospf6, DEFAULT_ROUTE, 0);
+
+	if (always != NULL)
+		default_originate = DEFAULT_ORIGINATE_ALWAYS;
+
+	if (mval_str == NULL)
+		mval = -1;
+
+	if (mtype_str == NULL)
+		mtype = -1;
+
+	/* To check ,if user is providing same route map */
+	if ((rtmap == ROUTEMAP_NAME(red))
+	    || (rtmap && ROUTEMAP_NAME(red)
+		&& (strcmp(rtmap, ROUTEMAP_NAME(red)) == 0)))
+		sameRtmap = true;
+
+	/* Don't allow if the same lsa is aleardy originated. */
+	if ((sameRtmap) && (red->dmetric.type == mtype)
+	    && (red->dmetric.value == mval)
+	    && (cur_originate == default_originate))
+		return CMD_SUCCESS;
+
+	/* Updating Metric details */
+	red->dmetric.type = mtype;
+	red->dmetric.value = mval;
+
+	/* updating route map details */
+	if (rtmap)
+		ospf6_asbr_routemap_set(red, rtmap);
+	else
+		ospf6_asbr_routemap_unset(red);
+
+	ospf6_redistribute_default_set(ospf6, default_originate);
+	return CMD_SUCCESS;
+}
+
+DEFPY (no_ospf6_default_information_originate,
+       no_ospf6_default_information_originate_cmd,
+       "no default-information originate [{always|metric (0-16777214)|metric-type (1-2)|route-map WORD}]",
+       NO_STR
+       "Control distribution of default information\n"
+       "Distribute a default route\n"
+       "Always advertise default route\n"
+       "OSPFv3 default metric\n"
+       "OSPFv3 metric\n"
+       "OSPFv3 metric type for default routes\n"
+       "Set OSPFv3 External Type 1/2 metrics\n"
+       "Route map reference\n"
+       "Pointer to route-map entries\n")
+{
+	struct ospf6_redist *red;
+
+	VTY_DECLVAR_CONTEXT(ospf6, ospf6);
+
+	OSPF6_CMD_CHECK_RUNNING(ospf6);
+
+	red = ospf6_redist_lookup(ospf6, DEFAULT_ROUTE, 0);
+	if (!red)
+		return CMD_SUCCESS;
+
+	ospf6_asbr_routemap_unset(red);
+	ospf6_redist_del(ospf6, red, DEFAULT_ROUTE);
+
+	ospf6_redistribute_default_set(ospf6, DEFAULT_ORIGINATE_NONE);
+	return CMD_SUCCESS;
+}
 
 /* Routemap Functions */
 static enum route_map_cmd_result_t
@@ -1750,99 +1925,83 @@ ospf6_routemap_rule_set_tag(void *rule, const struct prefix *p, void *object)
 	return RMAP_OKAY;
 }
 
-static const struct route_map_rule_cmd
-		ospf6_routemap_rule_set_tag_cmd = {
+static const struct route_map_rule_cmd ospf6_routemap_rule_set_tag_cmd = {
 	"tag",
 	ospf6_routemap_rule_set_tag,
 	route_map_rule_tag_compile,
 	route_map_rule_tag_free,
 };
 
-static int route_map_command_status(struct vty *vty, enum rmap_compile_rets ret)
-{
-	switch (ret) {
-	case RMAP_RULE_MISSING:
-		vty_out(vty, "OSPF6 Can't find rule.\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	case RMAP_COMPILE_ERROR:
-		vty_out(vty, "OSPF6 Argument is malformed.\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	case RMAP_COMPILE_SUCCESS:
-		break;
-	}
-
-	return CMD_SUCCESS;
-}
-
 /* add "set metric-type" */
-DEFUN (ospf6_routemap_set_metric_type,
-       ospf6_routemap_set_metric_type_cmd,
-       "set metric-type <type-1|type-2>",
-       "Set value\n"
-       "Type of metric\n"
-       "OSPF6 external type 1 metric\n"
-       "OSPF6 external type 2 metric\n")
+DEFUN_YANG (ospf6_routemap_set_metric_type, ospf6_routemap_set_metric_type_cmd,
+      "set metric-type <type-1|type-2>",
+      "Set value\n"
+      "Type of metric\n"
+      "OSPF6 external type 1 metric\n"
+      "OSPF6 external type 2 metric\n")
 {
-	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
-	int idx_external = 2;
-	enum rmap_compile_rets ret = route_map_add_set(route_map_index,
-						       "metric-type",
-						       argv[idx_external]->arg);
+	char *ext = argv[2]->text;
 
-	return route_map_command_status(vty, ret);
+	const char *xpath =
+		"./set-action[action='frr-ospf-route-map:metric-type']";
+	char xpath_value[XPATH_MAXLEN];
+
+	nb_cli_enqueue_change(vty, xpath, NB_OP_CREATE, NULL);
+	snprintf(xpath_value, sizeof(xpath_value),
+		 "%s/rmap-set-action/frr-ospf-route-map:metric-type", xpath);
+	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY, ext);
+	return nb_cli_apply_changes(vty, NULL);
 }
 
 /* delete "set metric-type" */
-DEFUN (ospf6_routemap_no_set_metric_type,
-       ospf6_routemap_no_set_metric_type_cmd,
-       "no set metric-type [<type-1|type-2>]",
-       NO_STR
-       "Set value\n"
-       "Type of metric\n"
-       "OSPF6 external type 1 metric\n"
-       "OSPF6 external type 2 metric\n")
+DEFUN_YANG (ospf6_routemap_no_set_metric_type, ospf6_routemap_no_set_metric_type_cmd,
+      "no set metric-type [<type-1|type-2>]",
+      NO_STR
+      "Set value\n"
+      "Type of metric\n"
+      "OSPF6 external type 1 metric\n"
+      "OSPF6 external type 2 metric\n")
 {
-	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
-	char *ext = (argc == 4) ? argv[3]->text : NULL;
-	enum rmap_compile_rets ret = route_map_delete_set(route_map_index,
-							  "metric-type", ext);
+	const char *xpath =
+		"./set-action[action='frr-ospf-route-map:metric-type']";
 
-	return route_map_command_status(vty, ret);
+	nb_cli_enqueue_change(vty, xpath, NB_OP_DESTROY, NULL);
+	return nb_cli_apply_changes(vty, NULL);
 }
 
 /* add "set forwarding-address" */
-DEFUN (ospf6_routemap_set_forwarding,
-       ospf6_routemap_set_forwarding_cmd,
-       "set forwarding-address X:X::X:X",
-       "Set value\n"
-       "Forwarding Address\n"
-       "IPv6 Address\n")
+DEFUN_YANG (ospf6_routemap_set_forwarding, ospf6_routemap_set_forwarding_cmd,
+      "set forwarding-address X:X::X:X",
+      "Set value\n"
+      "Forwarding Address\n"
+      "IPv6 Address\n")
 {
-	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
 	int idx_ipv6 = 2;
-	enum rmap_compile_rets ret = route_map_add_set(route_map_index,
-						       "forwarding-address",
-						       argv[idx_ipv6]->arg);
+	const char *xpath =
+		"./set-action[action='frr-ospf6-route-map:forwarding-address']";
+	char xpath_value[XPATH_MAXLEN];
 
-	return route_map_command_status(vty, ret);
+	nb_cli_enqueue_change(vty, xpath, NB_OP_CREATE, NULL);
+	snprintf(xpath_value, sizeof(xpath_value),
+		 "%s/rmap-set-action/frr-ospf6-route-map:ipv6-address", xpath);
+	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY,
+			      argv[idx_ipv6]->arg);
+	return nb_cli_apply_changes(vty, NULL);
 }
 
 /* delete "set forwarding-address" */
-DEFUN (ospf6_routemap_no_set_forwarding,
-       ospf6_routemap_no_set_forwarding_cmd,
-       "no set forwarding-address X:X::X:X",
-       NO_STR
-       "Set value\n"
-       "Forwarding Address\n"
-       "IPv6 Address\n")
+DEFUN_YANG (ospf6_routemap_no_set_forwarding, ospf6_routemap_no_set_forwarding_cmd,
+      "no set forwarding-address [X:X::X:X]",
+      NO_STR
+      "Set value\n"
+      "Forwarding Address\n"
+      "IPv6 Address\n")
 {
-	VTY_DECLVAR_CONTEXT(route_map_index, route_map_index);
-	int idx_ipv6 = 3;
-	enum rmap_compile_rets ret = route_map_delete_set(route_map_index,
-							  "forwarding-address",
-							  argv[idx_ipv6]->arg);
+	const char *xpath =
+		"./set-action[action='frr-ospf6-route-map:forwarding-address']";
 
-	return route_map_command_status(vty, ret);
+	nb_cli_enqueue_change(vty, xpath, NB_OP_DESTROY, NULL);
+	return nb_cli_apply_changes(vty, NULL);
 }
 
 static void ospf6_routemap_init(void)
@@ -2115,6 +2274,9 @@ void ospf6_asbr_init(void)
 
 	install_element(VIEW_NODE, &show_ipv6_ospf6_redistribute_cmd);
 
+	install_element(OSPF6_NODE, &ospf6_default_route_originate_cmd);
+	install_element(OSPF6_NODE,
+			&no_ospf6_default_information_originate_cmd);
 	install_element(OSPF6_NODE, &ospf6_redistribute_cmd);
 	install_element(OSPF6_NODE, &ospf6_redistribute_routemap_cmd);
 	install_element(OSPF6_NODE, &no_ospf6_redistribute_cmd);
@@ -2173,6 +2335,39 @@ int config_write_ospf6_debug_asbr(struct vty *vty)
 {
 	if (IS_OSPF6_DEBUG_ASBR)
 		vty_out(vty, "debug ospf6 asbr\n");
+	return 0;
+}
+
+int ospf6_distribute_config_write(struct vty *vty, struct ospf6 *ospf6)
+{
+	struct ospf6_redist *red;
+
+	if (ospf6) {
+		/* default-route print. */
+		if (ospf6->default_originate != DEFAULT_ORIGINATE_NONE) {
+			vty_out(vty, " default-information originate");
+			if (ospf6->default_originate
+			    == DEFAULT_ORIGINATE_ALWAYS)
+				vty_out(vty, " always");
+
+			red = ospf6_redist_lookup(ospf6, DEFAULT_ROUTE, 0);
+			if (red) {
+				if (red->dmetric.value >= 0)
+					vty_out(vty, " metric %d",
+						red->dmetric.value);
+
+				if (red->dmetric.type >= 0)
+					vty_out(vty, " metric-type %d",
+						red->dmetric.type);
+
+				if (ROUTEMAP_NAME(red))
+					vty_out(vty, " route-map %s",
+						ROUTEMAP_NAME(red));
+			}
+
+			vty_out(vty, "\n");
+		}
+	}
 	return 0;
 }
 

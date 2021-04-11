@@ -2237,7 +2237,7 @@ DEFUNSH(VTYSH_BFDD, bfd_peer_enter, bfd_peer_enter_cmd,
 }
 
 DEFUNSH(VTYSH_BFDD, bfd_profile_enter, bfd_profile_enter_cmd,
-	"profile WORD",
+	"profile BFDPROF",
 	BFD_PROFILE_STR
 	BFD_PROFILE_NAME_STR)
 {
@@ -2932,10 +2932,15 @@ DEFUN (vtysh_show_history,
 /* Memory */
 DEFUN (vtysh_show_memory,
        vtysh_show_memory_cmd,
-       "show memory",
+       "show memory [" DAEMONS_LIST "]",
        SHOW_STR
-       "Memory statistics\n")
+       "Memory statistics\n"
+       DAEMONS_STR)
 {
+	if (argc == 3)
+		return show_one_daemon(vty, argv, argc - 1,
+				       argv[argc - 1]->text);
+
 	return show_per_daemon(vty, argv, argc, "Memory statistics for %s:\n");
 }
 

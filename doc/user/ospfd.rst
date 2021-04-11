@@ -299,6 +299,16 @@ To start OSPF process you have to specify the OSPF router.
    command can be used when the neighbor state get stuck at some state and
    this can be used to recover it from that state.
 
+.. index:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
+.. clicmd:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
+
+.. index:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
+.. clicmd:: no maximum-paths
+
+   CLI to control maximum number of equal cost paths to reach a specific
+   destination.(ECMP)
+   Reset CLI, resets the maximum supported multi path to the default value.
+
 .. _ospf-area:
 
 Areas
@@ -846,6 +856,13 @@ Traffic Engineering
    flood in AREA <area-id> with Opaque Type-10, respectively in AS with Opaque
    Type-11. In all case, Opaque-LSA TLV=6.
 
+.. index:: mpls-te export
+.. clicmd:: no mpls-te export
+
+   Export Traffic Engineering Data Base to other daemons through the ZAPI
+   Opaque Link State messages.
+
+.. index:: show ip ospf mpls-te interface
 .. clicmd:: show ip ospf mpls-te interface
 
 .. clicmd:: show ip ospf mpls-te interface INTERFACE
@@ -855,6 +872,20 @@ Traffic Engineering
 .. clicmd:: show ip ospf mpls-te router
 
    Show Traffic Engineering router parameters.
+
+.. index:: show ip ospf mpls-te database [verbose|json]
+.. clicmd:: show ip ospf mpls-te database [verbose|json]
+
+.. index:: show ip ospf mpls-te database vertex [self-originate|adv-router ADV-ROUTER] [verbose|json]
+.. clicmd:: show ip ospf mpls-te database vertex [self-originate|adv-router ADV-ROUTER] [verbose|json]
+
+.. index:: show ip ospf mpls-te database edge [A.B.C.D] [verbose|json]
+.. clicmd:: show ip ospf mpls-te database edge [A.B.C.D] [verbose|json]
+
+.. index:: show ip ospf mpls-te database subnet [A.B.C.D/M] [verbose|json]
+.. clicmd:: show ip ospf mpls-te database subnet [A.B.C.D/M] [verbose|json]
+
+   Show Traffic Engineering Database
 
 .. _router-information:
 
