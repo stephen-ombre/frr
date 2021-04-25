@@ -791,6 +791,7 @@ static void ospf_finish_final(struct ospf *ospf)
 	OSPF_TIMER_OFF(ospf->t_maxage_walker);
 	OSPF_TIMER_OFF(ospf->t_abr_task);
 	OSPF_TIMER_OFF(ospf->t_asbr_check);
+	OSPF_TIMER_OFF(ospf->t_asbr_nssa_redist_update);
 	OSPF_TIMER_OFF(ospf->t_distribute_update);
 	OSPF_TIMER_OFF(ospf->t_lsa_refresher);
 	OSPF_TIMER_OFF(ospf->t_opaque_lsa_self);
@@ -1076,6 +1077,7 @@ struct ospf_interface *add_ospf_interface(struct connected *co,
 	/* If network type is specified previously,
 	   skip network type setting. */
 	oi->type = IF_DEF_PARAMS(co->ifp)->type;
+	oi->ptp_dmvpn = IF_DEF_PARAMS(co->ifp)->ptp_dmvpn;
 
 	/* Add pseudo neighbor. */
 	ospf_nbr_self_reset(oi, oi->ospf->router_id);

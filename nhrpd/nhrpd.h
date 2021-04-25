@@ -88,7 +88,12 @@ static inline int notifier_active(struct notifier_list *l)
 
 void nhrp_zebra_init(void);
 void nhrp_zebra_terminate(void);
-
+void nhrp_send_zebra_configure_arp(struct interface *ifp, int family);
+void nhrp_send_zebra_nbr(union sockunion *in,
+			 union sockunion *out,
+			 struct interface *ifp);
+void nhrp_send_zebra_configure_arp(struct interface *ifp,
+				   int family);
 struct zbuf;
 struct nhrp_vc;
 struct nhrp_cache;
@@ -264,6 +269,13 @@ struct nhrp_nhs {
 	struct list_head reglist_head;
 };
 
+struct nhrp_multicast {
+	struct interface *ifp;
+	struct list_head list_entry;
+	afi_t afi;
+	union sockunion nbma_addr; /* IP-address */
+};
+
 struct nhrp_registration {
 	struct list_head reglist_entry;
 	struct thread *t_register;
@@ -309,6 +321,7 @@ struct nhrp_interface {
 		unsigned short mtu;
 		unsigned int holdtime;
 		struct list_head nhslist_head;
+		struct list_head mcastlist_head;
 	} afi[AFI_MAX];
 };
 
@@ -326,6 +339,7 @@ int nhrp_interface_up(ZAPI_CALLBACK_ARGS);
 int nhrp_interface_down(ZAPI_CALLBACK_ARGS);
 int nhrp_interface_address_add(ZAPI_CALLBACK_ARGS);
 int nhrp_interface_address_delete(ZAPI_CALLBACK_ARGS);
+void nhrp_neighbor_operation(ZAPI_CALLBACK_ARGS);
 
 void nhrp_interface_notify_add(struct interface *ifp, struct notifier_block *n,
 			       notifier_fn_t fn);
@@ -349,6 +363,16 @@ void nhrp_nhs_foreach(struct interface *ifp, afi_t afi,
 				 void *),
 		      void *ctx);
 void nhrp_nhs_interface_del(struct interface *ifp);
+
+int nhrp_multicast_add(struct interface *ifp, afi_t afi,
+		       union sockunion *nbma_addr);
+int nhrp_multicast_del(struct interface *ifp, afi_t afi,
+		       union sockunion *nbma_addr);
+void nhrp_multicast_interface_del(struct interface *ifp);
+void nhrp_multicast_foreach(struct interface *ifp, afi_t afi,
+			    void (*cb)(struct nhrp_multicast *, void *),
+			    void *ctx);
+void netlink_mcast_set_nflog_group(int nlgroup);
 
 void nhrp_route_update_nhrp(const struct prefix *p, struct interface *ifp);
 void nhrp_route_announce(int add, enum nhrp_cache_type type,

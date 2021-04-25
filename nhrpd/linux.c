@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -31,6 +32,11 @@
 #include "os.h"
 #include "netlink.h"
 
+#ifndef HAVE_STRLCPY
+size_t strlcpy(char *__restrict dest,
+	       const char *__restrict src, size_t destsize);
+#endif
+
 static int nhrp_socket_fd = -1;
 
 int os_socket(void)
@@ -42,7 +48,7 @@ int os_socket(void)
 }
 
 int os_sendmsg(const uint8_t *buf, size_t len, int ifindex, const uint8_t *addr,
-	       size_t addrlen)
+	       size_t addrlen, uint16_t protocol)
 {
 	struct sockaddr_ll lladdr;
 	struct iovec iov = {
@@ -54,23 +60,27 @@ int os_sendmsg(const uint8_t *buf, size_t len, int ifindex, const uint8_t *addr,
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	int status;
+	int status, fd;
 
 	if (addrlen > sizeof(lladdr.sll_addr))
 		return -1;
 
 	memset(&lladdr, 0, sizeof(lladdr));
 	lladdr.sll_family = AF_PACKET;
-	lladdr.sll_protocol = htons(ETH_P_NHRP);
+	lladdr.sll_protocol = htons(protocol);
 	lladdr.sll_ifindex = ifindex;
 	lladdr.sll_halen = addrlen;
 	memcpy(lladdr.sll_addr, addr, addrlen);
 
-	status = sendmsg(nhrp_socket_fd, &msg, 0);
-	if (status < 0)
+	fd = os_socket();
+	if (fd < 0)
 		return -1;
 
-	return 0;
+	status = sendmsg(fd, &msg, 0);
+	if (status < 0)
+		return -errno;
+
+	return status;
 }
 
 int os_recvmsg(uint8_t *buf, size_t *len, int *ifindex, uint8_t *addr,
@@ -111,7 +121,7 @@ static int linux_configure_arp(const char *iface, int on)
 {
 	struct ifreq ifr;
 
-	strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+	strlcpy(ifr.ifr_name, iface, IFNAMSIZ);
 	if (ioctl(nhrp_socket_fd, SIOCGIFFLAGS, &ifr))
 		return -1;
 
@@ -154,7 +164,6 @@ int os_configure_dmvpn(unsigned int ifindex, const char *ifname, int af)
 		break;
 	}
 	ret |= linux_configure_arp(ifname, 1);
-	ret |= netlink_configure_arp(ifindex, af);
 
 	return ret;
 }

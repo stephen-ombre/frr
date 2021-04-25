@@ -58,6 +58,7 @@ enum bgp_show_type {
 	bgp_show_type_damp_neighbor,
 	bgp_show_type_detail,
 	bgp_show_type_rpki,
+	bgp_show_type_prefix_version,
 };
 
 enum bgp_show_adj_route_type {
@@ -72,8 +73,11 @@ enum bgp_show_adj_route_type {
 	"Status codes:  s suppressed, d damped, "                              \
 	"h history, * valid, > best, = multipath,\n"                           \
 	"               i internal, r RIB-failure, S Stale, R Removed\n"
-#define BGP_SHOW_OCODE_HEADER "Origin codes:  i - IGP, e - EGP, ? - incomplete\n\n"
+#define BGP_SHOW_OCODE_HEADER                                                  \
+	"Origin codes:  i - IGP, e - EGP, ? - incomplete\n"
 #define BGP_SHOW_NCODE_HEADER "Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self\n"
+#define BGP_SHOW_RPKI_HEADER                                                   \
+	"RPKI validation codes: V valid, I invalid, N Not found\n\n"
 #define BGP_SHOW_HEADER "   Network          Next Hop            Metric LocPrf Weight Path\n"
 #define BGP_SHOW_HEADER_WIDE "   Network                                      Next Hop                                  Metric LocPrf Weight Path\n"
 
@@ -585,6 +589,7 @@ DECLARE_HOOK(bgp_process,
 #define BGP_SHOW_OPT_AFI_IP6 (1 << 4)
 #define BGP_SHOW_OPT_ESTABLISHED (1 << 5)
 #define BGP_SHOW_OPT_FAILED (1 << 6)
+#define BGP_SHOW_OPT_DETAIL (1 << 7)
 
 /* Prototypes. */
 extern void bgp_rib_remove(struct bgp_dest *dest, struct bgp_path_info *pi,
@@ -714,9 +719,10 @@ extern void route_vty_out(struct vty *vty, const struct prefix *p,
 extern void route_vty_out_tag(struct vty *vty, const struct prefix *p,
 			      struct bgp_path_info *path, int display,
 			      safi_t safi, json_object *json);
-extern void route_vty_out_tmp(struct vty *vty, const struct prefix *p,
-			      struct attr *attr, safi_t safi, bool use_json,
-			      json_object *json_ar, bool wide);
+extern void route_vty_out_tmp(struct vty *vty, struct bgp_dest *dest,
+			      const struct prefix *p, struct attr *attr,
+			      safi_t safi, bool use_json, json_object *json_ar,
+			      bool wide);
 extern void route_vty_out_overlay(struct vty *vty, const struct prefix *p,
 				  struct bgp_path_info *path, int display,
 				  json_object *json);

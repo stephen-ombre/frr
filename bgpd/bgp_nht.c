@@ -60,13 +60,15 @@ static int bgp_nht_ifp_initial(struct thread *thread);
 static int bgp_isvalid_nexthop(struct bgp_nexthop_cache *bnc)
 {
 	return (bgp_zebra_num_connects() == 0
-		|| (bnc && CHECK_FLAG(bnc->flags, BGP_NEXTHOP_VALID)));
+		|| (bnc && CHECK_FLAG(bnc->flags, BGP_NEXTHOP_VALID)
+		    && bnc->nexthop_num > 0));
 }
 
 static int bgp_isvalid_labeled_nexthop(struct bgp_nexthop_cache *bnc)
 {
 	return (bgp_zebra_num_connects() == 0
-		|| (bnc && CHECK_FLAG(bnc->flags, BGP_NEXTHOP_LABELED_VALID)));
+		|| (bnc && CHECK_FLAG(bnc->flags, BGP_NEXTHOP_LABELED_VALID)
+		    && bnc->nexthop_num > 0));
 }
 
 static void bgp_unlink_nexthop_check(struct bgp_nexthop_cache *bnc)
@@ -96,6 +98,31 @@ void bgp_unlink_nexthop(struct bgp_path_info *path)
 	path_nh_map(path, NULL, false);
 
 	bgp_unlink_nexthop_check(bnc);
+}
+
+void bgp_replace_nexthop_by_peer(struct peer *from, struct peer *to)
+{
+	struct prefix pp;
+	struct prefix pt;
+	struct bgp_nexthop_cache *bncp, *bnct;
+	afi_t afi;
+
+	if (!sockunion2hostprefix(&from->su, &pp))
+		return;
+
+	afi = family2afi(pp.family);
+	bncp = bnc_find(&from->bgp->nexthop_cache_table[afi], &pp, 0);
+
+	if (!sockunion2hostprefix(&to->su, &pt))
+		return;
+
+	bnct = bnc_find(&to->bgp->nexthop_cache_table[afi], &pt, 0);
+
+	if (bnct != bncp)
+		return;
+
+	if (bnct)
+		bnct->nht_info = to;
 }
 
 void bgp_unlink_nexthop_by_peer(struct peer *peer)
@@ -273,8 +300,16 @@ int bgp_find_or_add_nexthop(struct bgp *bgp_route, struct bgp *bgp_nexthop,
 			(bgp_path_info_extra_get(pi))->igpmetric = bnc->metric;
 		else if (pi->extra)
 			pi->extra->igpmetric = 0;
-	} else if (peer)
-		bnc->nht_info = (void *)peer; /* NHT peer reference */
+	} else if (peer) {
+		/*
+		 * Let's not accidently save the peer data for a peer
+		 * we are going to throw away in a second or so.
+		 * When we come back around we'll fix up this
+		 * data properly in replace_nexthop_by_peer
+		 */
+		if (CHECK_FLAG(peer->flags, PEER_FLAG_CONFIG_NODE))
+			bnc->nht_info = (void *)peer; /* NHT peer reference */
+	}
 
 	/*
 	 * We are cheating here.  Views have no associated underlying
@@ -444,6 +479,7 @@ static void bgp_process_nexthop_update(struct bgp_nexthop_cache *bnc,
 		bnc->nexthop = nhlist_head;
 	} else {
 		bnc->flags &= ~BGP_NEXTHOP_VALID;
+		bnc->flags &= ~BGP_NEXTHOP_LABELED_VALID;
 		bnc->nexthop_num = nhr->nexthop_num;
 
 		/* notify bgp fsm if nbr ip goes from valid->invalid */

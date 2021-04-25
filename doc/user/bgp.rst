@@ -2849,6 +2849,7 @@ When default route is present in R2'2 BGP table, 10.139.224.0/20 and 192.0.2.1/3
                   i internal, r RIB-failure, S Stale, R Removed
    Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self
    Origin codes:  i - IGP, e - EGP, ? - incomplete
+   RPKI validation codes: V valid, I invalid, N Not found
 
       Network          Next Hop            Metric LocPrf Weight Path
    *> 0.0.0.0/0        10.10.10.1               0             0 1 i
@@ -2878,6 +2879,7 @@ When default route is present in R2'2 BGP table, 10.139.224.0/20 and 192.0.2.1/3
                i internal, r RIB-failure, S Stale, R Removed
    Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self
    Origin codes:  i - IGP, e - EGP, ? - incomplete
+   RPKI validation codes: V valid, I invalid, N Not found
 
       Network          Next Hop            Metric LocPrf Weight Path
    *> 0.0.0.0/0        0.0.0.0                                0 1 i
@@ -2896,6 +2898,7 @@ When default route is not present in R2'2 BGP table, 10.139.224.0/20 and 192.0.2
                   i internal, r RIB-failure, S Stale, R Removed
    Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self
    Origin codes:  i - IGP, e - EGP, ? - incomplete
+   RPKI validation codes: V valid, I invalid, N Not found
 
       Network          Next Hop            Metric LocPrf Weight Path
    *> 10.139.224.0/20  10.10.10.1               0             0 1 ?
@@ -2925,6 +2928,7 @@ When default route is not present in R2'2 BGP table, 10.139.224.0/20 and 192.0.2
                   i internal, r RIB-failure, S Stale, R Removed
    Nexthop codes: @NNN nexthop's vrf id, < announce-nh-self
    Origin codes:  i - IGP, e - EGP, ? - incomplete
+   RPKI validation codes: V valid, I invalid, N Not found
 
       Network          Next Hop            Metric LocPrf Weight Path
    *> 10.139.224.0/20  0.0.0.0                                0 1 ?
@@ -3115,11 +3119,11 @@ daemon project, while :clicmd:`show bgp` command is the new format. The choice
 has been done to keep old format with IPv4 routing table, while new format
 displays IPv6 routing table.
 
-.. clicmd:: show ip bgp [all] [wide|json]
+.. clicmd:: show ip bgp [all] [wide|json [detail]]
 
 .. clicmd:: show ip bgp A.B.C.D [json]
 
-.. clicmd:: show bgp [all] [wide|json]
+.. clicmd:: show bgp [all] [wide|json [detail]]
 
 .. clicmd:: show bgp X:X::X:X [json]
 
@@ -3147,6 +3151,9 @@ displays IPv6 routing table.
    show ip bgp all commands display routes for all AFIs and SAFIs.
 
    If ``json`` option is specified, output is displayed in JSON format.
+
+   If ``detail`` option is specified after ``json``, more verbose JSON output
+   will be displayed.
 
 Some other commands provide additional options for filtering the output.
 
@@ -3233,6 +3240,26 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
 .. clicmd:: show bgp [afi] [safi] [all] dampening flap-statistics [wide|json]
 
    Display flap statistics of routes of the selected afi and safi selected.
+
+.. clicmd:: show bgp [afi] [safi] [all] version (1-4294967295) [wide|json]
+
+   Display prefixes with matching version numbers. The version number and
+   above having prefixes will be listed here.
+
+   It helps to identify which prefixes were installed at some point.
+
+   Here is an example of how to check what prefixes were installed starting
+   with an arbitrary version::
+
+   .. code-block:: frr
+
+      ~# vtysh -c 'show bgp ipv4 unicast json' | jq '.tableVersion'
+      9
+      ~# vtysh -c 'show ip bgp version 9 json' | jq -r '.routes | keys[]'
+      192.168.3.0/24
+      ~# vtysh -c 'show ip bgp version 8 json' | jq -r '.routes | keys[]'
+      192.168.2.0/24
+      192.168.3.0/24
 
 .. clicmd:: show bgp [afi] [safi] statistics
 

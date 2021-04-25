@@ -237,7 +237,7 @@ struct interface *bfd_get_peer_info(struct stream *s, struct prefix *dp,
 	memset(sp, 0, sizeof(*sp));
 
 	/* Get interface index. */
-	ifindex = stream_getl(s);
+	STREAM_GETL(s, ifindex);
 
 	/* Lookup index. */
 	if (ifindex != 0) {
@@ -252,25 +252,28 @@ struct interface *bfd_get_peer_info(struct stream *s, struct prefix *dp,
 	}
 
 	/* Fetch destination address. */
-	dp->family = stream_getc(s);
+	STREAM_GETC(s, dp->family);
 
 	plen = prefix_blen(dp);
-	stream_get(&dp->u.prefix, s, plen);
-	dp->prefixlen = stream_getc(s);
+	STREAM_GET(&dp->u.prefix, s, plen);
+	STREAM_GETC(s, dp->prefixlen);
 
 	/* Get BFD status. */
-	*status = stream_getl(s);
+	STREAM_GETL(s, (*status));
 
-	sp->family = stream_getc(s);
+	STREAM_GETC(s, sp->family);
 
 	plen = prefix_blen(sp);
-	stream_get(&sp->u.prefix, s, plen);
-	sp->prefixlen = stream_getc(s);
+	STREAM_GET(&sp->u.prefix, s, plen);
+	STREAM_GETC(s, sp->prefixlen);
 
-	local_remote_cbit = stream_getc(s);
+	STREAM_GETC(s, local_remote_cbit);
 	if (remote_cbit)
 		*remote_cbit = local_remote_cbit;
 	return ifp;
+
+stream_failure:
+	return NULL;
 }
 
 /*
@@ -616,8 +619,6 @@ struct bfd_session_params {
 
 	/** BFD session installation state. */
 	bool installed;
-	/** BFD session enabled. */
-	bool enabled;
 
 	/** Global BFD paramaters list. */
 	TAILQ_ENTRY(bfd_session_params) entry;
@@ -745,6 +746,21 @@ static int _bfd_sess_send(struct thread *t)
 			bsp->installed = false;
 		else if (bsp->args.command == ZEBRA_BFD_DEST_REGISTER)
 			bsp->installed = true;
+	} else {
+		struct ipaddr src, dst;
+
+		src.ipa_type = bsp->args.family;
+		src.ipaddr_v6 = bsp->args.src;
+		dst.ipa_type = bsp->args.family;
+		dst.ipaddr_v6 = bsp->args.dst;
+
+		zlog_err(
+			"%s: BFD session %pIA -> %pIA interface %s VRF %s(%u) was not %s",
+			__func__, &src, &dst,
+			bsp->args.ifnamelen ? bsp->args.ifname : "*",
+			vrf_id_to_name(bsp->args.vrf_id), bsp->args.vrf_id,
+			bsp->lastev == BSE_INSTALL ? "installed"
+						   : "uninstalled");
 	}
 
 	return 0;
@@ -779,18 +795,33 @@ void bfd_sess_free(struct bfd_session_params **bsp)
 	XFREE(MTYPE_BFD_INFO, (*bsp));
 }
 
-void bfd_sess_enable(struct bfd_session_params *bsp, bool enable)
+static bool bfd_sess_address_changed(const struct bfd_session_params *bsp,
+				     uint32_t family,
+				     const struct in6_addr *src,
+				     const struct in6_addr *dst)
 {
-	/* Remove the session when disabling. */
-	if (!enable)
-		_bfd_sess_remove(bsp);
+	size_t addrlen;
 
-	bsp->enabled = enable;
+	if (bsp->args.family != family)
+		return true;
+
+	addrlen = (family == AF_INET) ? sizeof(struct in_addr)
+				      : sizeof(struct in6_addr);
+	if ((src == NULL && memcmp(&bsp->args.src, &i6a_zero, addrlen))
+	    || (src && memcmp(src, &bsp->args.src, addrlen))
+	    || memcmp(dst, &bsp->args.dst, addrlen))
+		return true;
+
+	return false;
 }
 
 void bfd_sess_set_ipv4_addrs(struct bfd_session_params *bsp,
 			     struct in_addr *src, struct in_addr *dst)
 {
+	if (!bfd_sess_address_changed(bsp, AF_INET, (struct in6_addr *)src,
+				      (struct in6_addr *)dst))
+		return;
+
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
 
@@ -811,6 +842,10 @@ void bfd_sess_set_ipv4_addrs(struct bfd_session_params *bsp,
 void bfd_sess_set_ipv6_addrs(struct bfd_session_params *bsp,
 			     struct in6_addr *src, struct in6_addr *dst)
 {
+	if (!bfd_sess_address_changed(bsp, AF_INET, (struct in6_addr *)src,
+				      (struct in6_addr *)dst))
+		return;
+
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
 
@@ -828,6 +863,10 @@ void bfd_sess_set_ipv6_addrs(struct bfd_session_params *bsp,
 
 void bfd_sess_set_interface(struct bfd_session_params *bsp, const char *ifname)
 {
+	if ((ifname == NULL && bsp->args.ifnamelen == 0)
+	    || (ifname && strcmp(bsp->args.ifname, ifname) == 0))
+		return;
+
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
 
@@ -861,6 +900,9 @@ void bfd_sess_set_profile(struct bfd_session_params *bsp, const char *profile)
 
 void bfd_sess_set_vrf(struct bfd_session_params *bsp, vrf_id_t vrf_id)
 {
+	if (bsp->args.vrf_id == vrf_id)
+		return;
+
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
 
@@ -870,6 +912,9 @@ void bfd_sess_set_vrf(struct bfd_session_params *bsp, vrf_id_t vrf_id)
 void bfd_sess_set_mininum_ttl(struct bfd_session_params *bsp, uint8_t min_ttl)
 {
 	assert(min_ttl != 0);
+
+	if (bsp->args.ttl == ((BFD_SINGLE_HOP_TTL + 1) - min_ttl))
+		return;
 
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
@@ -882,6 +927,9 @@ void bfd_sess_set_mininum_ttl(struct bfd_session_params *bsp, uint8_t min_ttl)
 
 void bfd_sess_set_hop_count(struct bfd_session_params *bsp, uint8_t min_ttl)
 {
+	if (bsp->args.ttl == min_ttl)
+		return;
+
 	/* If already installed, remove the old setting. */
 	_bfd_sess_remove(bsp);
 
@@ -906,10 +954,6 @@ void bfd_sess_set_timers(struct bfd_session_params *bsp,
 
 void bfd_sess_install(struct bfd_session_params *bsp)
 {
-	/* Don't attempt to install/update when disabled. */
-	if (!bsp->enabled)
-		return;
-
 	bsp->lastev = BSE_INSTALL;
 	thread_add_event(bsglobal.tm, _bfd_sess_send, bsp, 0, &bsp->installev);
 }
@@ -1057,8 +1101,8 @@ static int zclient_bfd_session_reply(ZAPI_CALLBACK_ARGS)
 
 	/* Replay all activated peers. */
 	TAILQ_FOREACH (bsp, &bsglobal.bsplist, entry) {
-		/* Skip disabled sessions. */
-		if (!bsp->enabled)
+		/* Skip not installed sessions. */
+		if (!bsp->installed)
 			continue;
 
 		/* We are reconnecting, so we must send installation. */
@@ -1077,7 +1121,7 @@ static int zclient_bfd_session_reply(ZAPI_CALLBACK_ARGS)
 
 static int zclient_bfd_session_update(ZAPI_CALLBACK_ARGS)
 {
-	struct bfd_session_params *bsp;
+	struct bfd_session_params *bsp, *bspn;
 	size_t sessions_updated = 0;
 	struct interface *ifp;
 	int remote_cbit = false;
@@ -1094,6 +1138,13 @@ static int zclient_bfd_session_update(ZAPI_CALLBACK_ARGS)
 
 	ifp = bfd_get_peer_info(zclient->ibuf, &dp, &sp, &state, &remote_cbit,
 				vrf_id);
+	/*
+	 * When interface lookup fails or an invalid stream is read, we must
+	 * not proceed otherwise it will trigger an assertion while checking
+	 * family type below.
+	 */
+	if (dp.family == 0 || sp.family == 0)
+		return 0;
 
 	if (bsglobal.debugging) {
 		ifstr[0] = 0;
@@ -1127,9 +1178,9 @@ static int zclient_bfd_session_update(ZAPI_CALLBACK_ARGS)
 	now = monotime(NULL);
 
 	/* Notify all matching sessions about update. */
-	TAILQ_FOREACH (bsp, &bsglobal.bsplist, entry) {
-		/* Skip disabled or not installed entries. */
-		if (!bsp->enabled || !bsp->installed)
+	TAILQ_FOREACH_SAFE (bsp, &bsglobal.bsplist, entry, bspn) {
+		/* Skip not installed entries. */
+		if (!bsp->installed)
 			continue;
 		/* Skip different VRFs. */
 		if (bsp->args.vrf_id != vrf_id)

@@ -814,7 +814,7 @@ DEFUN (no_ospf6_interface_area,
 	/* Verify Area */
 	if (oi->area == NULL) {
 		vty_out(vty, "%s not attached to area %s\n",
-			oi->interface->name, oi->area->name);
+			oi->interface->name, argv[idx_ipv4]->arg);
 		return CMD_SUCCESS;
 	}
 
@@ -890,7 +890,6 @@ static void ospf6_restart_spf(struct ospf6 *ospf6)
 {
 	ospf6_route_remove_all(ospf6->route_table);
 	ospf6_route_remove_all(ospf6->brouter_table);
-	ospf6_route_remove_all(ospf6->external_table);
 
 	/* Trigger SPF */
 	ospf6_spf_schedule(ospf6, OSPF6_SPF_FLAGS_CONFIG_CHANGE);

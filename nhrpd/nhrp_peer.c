@@ -192,10 +192,10 @@ static void *nhrp_peer_create(void *data)
 	return p;
 }
 
-static void do_peer_hash_free(struct hash_bucket *hb,
-			      void *arg __attribute__((__unused__)))
+static void do_peer_hash_free(void *hb_data)
 {
-	struct nhrp_peer *p = hb->data;
+	struct nhrp_peer *p = (struct nhrp_peer *)hb_data;
+
 	nhrp_peer_check_delete(p);
 }
 
@@ -207,9 +207,10 @@ void nhrp_peer_interface_del(struct interface *ifp)
 	       nifp->peer_hash ? nifp->peer_hash->count : 0);
 
 	if (nifp->peer_hash) {
-		hash_iterate(nifp->peer_hash, do_peer_hash_free, NULL);
+		hash_clean(nifp->peer_hash, do_peer_hash_free);
 		assert(nifp->peer_hash->count == 0);
 		hash_free(nifp->peer_hash);
+		nifp->peer_hash = NULL;
 	}
 }
 
@@ -375,7 +376,7 @@ void nhrp_peer_send(struct nhrp_peer *p, struct zbuf *zb)
 
 	os_sendmsg(zb->head, zbuf_used(zb), p->ifp->ifindex,
 		   sockunion_get_addr(&p->vc->remote.nbma),
-		   sockunion_get_addrlen(&p->vc->remote.nbma));
+		   sockunion_get_addrlen(&p->vc->remote.nbma), ETH_P_NHRP);
 	zbuf_reset(zb);
 }
 

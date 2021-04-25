@@ -280,7 +280,7 @@ To start OSPF process you have to specify the OSPF router.
 
    This command enables or disables sending ARP requests to update neighbor
    table entries. It speeds up convergence for /32 networks on a P2P
-   connection. 
+   connection.
 
    This feature is enabled by default.
 
@@ -299,15 +299,11 @@ To start OSPF process you have to specify the OSPF router.
    command can be used when the neighbor state get stuck at some state and
    this can be used to recover it from that state.
 
-.. index:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
-.. clicmd:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
+.. clicmd:: maximum-paths (1-64)
 
-.. index:: maximum-paths " CMD_RANGE_STR(1, MULTIPATH_NUM)
-.. clicmd:: no maximum-paths
-
-   CLI to control maximum number of equal cost paths to reach a specific
-   destination.(ECMP)
-   Reset CLI, resets the maximum supported multi path to the default value.
+   Use this command to control the maximum number of equal cost paths to reach
+   a specific destination. The upper limit may differ if you change the value
+   of MULTIPATH_NUM during compilation. The default is MULTIPATH_NUM (64).
 
 .. _ospf-area:
 
@@ -587,7 +583,7 @@ Interfaces
    :clicmd:`ip ospf dead-interval minimal hello-multiplier (2-20)` is also
    specified for the interface.
 
-.. clicmd:: ip ospf network (broadcast|non-broadcast|point-to-multipoint|point-to-point)
+.. clicmd:: ip ospf network (broadcast|non-broadcast|point-to-multipoint|point-to-point [dmvpn])
 
    When configuring a point-to-point network on an interface and the interface
    has a /32 address associated with then OSPF will treat the interface
@@ -595,6 +591,9 @@ Interfaces
    net.ipv4.conf.<interface name>.rp_filter value to 0.  In order for
    the ospf multicast packets to be delivered by the kernel.
 
+   When used in a DMVPN network at a spoke, this OSPF will be configured in
+   point-to-point, but the HUB will be a point-to-multipoint. To make this
+   topology work, specify the optional 'dmvpn' parameter at the spoke.
 
    Set explicitly network type for specified interface.
 
@@ -1089,8 +1088,9 @@ Debugging OSPF
 
    Debug commnd to enable/disable external route summarisation specific debugs.
 
-OSPF Configuration Examples
-===========================
+
+Sample Configuration
+====================
 
 A simple example, with MD5 authentication enabled:
 

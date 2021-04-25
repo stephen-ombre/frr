@@ -279,6 +279,7 @@ static int _acl_is_dup(const struct lyd_node *dnode, void *arg)
 	}
 
 	ada->ada_found = true;
+	ada->ada_seq = yang_dnode_get_uint32(dnode, "sequence");
 
 	return YANG_ITER_STOP;
 }
@@ -416,6 +417,7 @@ static int _plist_is_dup(const struct lyd_node *dnode, void *arg)
 	}
 
 	pda->pda_found = true;
+	pda->pda_seq = yang_dnode_get_uint32(dnode, "sequence");
 
 	return YANG_ITER_STOP;
 }
@@ -506,17 +508,12 @@ static int lib_access_list_create(struct nb_cb_create_args *args)
 
 static int lib_access_list_destroy(struct nb_cb_destroy_args *args)
 {
-	struct access_master *am;
 	struct access_list *acl;
 
 	if (args->event != NB_EV_APPLY)
 		return NB_OK;
 
 	acl = nb_running_unset_entry(args->dnode);
-	am = acl->master;
-	if (am->delete_hook)
-		am->delete_hook(acl);
-
 	access_list_delete(acl);
 
 	return NB_OK;
