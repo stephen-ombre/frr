@@ -77,7 +77,7 @@ writing, *isisd* does not support multiple ISIS processes.
    - transition
      Send and accept both styles of TLVs during transition
    - wide
-     Use new style of TLVs to carry wider metric
+     Use new style of TLVs to carry wider metric. FRR uses this as a default value
 
 .. clicmd:: set-overload-bit
 
@@ -172,7 +172,7 @@ ISIS interface
 
 .. _ip-router-isis-word:
 
-.. clicmd:: <ip|ipv6> router isis WORD [vrf NAME]
+.. clicmd:: <ip|ipv6> router isis WORD
 
    Activate ISIS adjacency on this interface. Note that the name of ISIS
    instance must be the same as the one used to configure the ISIS process (see
@@ -261,10 +261,11 @@ ISIS interface
 
    Limit Remote LFA PQ node selection within the specified metric.
 
-.. clicmd:: isis fast-reroute ti-lfa [level-1|level-2] [node-protection]
+.. clicmd:: isis fast-reroute ti-lfa [level-1|level-2] [node-protection [link-fallback]]
 
    Enable per-prefix TI-LFA fast reroute link or node protection.
-
+   When node protection is used, option link-fallback enables the computation and use of
+   link-protecting LFAs for destinations unprotected by node protection.
 
 .. _showing-isis-information:
 

@@ -25,6 +25,8 @@
 #include <unistd.h>
 #include <sys/uio.h>
 
+#include <assert.h>
+
 #include "atomlist.h"
 #include "frrcu.h"
 #include "memory.h"
@@ -248,6 +250,9 @@ extern void zlog_startup_end(void);
 extern void zlog_tls_buffer_init(void);
 extern void zlog_tls_buffer_flush(void);
 extern void zlog_tls_buffer_fini(void);
+
+/* Enable or disable 'immediate' output - default is to buffer messages. */
+extern void zlog_set_immediate(bool set_p);
 
 #ifdef __cplusplus
 }

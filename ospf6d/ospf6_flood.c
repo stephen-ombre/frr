@@ -381,7 +381,8 @@ void ospf6_flood_interface(struct ospf6_neighbor *from, struct ospf6_lsa *lsa,
 		} else {
 			/* (d) add retrans-list, schedule retransmission */
 			if (is_debug)
-				zlog_debug("Add retrans-list of this neighbor");
+				zlog_debug("Add retrans-list of neighbor %s ",
+					   on->name);
 			ospf6_increment_retrans_count(lsa);
 			ospf6_lsdb_add(ospf6_lsa_copy(lsa), on->retrans_list);
 			thread_add_timer(master, ospf6_lsupdate_send_neighbor,
@@ -395,7 +396,8 @@ void ospf6_flood_interface(struct ospf6_neighbor *from, struct ospf6_lsa *lsa,
 	if (retrans_added == 0) {
 		if (is_debug)
 			zlog_debug(
-				"No retransmission scheduled, next interface");
+				"No retransmission scheduled, next interface %s",
+				oi->interface->name);
 		return;
 	}
 
@@ -1016,18 +1018,20 @@ void ospf6_receive_lsa(struct ospf6_neighbor *from,
 					if (is_debug)
 						zlog_debug(
 							"%s: Current copy of LSA %s is MAXAGE, but new has recent age, flooding/installing.",
-							old->name, __PRETTY_FUNCTION__);
+							__PRETTY_FUNCTION__, old->name);
 					ospf6_lsa_purge(old);
 					ospf6_flood(from, new);
 					ospf6_install_lsa(new);
-				} else {
-					if (is_debug)
-						zlog_debug(
-							"%s: Current copy of self-originated LSA %s is MAXAGE, but new has recent age, ignoring new.",
-							old->name, __PRETTY_FUNCTION__);
-					ospf6_lsa_delete(new);
+					return;
 				}
-				return;
+				/* For self-originated LSA, only trust
+				 * ourselves. Fall through and send
+				 * LS Update with our current copy.
+				 */
+				if (is_debug)
+					zlog_debug(
+						"%s: Current copy of self-originated LSA %s is MAXAGE, but new has recent age, re-sending current one.",
+						__PRETTY_FUNCTION__, old->name);
 			}
 
 			/* XXX, MinLSArrival check !? RFC 2328 13 (8) */

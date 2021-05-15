@@ -16,6 +16,8 @@
  * with this program; see the file COPYING; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  */
+#include <zebra.h>
+
 #include "northbound.h"
 #include "libfrr.h"
 #include "log.h"
@@ -295,7 +297,7 @@ static int static_nexthop_mpls_label_modify(struct nb_cb_modify_args *args)
 	uint8_t index;
 
 	nh = nb_running_get_entry(args->dnode, NULL, true);
-	pos = yang_get_list_pos(args->dnode->parent);
+	pos = yang_get_list_pos(lyd_parent(args->dnode));
 	if (!pos) {
 		flog_warn(EC_LIB_NB_CB_CONFIG_APPLY,
 			  "libyang returns invalid label position");
@@ -455,7 +457,7 @@ int routing_control_plane_protocols_control_plane_protocol_staticd_route_list_pa
 	uint32_t count;
 
 	mls_dnode = yang_dnode_get(args->dnode, "./mpls-label-stack");
-	count = yang_get_list_elements_count(yang_dnode_get_child(mls_dnode));
+	count = yang_get_list_elements_count(lyd_child(mls_dnode));
 
 	if (count > MPLS_MAX_LABELS) {
 		snprintf(args->errmsg, args->errmsg_len,
@@ -685,22 +687,6 @@ int routing_control_plane_protocols_control_plane_protocol_staticd_route_list_pa
 	struct nb_cb_modify_args *args)
 {
 	return static_nexthop_bh_type_modify(args);
-}
-
-int routing_control_plane_protocols_control_plane_protocol_staticd_route_list_path_list_frr_nexthops_nexthop_bh_type_destroy(
-	struct nb_cb_destroy_args *args)
-{
-	/* blackhole type has a boolean type with default value,
-	 * so no need to do any operations in destroy callback
-	 */
-	switch (args->event) {
-	case NB_EV_VALIDATE:
-	case NB_EV_PREPARE:
-	case NB_EV_ABORT:
-	case NB_EV_APPLY:
-		break;
-	}
-	return NB_OK;
 }
 
 /*
@@ -1065,23 +1051,6 @@ int routing_control_plane_protocols_control_plane_protocol_staticd_route_list_sr
 	struct nb_cb_modify_args *args)
 {
 	return static_nexthop_bh_type_modify(args);
-}
-
-int routing_control_plane_protocols_control_plane_protocol_staticd_route_list_src_list_path_list_frr_nexthops_nexthop_bh_type_destroy(
-	struct nb_cb_destroy_args *args)
-{
-	/* blackhole type has a boolean type with default value,
-	 * so no need to do any operations in destroy callback
-	 */
-	switch (args->event) {
-	case NB_EV_VALIDATE:
-	case NB_EV_PREPARE:
-	case NB_EV_ABORT:
-	case NB_EV_APPLY:
-		break;
-	}
-
-	return NB_OK;
 }
 
 /*

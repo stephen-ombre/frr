@@ -459,12 +459,22 @@ AX_PTHREAD([
   AC_MSG_FAILURE([This FRR version needs pthreads])
 ])
 
+orig_cflags="$CFLAGS"
+CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
+
 AC_SEARCH_LIBS([pthread_condattr_setclock], [],
 		[frr_cv_pthread_condattr_setclock=yes],
 		[frr_cv_pthread_condattr_setclock=no])
 if test "$frr_cv_pthread_condattr_setclock" = "yes"; then
   AC_DEFINE([HAVE_PTHREAD_CONDATTR_SETCLOCK], [1], [Have pthread.h pthread_condattr_setclock])
 fi
+
+AC_CHECK_HEADERS([pthread_np.h],,, [
+#include <pthread.h>
+])
+AC_CHECK_FUNCS([pthread_setname_np pthread_set_name_np pthread_getthreadid_np])
+
+CFLAGS="$orig_cflags"
 
 dnl --------------
 dnl Check programs
@@ -1040,11 +1050,6 @@ int main(int argc, char **argv) {
     ])
   ])
 ])
-
-AC_CHECK_HEADERS([pthread_np.h],,, [
-#include <pthread.h>
-])
-AC_CHECK_FUNCS([pthread_setname_np pthread_set_name_np pthread_getthreadid_np])
 
 needsync=true
 
@@ -1861,8 +1866,8 @@ AC_SUBST([SNMP_CFLAGS])
 dnl ---------------
 dnl libyang
 dnl ---------------
-PKG_CHECK_MODULES([LIBYANG], [libyang >= 1.0.184], , [
-  AC_MSG_ERROR([libyang (>= 1.0.184) was not found on your system.])
+PKG_CHECK_MODULES([LIBYANG], [libyang >= 2.0.0], , [
+  AC_MSG_ERROR([libyang (>= 2.0.0) was not found on your system.])
 ])
 ac_cflags_save="$CFLAGS"
 CFLAGS="$CFLAGS $LIBYANG_CFLAGS"

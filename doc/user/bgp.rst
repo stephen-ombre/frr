@@ -2079,6 +2079,38 @@ is called as named community lists.
    This command defines a new expanded community list. The argument to
    (100-199) defines the list identifier.
 
+.. _bgp-community-alias:
+
+Community alias
+^^^^^^^^^^^^^^^
+
+BGP community aliases are useful to quickly identify what communities are set
+for a specific prefix in a human-readable format. Especially handy for a huge
+amount of communities. Accurately defined aliases can help you faster spot
+things on the wire.
+
+.. clicmd:: bgp community alias NAME ALIAS
+
+   This command creates an alias name for a community that will be used
+   later in various CLI outputs in a human-readable format.
+
+   .. code-block:: frr
+
+      ~# vtysh -c 'show run' | grep 'bgp community alias'
+      bgp community alias 65001:14 community-1
+      bgp community alias 65001:123:1 lcommunity-1
+
+      ~# vtysh -c 'show ip bgp 172.16.16.1/32'
+      BGP routing table entry for 172.16.16.1/32, version 21
+      Paths: (2 available, best #2, table default)
+        Advertised to non peer-group peers:
+        65030
+          192.168.0.2 from 192.168.0.2 (172.16.16.1)
+            Origin incomplete, metric 0, valid, external, best (Neighbor IP)
+            Community: 65001:12 65001:13 community-1 65001:65534
+            Large Community: lcommunity-1 65001:123:2
+            Last update: Fri Apr 16 12:51:27 2021
+
 .. _bgp-using-communities-in-route-map:
 
 Using Communities in Route Maps
@@ -2567,6 +2599,24 @@ address-family:
 Ethernet Virtual Network - EVPN
 -------------------------------
 
+Note: When using EVPN features and if you have a large number of hosts, make
+sure to adjust the size of the arp  neighbor cache to avoid neighbor table
+overflow and/or excessive garbage collection. On Linux, the size of the table
+and garbage collection frequency can be controlled via the following
+sysctl configurations:
+
+.. code-block:: shell
+
+   net.ipv4.neigh.default.gc_thresh1
+   net.ipv4.neigh.default.gc_thresh2
+   net.ipv4.neigh.default.gc_thresh3
+
+   net.ipv6.neigh.default.gc_thresh1
+   net.ipv6.neigh.default.gc_thresh2
+   net.ipv6.neigh.default.gc_thresh3
+
+For more information, see ``man 7 arp``.
+
 .. _bgp-evpn-advertise-pip:
 
 EVPN advertise-PIP
@@ -2592,10 +2642,10 @@ other EVPN routes.
 To support this feature there needs to have ability to co-exist a
 (system-MAC, system-IP) pair with a (anycast-MAC, anycast-IP) pair with the
 ability to terminate VxLAN-encapsulated packets received for either pair on
-the same L3VNI (i.e associated VLAN). This capability is need per tenant
+the same L3VNI (i.e associated VLAN). This capability is needed per tenant
 VRF instance.
 
-To derive the system-MAC and the anycast MAC, there needs to have a
+To derive the system-MAC and the anycast MAC, there must be a
 separate/additional MAC-VLAN interface corresponding to L3VNI’s SVI.
 The SVI interface’s MAC address can be interpreted as system-MAC
 and MAC-VLAN interface's MAC as anycast MAC.
@@ -2607,7 +2657,7 @@ User has an option to configure the system-IP and/or system-MAC value if the
 auto derived value is not preferred.
 
 Note: By default, advertise-pip feature is enabled and user has an option to
-disable the feature via configuration CLI. Once the feature is disable under
+disable the feature via configuration CLI. Once the feature is disabled under
 bgp vrf instance or MAC-VLAN interface is not configured, all the routes follow
 the same behavior of using same next-hop and RMAC values.
 
@@ -2615,6 +2665,19 @@ the same behavior of using same next-hop and RMAC values.
 
 Enables or disables advertise-pip feature, specifiy system-IP and/or system-MAC
 parameters.
+
+EVPN advertise-svi-ip
+^^^^^^^^^^^^^^^^^^^^^
+Typically, the SVI IP address is reused on VTEPs across multiple racks. However,
+if you have unique SVI IP addresses that you want to be reachable you can use the
+advertise-svi-ip option. This option advertises the SVI IP/MAC address as a type-2
+route and eliminates the need for any flooding over VXLAN to reach the IP from a
+remote VTEP.
+
+.. clicmd:: advertise-svi-ip
+
+Note that you should not enable both the advertise-svi-ip and the advertise-default-gw
+at the same time.
 
 EVPN Multihoming
 ^^^^^^^^^^^^^^^^
@@ -3877,6 +3940,147 @@ Example of how to set up a 6-Bone connection.
    log file bgpd.log
    !
 
+.. _bgp-tcp-mss:
+
+BGP tcp-mss support
+===================
+TCP provides a mechanism for the user to specify the max segment size.
+setsockopt API is used to set the max segment size for TCP session. We
+can configure this as part of BGP neighbor configuration.
+
+This document explains how to avoid ICMP vulnerability issues by limiting
+TCP max segment size when you are using MTU discovery. Using MTU discovery
+on TCP paths is one method of avoiding BGP packet fragmentation.
+
+TCP negotiates a maximum segment size (MSS) value during session connection
+establishment between two peers. The MSS value negotiated is primarily based
+on the maximum transmission unit (MTU) of the interfaces to which the
+communicating peers are directly connected. However, due to variations in
+link MTU on the path taken by the TCP packets, some packets in the network
+that are well within the MSS value might be fragmented when the packet size
+exceeds the link's MTU.
+
+This feature is supported with TCP over IPv4 and TCP over IPv6.
+
+CLI Configuration:
+------------------
+Below configuration can be done in router bgp mode and allows the user to
+configure the tcp-mss value per neighbor. The configuration gets applied
+only after hard reset is performed on that neighbor. If we configure tcp-mss
+on both the neighbors then both neighbors need to be reset.
+
+The configuration takes effect based on below rules, so there is a configured
+tcp-mss and a synced tcp-mss value per TCP session.
+
+By default if the configuration is not done then the TCP max segment size is
+set to the Maximum Transmission unit (MTU) – (IP/IP6 header size + TCP header
+size + ethernet header). For IPv4 its MTU – (20 bytes IP header + 20 bytes TCP
+header + 12 bytes ethernet header) and for IPv6 its MTU – (40 bytes IPv6 header
++ 20 bytes TCP header + 12 bytes ethernet header).
+
+If the config is done then it reduces 12-14 bytes for the ether header and
+uses it after synchronizing in TCP handshake.
+
+.. clicmd:: neighbor <A.B.C.D|X:X::X:X|WORD> tcp-mss (1-65535)
+
+When tcp-mss is configured kernel reduces 12-14 bytes for ethernet header.
+E.g. if tcp-mss is configured as 150 the synced value will be 138.
+
+Note: configured and synced value is different since TCP module will reduce
+12 bytes for ethernet header.
+
+Running config:
+---------------
+
+.. code-block:: frr
+
+   frr# show running-config
+   Building configuration...
+
+   Current configuration:
+   !
+   router bgp 100
+    bgp router-id 192.0.2.1
+    neighbor 198.51.100.2 remote-as 100
+    neighbor 198.51.100.2 tcp-mss 150       => new entry
+    neighbor 2001:DB8::2 remote-as 100
+    neighbor 2001:DB8::2 tcp-mss 400        => new entry
+
+Show command:
+-------------
+
+.. code-block:: frr
+
+   frr# show bgp neighbors 198.51.100.2
+   BGP neighbor is 198.51.100.2, remote AS 100, local AS 100, internal link
+   Hostname: frr
+     BGP version 4, remote router ID 192.0.2.2, local router ID 192.0.2.1
+     BGP state = Established, up for 02:15:28
+     Last read 00:00:28, Last write 00:00:28
+     Hold time is 180, keepalive interval is 60 seconds
+     Configured tcp-mss is 150, synced tcp-mss is 138     => new display
+
+.. code-block:: frr
+
+   frr# show bgp neighbors 2001:DB8::2
+   BGP neighbor is 2001:DB8::2, remote AS 100, local AS 100, internal link
+   Hostname: frr
+     BGP version 4, remote router ID 192.0.2.2, local router ID 192.0.2.1
+     BGP state = Established, up for 02:16:34
+     Last read 00:00:34, Last write 00:00:34
+     Hold time is 180, keepalive interval is 60 seconds
+     Configured tcp-mss is 400, synced tcp-mss is 388      => new display
+
+Show command json output:
+-------------------------
+
+.. code-block:: frr
+
+   frr# show bgp neighbors 2001:DB8::2 json
+   {
+     "2001:DB8::2":{
+       "remoteAs":100,
+       "localAs":100,
+       "nbrInternalLink":true,
+       "hostname":"frr",
+       "bgpVersion":4,
+       "remoteRouterId":"192.0.2.2",
+       "localRouterId":"192.0.2.1",
+       "bgpState":"Established",
+       "bgpTimerUpMsec":8349000,
+       "bgpTimerUpString":"02:19:09",
+       "bgpTimerUpEstablishedEpoch":1613054251,
+       "bgpTimerLastRead":9000,
+       "bgpTimerLastWrite":9000,
+       "bgpInUpdateElapsedTimeMsecs":8347000,
+       "bgpTimerHoldTimeMsecs":180000,
+       "bgpTimerKeepAliveIntervalMsecs":60000,
+       "bgpTcpMssConfigured":400,                                   => new entry
+       "bgpTcpMssSynced":388,                                  => new entry
+
+.. code-block:: frr
+
+   frr# show bgp neighbors 198.51.100.2 json
+   {
+     "198.51.100.2":{
+       "remoteAs":100,
+       "localAs":100,
+       "nbrInternalLink":true,
+       "hostname":"frr",
+       "bgpVersion":4,
+       "remoteRouterId":"192.0.2.2",
+       "localRouterId":"192.0.2.1",
+       "bgpState":"Established",
+       "bgpTimerUpMsec":8370000,
+       "bgpTimerUpString":"02:19:30",
+       "bgpTimerUpEstablishedEpoch":1613054251,
+       "bgpTimerLastRead":30000,
+       "bgpTimerLastWrite":30000,
+       "bgpInUpdateElapsedTimeMsecs":8368000,
+       "bgpTimerHoldTimeMsecs":180000,
+       "bgpTimerKeepAliveIntervalMsecs":60000,
+       "bgpTcpMssConfigured":150,                                  => new entry
+       "bgpTcpMssSynced":138,                                  => new entry
 
 .. include:: routeserver.rst
 

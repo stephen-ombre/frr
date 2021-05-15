@@ -1148,10 +1148,13 @@ static void lfa_calc_pq_spaces(struct isis_spftree *spftree_pc,
 
 			/*
 			 * Compute the reverse SPF in the behalf of the node
-			 * adjacent to the failure.
+			 * adjacent to the failure, if we haven't done that
+			 * before
 			 */
-			adj_node->lfa.spftree_reverse =
-				isis_spf_reverse_run(adj_node->lfa.spftree);
+			if (!adj_node->lfa.spftree_reverse)
+				adj_node->lfa.spftree_reverse =
+					isis_spf_reverse_run(
+						adj_node->lfa.spftree);
 
 			lfa_calc_reach_nodes(adj_node->lfa.spftree_reverse,
 					     spftree_reverse, adj_nodes, false,
@@ -2255,6 +2258,11 @@ static void isis_spf_run_tilfa(struct isis_area *area,
 		spftree_pc_node = isis_tilfa_compute(area, spftree,
 						     spftree_reverse, resource);
 		isis_spftree_del(spftree_pc_node);
+
+		/* don't do link protection unless link-fallback is configured
+		 */
+		if (!circuit->tilfa_link_fallback[spftree->level - 1])
+			return;
 	}
 
 	/* Compute link protecting repair paths. */

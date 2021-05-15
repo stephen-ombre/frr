@@ -51,6 +51,9 @@ struct nhg_hash_entry {
 	afi_t afi;
 	vrf_id_t vrf_id;
 
+	/* Time since last update */
+	time_t uptime;
+
 	/* Source protocol - zebra or another daemon */
 	int type;
 
@@ -146,6 +149,8 @@ enum nhg_type {
 
 /* Is this an NHE owned by zebra and not an upper level protocol? */
 #define ZEBRA_OWNED(NHE) (NHE->type == ZEBRA_ROUTE_NHG)
+
+#define PROTO_OWNED(NHE) (NHE->id >= ZEBRA_NHG_PROTO_LOWER)
 
 /*
  * Backup nexthops: this is a group object itself, so
@@ -269,6 +274,7 @@ extern bool zebra_nhg_hash_id_equal(const void *arg1, const void *arg2);
  * the rib meta queue.
  */
 extern int nhg_ctx_process(struct nhg_ctx *ctx);
+void nhg_ctx_free(struct nhg_ctx **ctx);
 
 /* Find via kernel nh creation */
 extern int zebra_nhg_kernel_find(uint32_t id, struct nexthop *nh,

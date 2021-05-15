@@ -2634,16 +2634,16 @@ static int ripng_vrf_enable(struct vrf *vrf)
 			char oldpath[XPATH_MAXLEN];
 			char newpath[XPATH_MAXLEN];
 
-			ripng_dnode = yang_dnode_get(
+			ripng_dnode = yang_dnode_getf(
 				running_config->dnode,
 				"/frr-ripngd:ripngd/instance[vrf='%s']/vrf",
 				old_vrf_name);
 			if (ripng_dnode) {
-				yang_dnode_get_path(ripng_dnode->parent, oldpath,
-						    sizeof(oldpath));
+				yang_dnode_get_path(lyd_parent(ripng_dnode),
+						    oldpath, sizeof(oldpath));
 				yang_dnode_change_leaf(ripng_dnode, vrf->name);
-				yang_dnode_get_path(ripng_dnode->parent, newpath,
-						    sizeof(newpath));
+				yang_dnode_get_path(lyd_parent(ripng_dnode),
+						    newpath, sizeof(newpath));
 				nb_running_move_tree(oldpath, newpath);
 				running_config->version++;
 			}
@@ -2722,9 +2722,6 @@ void ripng_init(void)
 	prefix_list_init();
 	prefix_list_add_hook(ripng_distribute_update_all);
 	prefix_list_delete_hook(ripng_distribute_update_all);
-
-	/* Distribute list install. */
-	distribute_list_init(RIPNG_NODE);
 
 	/* Route-map for interface. */
 	ripng_route_map_init();

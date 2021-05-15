@@ -376,7 +376,6 @@ static int bgp_accept(struct thread *thread)
 			     accept_sock);
 		return -1;
 	}
-	listener->thread = NULL;
 
 	thread_add_read(bm->master, bgp_accept, listener, accept_sock,
 			&listener->thread);
@@ -443,6 +442,11 @@ static int bgp_accept(struct thread *thread)
 		if (peer1) {
 			/* Dynamic neighbor has been created, let it proceed */
 			peer1->fd = bgp_sock;
+
+			/* Set the user configured MSS to TCP socket */
+			if (CHECK_FLAG(peer1->flags, PEER_FLAG_TCP_MSS))
+				sockopt_tcp_mss_set(bgp_sock, peer1->tcp_mss);
+
 			bgp_fsm_change_status(peer1, Active);
 			BGP_TIMER_OFF(
 				peer1->t_start); /* created in peer_create() */
@@ -714,6 +718,10 @@ int bgp_connect(struct peer *peer)
 
 	set_nonblocking(peer->fd);
 
+	/* Set the user configured MSS to TCP socket */
+	if (CHECK_FLAG(peer->flags, PEER_FLAG_TCP_MSS))
+		sockopt_tcp_mss_set(peer->fd, peer->tcp_mss);
+
 	bgp_socket_set_buffer_size(peer->fd);
 
 	if (bgp_set_socket_ttl(peer, peer->fd) < 0)
@@ -838,7 +846,6 @@ static int bgp_listener(int sock, struct sockaddr *sa, socklen_t salen,
 		listener->bgp = bgp;
 
 	memcpy(&listener->su, sa, salen);
-	listener->thread = NULL;
 	thread_add_read(bm->master, bgp_accept, listener, sock,
 			&listener->thread);
 	listnode_add(bm->listen_sockets, listener);

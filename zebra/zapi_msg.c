@@ -727,8 +727,8 @@ int zsend_nhg_notify(uint16_t type, uint16_t instance, uint32_t session_id,
 	}
 
 	if (IS_ZEBRA_DEBUG_SEND)
-		zlog_debug("%s: type %d, id %d, note %d",
-			   __func__, type, id, note);
+		zlog_debug("%s: type %d, id %d, note %s",
+			   __func__, type, id, zapi_nhg_notify_owner2str(note));
 
 	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
 	stream_reset(s);
@@ -985,8 +985,7 @@ void zsend_nhrp_neighbor_notify(int cmd, struct interface *ifp,
 	union sockunion ip;
 
 	if (IS_ZEBRA_DEBUG_PACKET)
-		zlog_debug("%s: Notifying Neighbor entry (%u)",
-			   __PRETTY_FUNCTION__, cmd);
+		zlog_debug("%s: Notifying Neighbor entry (%u)", __func__, cmd);
 
 	sockunion_family(&ip) = ipaddr_family(ipaddr);
 	afi = family2afi(sockunion_family(&ip));
@@ -1921,27 +1920,35 @@ static void zread_nhg_add(ZAPI_HANDLER_ARGS)
 		return;
 	}
 
-	/*
-	 * Create the nhg
-	 */
-	nhe = zebra_nhg_proto_add(api_nhg.id, api_nhg.proto, client->instance,
-				  client->session_id, nhg, 0);
+	/* Create a temporary nhe */
+	nhe = zebra_nhg_alloc();
+	nhe->id = api_nhg.id;
+	nhe->type = api_nhg.proto;
+	nhe->zapi_instance = client->instance;
+	nhe->zapi_session = client->session_id;
 
-	nexthop_group_delete(&nhg);
-	zebra_nhg_backup_free(&bnhg);
+	/* Take over the list(s) of nexthops */
+	nhe->nhg.nexthop = nhg->nexthop;
+	nhg->nexthop = NULL;
+
+	if (bnhg) {
+		nhe->backup_info = bnhg;
+		bnhg = NULL;
+	}
 
 	/*
 	 * TODO:
 	 * Assume fully resolved for now and install.
-	 *
 	 * Resolution is going to need some more work.
 	 */
 
-	/* If there's a failure, notify sender immediately */
-	if (nhe == NULL)
-		zsend_nhg_notify(api_nhg.proto, client->instance,
-				 client->session_id, api_nhg.id,
-				 ZAPI_NHG_FAIL_INSTALL);
+	/* Enqueue to workqueue for processing */
+	rib_queue_nhe_add(nhe);
+
+	/* Free any local allocations */
+	nexthop_group_delete(&nhg);
+	zebra_nhg_backup_free(&bnhg);
+
 }
 
 static void zread_route_add(ZAPI_HANDLER_ARGS)
@@ -2501,7 +2508,7 @@ static void zread_sr_policy_set(ZAPI_HANDLER_ARGS)
 	if (zapi_sr_policy_decode(s, &zp) < 0) {
 		if (IS_ZEBRA_DEBUG_RECV)
 			zlog_debug("%s: Unable to decode zapi_sr_policy sent",
-				   __PRETTY_FUNCTION__);
+				   __func__);
 		return;
 	}
 	zt = &zp.segment_list;
@@ -2509,7 +2516,7 @@ static void zread_sr_policy_set(ZAPI_HANDLER_ARGS)
 		if (IS_ZEBRA_DEBUG_RECV)
 			zlog_debug(
 				"%s: SR-TE tunnel must contain at least one label",
-				__PRETTY_FUNCTION__);
+				__func__);
 		return;
 	}
 
@@ -2536,7 +2543,7 @@ static void zread_sr_policy_delete(ZAPI_HANDLER_ARGS)
 	if (zapi_sr_policy_decode(s, &zp) < 0) {
 		if (IS_ZEBRA_DEBUG_RECV)
 			zlog_debug("%s: Unable to decode zapi_sr_policy sent",
-				   __PRETTY_FUNCTION__);
+				   __func__);
 		return;
 	}
 
@@ -2546,8 +2553,7 @@ static void zread_sr_policy_delete(ZAPI_HANDLER_ARGS)
 	policy = zebra_sr_policy_find(zp.color, &zp.endpoint);
 	if (!policy) {
 		if (IS_ZEBRA_DEBUG_RECV)
-			zlog_debug("%s: Unable to find SR-TE policy",
-				   __PRETTY_FUNCTION__);
+			zlog_debug("%s: Unable to find SR-TE policy", __func__);
 		return;
 	}
 
@@ -3232,6 +3238,61 @@ stream_failure:
 	return;
 }
 
+static inline void zebra_gre_get(ZAPI_HANDLER_ARGS)
+{
+	struct stream *s;
+	ifindex_t idx;
+	struct interface *ifp;
+	struct zebra_if *zebra_if = NULL;
+	struct zebra_l2info_gre *gre_info;
+	struct interface *ifp_link = NULL;
+	vrf_id_t vrf_id_link = VRF_UNKNOWN;
+	vrf_id_t vrf_id = zvrf->vrf->vrf_id;
+
+	s = msg;
+	STREAM_GETL(s, idx);
+	ifp  = if_lookup_by_index(idx, vrf_id);
+
+	if (ifp)
+		zebra_if = ifp->info;
+
+	s = stream_new(ZEBRA_MAX_PACKET_SIZ);
+
+	zclient_create_header(s, ZEBRA_GRE_UPDATE, vrf_id);
+
+	if (ifp  && IS_ZEBRA_IF_GRE(ifp) && zebra_if) {
+		gre_info = &zebra_if->l2info.gre;
+
+		stream_putl(s, idx);
+		stream_putl(s, gre_info->ikey);
+		stream_putl(s, gre_info->ikey);
+		stream_putl(s, gre_info->ifindex_link);
+
+		ifp_link = if_lookup_by_index_per_ns(
+					zebra_ns_lookup(gre_info->link_nsid),
+					gre_info->ifindex_link);
+		if (ifp_link)
+			vrf_id_link = ifp_link->vrf_id;
+		stream_putl(s, vrf_id_link);
+		stream_putl(s, gre_info->vtep_ip.s_addr);
+		stream_putl(s, gre_info->vtep_ip_remote.s_addr);
+	} else {
+		stream_putl(s, idx);
+		stream_putl(s, 0);
+		stream_putl(s, 0);
+		stream_putl(s, IFINDEX_INTERNAL);
+		stream_putl(s, VRF_UNKNOWN);
+		stream_putl(s, 0);
+	}
+	/* Write packet size. */
+	stream_putw_at(s, 0, stream_get_endp(s));
+	zserv_send_message(client, s);
+
+	return;
+ stream_failure:
+	return;
+}
+
 static inline void zebra_configure_arp(ZAPI_HANDLER_ARGS)
 {
 	struct stream *s;
@@ -3365,6 +3426,57 @@ stream_failure:
 	return;
 }
 
+static inline void zebra_gre_source_set(ZAPI_HANDLER_ARGS)
+{
+	struct stream *s;
+	ifindex_t idx, link_idx;
+	vrf_id_t link_vrf_id;
+	struct interface *ifp;
+	struct interface *ifp_link;
+	vrf_id_t vrf_id = zvrf->vrf->vrf_id;
+	struct zebra_if *zif, *gre_zif;
+	struct zebra_l2info_gre *gre_info;
+	unsigned int mtu;
+
+	s = msg;
+	STREAM_GETL(s, idx);
+	ifp  = if_lookup_by_index(idx, vrf_id);
+	STREAM_GETL(s, link_idx);
+	STREAM_GETL(s, link_vrf_id);
+	STREAM_GETL(s, mtu);
+
+	ifp_link  = if_lookup_by_index(link_idx, link_vrf_id);
+	if (!ifp_link || !ifp) {
+		zlog_warn("GRE (index %u, VRF %u) or GRE link interface (index %u, VRF %u) not found, when setting GRE params",
+			  idx, vrf_id, link_idx, link_vrf_id);
+		return;
+	}
+
+	if (!IS_ZEBRA_IF_GRE(ifp))
+		return;
+
+	gre_zif = (struct zebra_if *)ifp->info;
+	zif = (struct zebra_if *)ifp_link->info;
+	if (!zif || !gre_zif)
+		return;
+
+	gre_info = &zif->l2info.gre;
+	if (!gre_info)
+		return;
+
+	if (!mtu)
+		mtu = ifp->mtu;
+
+	/* if gre link already set or mtu did not change, do not set it */
+	if (gre_zif->link && gre_zif->link == ifp_link && mtu == ifp->mtu)
+		return;
+
+	dplane_gre_set(ifp, ifp_link, mtu, gre_info);
+
+ stream_failure:
+	return;
+}
+
 static void zsend_error_msg(struct zserv *client, enum zebra_error_types error,
 			    struct zmsghdr *bad_hdr)
 {
@@ -3480,6 +3592,8 @@ void (*const zserv_handlers[])(ZAPI_HANDLER_ARGS) = {
 	[ZEBRA_NHRP_NEIGH_REGISTER] = zebra_neigh_register,
 	[ZEBRA_NHRP_NEIGH_UNREGISTER] = zebra_neigh_unregister,
 	[ZEBRA_CONFIGURE_ARP] = zebra_configure_arp,
+	[ZEBRA_GRE_GET] = zebra_gre_get,
+	[ZEBRA_GRE_SOURCE_SET] = zebra_gre_source_set,
 };
 
 /*

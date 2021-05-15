@@ -81,6 +81,11 @@ static gid_t zlog_gid = -1;
 DECLARE_ATOMLIST(zlog_targets, struct zlog_target, head);
 static struct zlog_targets_head zlog_targets;
 
+/* Global setting for buffered vs immediate output. The default is
+ * per-pthread buffering.
+ */
+static bool default_immediate;
+
 /* cf. zlog.h for additional comments on this struct.
  *
  * Note: you MUST NOT pass the format string + va_list to non-FRR format
@@ -395,7 +400,7 @@ static void vzlog_tls(struct zlog_tls *zlog_tls, const struct xref_logmsg *xref,
 	struct zlog_msg *msg;
 	char *buf;
 	bool ignoremsg = true;
-	bool immediate = false;
+	bool immediate = default_immediate;
 
 	/* avoid further processing cost if no target wants this message */
 	rcu_read_lock();
@@ -521,6 +526,36 @@ void zlog_sigsafe(const char *text, size_t len)
 	}
 }
 
+void _zlog_assert_failed(const struct xref_assert *xref, const char *extra, ...)
+{
+	va_list ap;
+	static bool assert_in_assert; /* "global-ish" variable, init to 0 */
+
+	if (assert_in_assert)
+		abort();
+	assert_in_assert = true;
+
+	if (extra) {
+		struct va_format vaf;
+
+		va_start(ap, extra);
+		vaf.fmt = extra;
+		vaf.va = &ap;
+
+		zlog(LOG_CRIT,
+		     "%s:%d: %s(): assertion (%s) failed, extra info: %pVA",
+		     xref->xref.file, xref->xref.line, xref->xref.func,
+		     xref->expr, &vaf);
+
+		va_end(ap);
+	} else
+		zlog(LOG_CRIT, "%s:%d: %s(): assertion (%s) failed",
+		     xref->xref.file, xref->xref.line, xref->xref.func,
+		     xref->expr);
+
+	/* abort() prints backtrace & memstats in SIGABRT handler */
+	abort();
+}
 
 int zlog_msg_prio(struct zlog_msg *msg)
 {
@@ -714,6 +749,14 @@ struct zlog_target *zlog_target_replace(struct zlog_target *oldzt,
 	return oldzt;
 }
 
+/*
+ * Enable or disable 'immediate' output - default is to buffer
+ * each pthread's messages.
+ */
+void zlog_set_immediate(bool set_p)
+{
+	default_immediate = set_p;
+}
 
 /* common init */
 

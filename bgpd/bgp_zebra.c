@@ -1180,7 +1180,6 @@ void bgp_zebra_announce(struct bgp_dest *dest, const struct prefix *p,
 	route_tag_t tag;
 	mpls_label_t label;
 	int nh_othervrf = 0;
-	char buf_prefix[PREFIX_STRLEN];	/* filled in if we are debugging */
 	bool is_evpn;
 	bool nh_updated = false;
 	bool do_wt_ecmp;
@@ -1196,9 +1195,6 @@ void bgp_zebra_announce(struct bgp_dest *dest, const struct prefix *p,
 
 	if (bgp->main_zebra_update_hold)
 		return;
-
-	if (bgp_debug_zebra(p))
-		prefix2str(p, buf_prefix, sizeof(buf_prefix));
 
 	if (safi == SAFI_FLOWSPEC) {
 		bgp_pbr_update_entry(bgp, bgp_dest_get_prefix(dest), info, afi,
@@ -1312,13 +1308,14 @@ void bgp_zebra_announce(struct bgp_dest *dest, const struct prefix *p,
 
 		if (bgp_debug_zebra(&api.prefix)) {
 			if (mpinfo->extra) {
-				zlog_debug("%s: p=%s, bgp_is_valid_label: %d",
-					   __func__, buf_prefix,
+				zlog_debug("%s: p=%pFX, bgp_is_valid_label: %d",
+					   __func__, p,
 					   bgp_is_valid_label(
 						   &mpinfo->extra->label[0]));
 			} else {
-				zlog_debug("%s: p=%s, extra is NULL, no label",
-					   __func__, buf_prefix);
+				zlog_debug(
+					"%s: p=%pFX, extra is NULL, no label",
+					__func__, p);
 			}
 		}
 
@@ -1500,9 +1497,8 @@ void bgp_zebra_announce(struct bgp_dest *dest, const struct prefix *p,
 		if (CHECK_FLAG(api.flags, ZEBRA_FLAG_ALLOW_RECURSION))
 			recursion_flag = 1;
 
-		zlog_debug("%s: %s: announcing to zebra (recursion %sset)",
-			__func__, buf_prefix,
-			(recursion_flag ? "" : "NOT "));
+		zlog_debug("%s: %pFX: announcing to zebra (recursion %sset)",
+			   __func__, p, (recursion_flag ? "" : "NOT "));
 	}
 	zclient_route_send(is_add ? ZEBRA_ROUTE_ADD : ZEBRA_ROUTE_DELETE,
 			   zclient, &api);
@@ -1700,6 +1696,9 @@ int bgp_redistribute_set(struct bgp *bgp, afi_t afi, int type,
 
 		redist_add_instance(&zclient->mi_redist[afi][type], instance);
 	} else {
+		if (vrf_bitmap_check(zclient->redist[afi][type], bgp->vrf_id))
+			return CMD_WARNING;
+
 #ifdef ENABLE_BGP_VNC
 		if (EVPN_ENABLED(bgp) && type == ZEBRA_ROUTE_VNC_DIRECT) {
 			vnc_export_bgp_enable(
@@ -1909,22 +1908,6 @@ void bgp_redistribute_redo(struct bgp *bgp)
 	}
 }
 
-/* Unset redistribute vrf bitmap during triggers like
-   restart networking or delete VRFs */
-void bgp_unset_redist_vrf_bitmaps(struct bgp *bgp, vrf_id_t old_vrf_id)
-{
-	int i;
-	afi_t afi;
-
-	for (afi = AFI_IP; afi < AFI_MAX; afi++)
-		for (i = 0; i < ZEBRA_ROUTE_MAX; i++)
-			if (vrf_bitmap_check(zclient->redist[afi][i],
-					     old_vrf_id))
-				vrf_bitmap_unset(zclient->redist[afi][i],
-						 old_vrf_id);
-	return;
-}
-
 void bgp_zclient_reset(void)
 {
 	zclient_reset(zclient);
@@ -1975,7 +1958,7 @@ void bgp_zebra_instance_deregister(struct bgp *bgp)
 
 void bgp_zebra_initiate_radv(struct bgp *bgp, struct peer *peer)
 {
-	int ra_interval = BGP_UNNUM_DEFAULT_RA_INTERVAL;
+	uint32_t ra_interval = BGP_UNNUM_DEFAULT_RA_INTERVAL;
 
 	/* Don't try to initiate if we're not connected to Zebra */
 	if (zclient->sock < 0)
@@ -2407,7 +2390,7 @@ static int bgp_zebra_route_notify_owner(int command, struct zclient *zclient,
 
 	if (!zapi_route_notify_decode(zclient->ibuf, &p, &table_id, &note,
 				      &afi, &safi)) {
-		zlog_err("%s : error in msg decode", __PRETTY_FUNCTION__);
+		zlog_err("%s : error in msg decode", __func__);
 		return -1;
 	}
 
@@ -2415,8 +2398,8 @@ static int bgp_zebra_route_notify_owner(int command, struct zclient *zclient,
 	bgp = bgp_lookup_by_vrf_id(vrf_id);
 	if (!bgp) {
 		flog_err(EC_BGP_INVALID_BGP_INSTANCE,
-			 "%s : bgp instance not found vrf %d",
-			 __PRETTY_FUNCTION__, vrf_id);
+			 "%s : bgp instance not found vrf %d", __func__,
+			 vrf_id);
 		return -1;
 	}
 

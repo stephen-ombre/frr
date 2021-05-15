@@ -137,6 +137,7 @@ enum node_type {
 	PREFIX_IPV6_NODE,	/* Prefix list node. */
 	AS_LIST_NODE,		 /* AS list node. */
 	COMMUNITY_LIST_NODE,     /* Community list node. */
+	COMMUNITY_ALIAS_NODE, /* Community alias node. */
 	RMAP_NODE,		 /* Route map node. */
 	PBRMAP_NODE,		 /* PBR map node. */
 	SMUX_NODE,		 /* SNMP configuration node. */
@@ -223,6 +224,7 @@ struct cmd_node {
 #define CMD_SUSPEND             12
 #define CMD_WARNING_CONFIG_FAILED 13
 #define CMD_NOT_MY_INSTANCE	14
+#define CMD_NO_LEVEL_UP 15
 
 /* Argc max counts. */
 #define CMD_ARGC_MAX   256

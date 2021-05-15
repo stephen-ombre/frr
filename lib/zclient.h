@@ -232,6 +232,9 @@ typedef enum {
 	ZEBRA_NEIGH_IP_ADD,
 	ZEBRA_NEIGH_IP_DEL,
 	ZEBRA_CONFIGURE_ARP,
+	ZEBRA_GRE_GET,
+	ZEBRA_GRE_UPDATE,
+	ZEBRA_GRE_SOURCE_SET,
 } zebra_message_types_t;
 
 enum zebra_error_types {
@@ -393,6 +396,7 @@ struct zclient {
 	void (*neighbor_added)(ZAPI_CALLBACK_ARGS);
 	void (*neighbor_removed)(ZAPI_CALLBACK_ARGS);
 	void (*neighbor_get)(ZAPI_CALLBACK_ARGS);
+	void (*gre_update)(ZAPI_CALLBACK_ARGS);
 };
 
 /* Zebra API message flag. */
@@ -754,6 +758,29 @@ enum zclient_send_status {
 };
 
 static inline const char *
+zapi_nhg_notify_owner2str(enum zapi_nhg_notify_owner note)
+{
+	const char *ret = "UNKNOWN";
+
+	switch (note) {
+	case ZAPI_NHG_FAIL_INSTALL:
+		ret = "ZAPI_NHG_FAIL_INSTALL";
+		break;
+	case ZAPI_NHG_INSTALLED:
+		ret = "ZAPI_NHG_INSTALLED";
+		break;
+	case ZAPI_NHG_REMOVE_FAIL:
+		ret = "ZAPI_NHG_REMOVE_FAIL";
+		break;
+	case ZAPI_NHG_REMOVED:
+		ret = "ZAPI_NHG_REMOVED";
+		break;
+	}
+
+	return ret;
+}
+
+static inline const char *
 zapi_rule_notify_owner2str(enum zapi_rule_notify_owner note)
 {
 	const char *ret = "UNKNOWN";
@@ -888,7 +915,7 @@ zclient_send_router_id_update(struct zclient *zclient,
 extern enum zclient_send_status
 zclient_send_interface_radv_req(struct zclient *zclient, vrf_id_t vrf_id,
 				struct interface *ifp, int enable,
-				int ra_interval);
+				uint32_t ra_interval);
 extern enum zclient_send_status
 zclient_send_interface_protodown(struct zclient *zclient, vrf_id_t vrf_id,
 				 struct interface *ifp, bool down);
@@ -1205,6 +1232,8 @@ struct zapi_client_close_info {
 extern int zapi_client_close_notify_decode(struct stream *s,
 					   struct zapi_client_close_info *info);
 
+extern int zclient_send_zebra_gre_request(struct zclient *client,
+					  struct interface *ifp);
 #ifdef __cplusplus
 }
 #endif

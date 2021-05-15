@@ -91,8 +91,7 @@ static void zebra_redistribute_default(struct zserv *client, vrf_id_t vrf_id)
 			continue;
 
 		RNODE_FOREACH_RE (rn, newre) {
-			if (CHECK_FLAG(newre->flags, ZEBRA_FLAG_SELECTED)
-			    && newre->distance != DISTANCE_INFINITY)
+			if (CHECK_FLAG(newre->flags, ZEBRA_FLAG_SELECTED))
 				zsend_redistribute_route(
 					ZEBRA_REDISTRIBUTE_ROUTE_ADD, client,
 					&rn->p, NULL, newre);
@@ -137,8 +136,6 @@ static void zebra_redistribute(struct zserv *client, int type,
 			if ((type != ZEBRA_ROUTE_ALL
 			     && (newre->type != type
 				 || newre->instance != instance)))
-				continue;
-			if (newre->distance == DISTANCE_INFINITY)
 				continue;
 			if (!zebra_check_addr(dst_p))
 				continue;
@@ -265,13 +262,6 @@ void redistribute_delete(const struct prefix *p, const struct prefix *src_p,
 			   new_re ? zebra_route_string(new_re->type) : "None");
 	}
 
-	/* Add DISTANCE_INFINITY check. */
-	if (old_re && (old_re->distance == DISTANCE_INFINITY)) {
-		if (IS_ZEBRA_DEBUG_RIB)
-			zlog_debug("        Skipping due to Infinite Distance");
-		return;
-	}
-
 	afi = family2afi(p->family);
 	if (!afi) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,
@@ -347,12 +337,17 @@ void zebra_redistribute_add(ZAPI_HANDLER_ARGS)
 					   zvrf_id(zvrf), afi);
 		}
 	} else {
-		if (IS_ZEBRA_DEBUG_EVENT)
-			zlog_debug("%s: setting vrf %s(%u) redist bitmap",
-				   __func__, VRF_LOGNAME(zvrf->vrf),
-				   zvrf_id(zvrf));
-		vrf_bitmap_set(client->redist[afi][type], zvrf_id(zvrf));
-		zebra_redistribute(client, type, 0, zvrf_id(zvrf), afi);
+		if (!vrf_bitmap_check(client->redist[afi][type],
+				      zvrf_id(zvrf))) {
+			if (IS_ZEBRA_DEBUG_EVENT)
+				zlog_debug(
+					"%s: setting vrf %s(%u) redist bitmap",
+					__func__, VRF_LOGNAME(zvrf->vrf),
+					zvrf_id(zvrf));
+			vrf_bitmap_set(client->redist[afi][type],
+				       zvrf_id(zvrf));
+			zebra_redistribute(client, type, 0, zvrf_id(zvrf), afi);
+		}
 	}
 
 stream_failure:
@@ -368,6 +363,14 @@ void zebra_redistribute_delete(ZAPI_HANDLER_ARGS)
 	STREAM_GETC(msg, afi);
 	STREAM_GETC(msg, type);
 	STREAM_GETW(msg, instance);
+
+	if (IS_ZEBRA_DEBUG_EVENT)
+		zlog_debug(
+			"%s: client proto %s afi=%d, no longer wants %s, vrf %s(%u), instance=%d",
+			__func__, zebra_route_string(client->proto), afi,
+			zebra_route_string(type), VRF_LOGNAME(zvrf->vrf),
+			zvrf_id(zvrf), instance);
+
 
 	if (afi == 0 || afi >= AFI_MAX) {
 		flog_warn(EC_ZEBRA_REDISTRIBUTE_UNKNOWN_AF,

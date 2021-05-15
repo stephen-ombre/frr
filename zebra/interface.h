@@ -263,6 +263,7 @@ typedef enum {
 	ZEBRA_IF_VETH,      /* VETH interface*/
 	ZEBRA_IF_BOND,	    /* Bond */
 	ZEBRA_IF_BOND_SLAVE,	    /* Bond */
+	ZEBRA_IF_GRE,      /* GRE interface */
 } zebra_iftype_t;
 
 /* Zebra "slave" interface type */
@@ -442,6 +443,9 @@ DECLARE_HOOK(zebra_if_config_wr, (struct vty * vty, struct interface *ifp),
 #define IS_ZEBRA_IF_BOND(ifp)                                                  \
 	(((struct zebra_if *)(ifp->info))->zif_type == ZEBRA_IF_BOND)
 
+#define IS_ZEBRA_IF_GRE(ifp)                                               \
+	(((struct zebra_if *)(ifp->info))->zif_type == ZEBRA_IF_GRE)
+
 #define IS_ZEBRA_IF_BRIDGE_SLAVE(ifp)					\
 	(((struct zebra_if *)(ifp->info))->zif_slave_type                      \
 	 == ZEBRA_IF_SLAVE_BRIDGE)
@@ -482,7 +486,7 @@ extern int ipv6_address_configured(struct interface *ifp);
 extern void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id);
 extern void zebra_if_update_link(struct interface *ifp, ifindex_t link_ifindex,
 				 ns_id_t ns_id);
-extern void zebra_if_update_all_links(void);
+extern void zebra_if_update_all_links(struct zebra_ns *zns);
 extern void zebra_if_set_protodown(struct interface *ifp, bool down);
 extern int if_ip_address_install(struct interface *ifp, struct prefix *prefix,
 				 const char *label, struct prefix *pp);

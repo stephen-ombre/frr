@@ -153,6 +153,10 @@ DECLARE_QOBJ_TYPE(ospf6);
 #define OSPF6_DISABLED    0x01
 #define OSPF6_STUB_ROUTER 0x02
 #define OSPF6_FLAG_ASBR   0x04
+#define OSPF6_MAX_IF_ADDRS 100
+#define OSPF6_MAX_IF_ADDRS_JUMBO 200
+#define OSPF6_DEFAULT_MTU 1500
+#define OSPF6_JUMBO_MTU 9000
 
 /* global pointer for OSPF top data structure */
 extern struct ospf6 *ospf6;
@@ -171,5 +175,5 @@ void ospf6_vrf_unlink(struct ospf6 *ospf6, struct vrf *vrf);
 struct ospf6 *ospf6_lookup_by_vrf_id(vrf_id_t vrf_id);
 struct ospf6 *ospf6_lookup_by_vrf_name(const char *name);
 const char *ospf6_vrf_id_to_name(vrf_id_t vrf_id);
-
+void ospf6_vrf_init(void);
 #endif /* OSPF6_TOP_H */

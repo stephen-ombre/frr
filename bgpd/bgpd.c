@@ -43,6 +43,7 @@
 #include "jhash.h"
 #include "table.h"
 #include "lib/json.h"
+#include "lib/sockopt.h"
 #include "frr_pthread.h"
 #include "bitfield.h"
 
@@ -54,6 +55,7 @@
 #include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_errors.h"
 #include "bgpd/bgp_community.h"
+#include "bgpd/bgp_community_alias.h"
 #include "bgpd/bgp_conditional_adv.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_regex.h"
@@ -1347,7 +1349,7 @@ struct peer *peer_new(struct bgp *bgp)
 	peer->bgp = bgp_lock(bgp);
 	peer = peer_lock(peer); /* initial reference */
 	peer->password = NULL;
-	peer->max_packet_size = BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE;
+	peer->max_packet_size = BGP_MAX_PACKET_SIZE;
 
 	/* Set default flags. */
 	FOREACH_AFI_SAFI (afi, safi) {
@@ -1382,7 +1384,7 @@ struct peer *peer_new(struct bgp *bgp)
 
 	/* We use a larger buffer for peer->obuf_work in the event that:
 	 * - We RX a BGP_UPDATE where the attributes alone are just
-	 *   under BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE.
+	 *   under BGP_EXTENDED_MESSAGE_MAX_PACKET_SIZE.
 	 * - The user configures an outbound route-map that does many as-path
 	 *   prepends or adds many communities. At most they can have
 	 *   CMD_ARGC_MAX args in a route-map so there is a finite limit on how
@@ -1392,12 +1394,12 @@ struct peer *peer_new(struct bgp *bgp)
 	 * bounds checking for every single attribute as we construct an
 	 * UPDATE.
 	 */
-	peer->obuf_work = stream_new(BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE
-				     + BGP_MAX_PACKET_SIZE_OVERFLOW);
-	peer->ibuf_work = ringbuf_new(BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE
-				      * BGP_READ_PACKET_MAX);
+	peer->obuf_work =
+		stream_new(BGP_MAX_PACKET_SIZE + BGP_MAX_PACKET_SIZE_OVERFLOW);
+	peer->ibuf_work =
+		ringbuf_new(BGP_MAX_PACKET_SIZE * BGP_READ_PACKET_MAX);
 
-	peer->scratch = stream_new(BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE);
+	peer->scratch = stream_new(BGP_MAX_PACKET_SIZE);
 
 	bgp_sync_init(peer);
 
@@ -1439,6 +1441,8 @@ void peer_xfer_config(struct peer *peer_dst, struct peer *peer_src)
 
 	peer_dst->local_as = peer_src->local_as;
 	peer_dst->port = peer_src->port;
+	/* copy tcp_mss value */
+	peer_dst->tcp_mss = peer_src->tcp_mss;
 	(void)peer_sort(peer_dst);
 	peer_dst->rmap_type = peer_src->rmap_type;
 
@@ -3374,13 +3378,13 @@ int bgp_lookup_by_as_name_type(struct bgp **bgp_val, as_t *as, const char *name,
 		bgp = bgp_get_default();
 
 	if (bgp) {
+		*bgp_val = bgp;
 		if (bgp->as != *as) {
 			*as = bgp->as;
-			return BGP_ERR_INSTANCE_MISMATCH;
+			return BGP_ERR_AS_MISMATCH;
 		}
 		if (bgp->inst_type != inst_type)
 			return BGP_ERR_INSTANCE_MISMATCH;
-		*bgp_val = bgp;
 		return BGP_SUCCESS;
 	}
 	*bgp_val = NULL;
@@ -3397,13 +3401,8 @@ int bgp_get(struct bgp **bgp_val, as_t *as, const char *name,
 	int ret = 0;
 
 	ret = bgp_lookup_by_as_name_type(bgp_val, as, name, inst_type);
-	switch (ret) {
-	case BGP_ERR_INSTANCE_MISMATCH:
+	if (ret || *bgp_val)
 		return ret;
-	case BGP_SUCCESS:
-		if (*bgp_val)
-			return BGP_INSTANCE_EXISTS;
-	}
 
 	bgp = bgp_create(as, name, inst_type);
 	if (bgp_option_check(BGP_OPT_NO_ZEBRA) && name)
@@ -3439,6 +3438,46 @@ int bgp_get(struct bgp **bgp_val, as_t *as, const char *name,
 	return BGP_CREATED;
 }
 
+static void bgp_zclient_set_redist(afi_t afi, int type, unsigned short instance,
+				   vrf_id_t vrf_id, bool set)
+{
+	if (instance) {
+		if (set)
+			redist_add_instance(&zclient->mi_redist[afi][type],
+					    instance);
+		else
+			redist_del_instance(&zclient->mi_redist[afi][type],
+					    instance);
+	} else {
+		if (set)
+			vrf_bitmap_set(zclient->redist[afi][type], vrf_id);
+		else
+			vrf_bitmap_unset(zclient->redist[afi][type], vrf_id);
+	}
+}
+
+static void bgp_set_redist_vrf_bitmaps(struct bgp *bgp, bool set)
+{
+	afi_t afi;
+	int i;
+	struct list *red_list;
+	struct listnode *node;
+	struct bgp_redist *red;
+
+	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
+		for (i = 0; i < ZEBRA_ROUTE_MAX; i++) {
+
+			red_list = bgp->redist[afi][i];
+			if (!red_list)
+				continue;
+
+			for (ALL_LIST_ELEMENTS_RO(red_list, node, red))
+				bgp_zclient_set_redist(afi, i, red->instance,
+						       bgp->vrf_id, set);
+		}
+	}
+}
+
 /*
  * Make BGP instance "up". Applies only to VRFs (non-default) and
  * implies the VRF has been learnt from Zebra.
@@ -3447,6 +3486,8 @@ void bgp_instance_up(struct bgp *bgp)
 {
 	struct peer *peer;
 	struct listnode *node, *next;
+
+	bgp_set_redist_vrf_bitmaps(bgp, true);
 
 	/* Register with zebra. */
 	bgp_zebra_instance_register(bgp);
@@ -3492,6 +3533,10 @@ void bgp_instance_down(struct bgp *bgp)
 
 	/* Cleanup registered nexthops (flags) */
 	bgp_cleanup_nexthops(bgp);
+
+	bgp_zebra_instance_deregister(bgp);
+
+	bgp_set_redist_vrf_bitmaps(bgp, false);
 }
 
 /* Delete BGP instance. */
@@ -5119,6 +5164,26 @@ void peer_port_set(struct peer *peer, uint16_t port)
 void peer_port_unset(struct peer *peer)
 {
 	peer->port = BGP_PORT_DEFAULT;
+}
+
+/* Set the TCP-MSS value in the peer structure,
+ * This gets applied only after connection reset
+ * So this value will be used in bgp_connect.
+ */
+void peer_tcp_mss_set(struct peer *peer, uint32_t tcp_mss)
+{
+	peer->tcp_mss = tcp_mss;
+	SET_FLAG(peer->flags, PEER_FLAG_TCP_MSS);
+}
+
+/* Reset the TCP-MSS value in the peer structure,
+ * This gets applied only after connection reset
+ * So this value will be used in bgp_connect.
+ */
+void peer_tcp_mss_unset(struct peer *peer)
+{
+	UNSET_FLAG(peer->flags, PEER_FLAG_TCP_MSS);
+	peer->tcp_mss = 0;
 }
 
 /*
@@ -6872,7 +6937,7 @@ static void peer_advertise_map_filter_update(struct peer *peer, afi_t afi,
 
 	/* Removed advertise-map configuration */
 	if (!set) {
-		memset(filter, 0, sizeof(struct bgp_filter));
+		memset(&filter->advmap, 0, sizeof(filter->advmap));
 
 		/* decrement condition_filter_count delete timer if
 		 * this is the last advertise-map to be removed.
@@ -7679,6 +7744,7 @@ void bgp_init(unsigned short instance)
 	/* BGP inits. */
 	bgp_attr_init();
 	bgp_debug_init();
+	bgp_community_alias_init();
 	bgp_dump_init();
 	bgp_route_init();
 	bgp_route_map_init();

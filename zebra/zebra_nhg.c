@@ -845,6 +845,8 @@ static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
 		SET_FLAG(backup_nhe->flags, NEXTHOP_GROUP_RECURSIVE);
 
 done:
+	/* Reset time since last update */
+	(*nhe)->uptime = monotime(NULL);
 
 	return created;
 }
@@ -990,7 +992,7 @@ static struct nhg_ctx *nhg_ctx_new(void)
 	return new;
 }
 
-static void nhg_ctx_free(struct nhg_ctx **ctx)
+void nhg_ctx_free(struct nhg_ctx **ctx)
 {
 	struct nexthop *nh;
 
@@ -1191,6 +1193,13 @@ static int nhg_ctx_process_new(struct nhg_ctx *ctx)
 	if (IS_ZEBRA_DEBUG_NHG_DETAIL)
 		zlog_debug("%s: nhe %p (%u) is new", __func__, nhe, nhe->id);
 
+	/*
+	 * If daemon nhg from the kernel, add a refcnt here to indicate the
+	 * daemon owns it.
+	 */
+	if (PROTO_OWNED(nhe))
+		zebra_nhg_increment_ref(nhe);
+
 	SET_FLAG(nhe->flags, NEXTHOP_GROUP_VALID);
 	SET_FLAG(nhe->flags, NEXTHOP_GROUP_INSTALLED);
 
@@ -1233,7 +1242,7 @@ static int queue_add(struct nhg_ctx *ctx)
 	if (nhg_ctx_get_status(ctx) == NHG_CTX_QUEUED)
 		return 0;
 
-	if (rib_queue_nhg_add(ctx)) {
+	if (rib_queue_nhg_ctx_add(ctx)) {
 		nhg_ctx_set_status(ctx, NHG_CTX_FAILURE);
 		return -1;
 	}
@@ -1811,11 +1820,10 @@ static int resolve_backup_nexthops(const struct nexthop *nexthop,
 	int i, j, idx;
 	const struct nexthop *bnh;
 	struct nexthop *nh, *newnh;
+	mpls_label_t labels[MPLS_MAX_LABELS];
+	uint8_t num_labels;
 
 	assert(nexthop->backup_num <= NEXTHOP_MAX_BACKUPS);
-
-	if (resolve_nhe->backup_info->nhe == NULL)
-		resolve_nhe->backup_info->nhe = zebra_nhg_alloc();
 
 	/* Locate backups from the original nexthop's backup index and nhe */
 	for (i = 0; i < nexthop->backup_num; i++) {
@@ -1831,6 +1839,8 @@ static int resolve_backup_nexthops(const struct nexthop *nexthop,
 			resolved->backup_idx[resolved->backup_num] =
 				map->map[j].new_idx;
 			resolved->backup_num++;
+
+			SET_FLAG(resolved->flags, NEXTHOP_FLAG_HAS_BACKUP);
 
 			if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 				zlog_debug("%s: found map idx orig %d, new %d",
@@ -1856,8 +1866,45 @@ static int resolve_backup_nexthops(const struct nexthop *nexthop,
 		if (bnh == NULL)
 			continue;
 
+		if (resolve_nhe->backup_info == NULL)
+			resolve_nhe->backup_info = zebra_nhg_backup_alloc();
+
 		/* Update backup info in the resolving nexthop and its nhe */
 		newnh = nexthop_dup_no_recurse(bnh, NULL);
+
+		/* We may need some special handling for mpls labels: the new
+		 * backup needs to carry the recursive nexthop's labels,
+		 * if any: they may be vrf labels e.g.
+		 * The original/inner labels are in the stack of 'resolve_nhe',
+		 * if that is longer than the stack in 'nexthop'.
+		 */
+		if (newnh->nh_label && resolved->nh_label &&
+		    nexthop->nh_label) {
+			if (resolved->nh_label->num_labels >
+			    nexthop->nh_label->num_labels) {
+				/* Prepare new label stack */
+				num_labels = 0;
+				for (j = 0; j < newnh->nh_label->num_labels;
+				     j++) {
+					labels[j] = newnh->nh_label->label[j];
+					num_labels++;
+				}
+
+				/* Include inner labels */
+				for (j = nexthop->nh_label->num_labels;
+				     j < resolved->nh_label->num_labels;
+				     j++) {
+					labels[num_labels] =
+						resolved->nh_label->label[j];
+					num_labels++;
+				}
+
+				/* Replace existing label stack in the backup */
+				nexthop_del_labels(newnh);
+				nexthop_add_labels(newnh, bnh->nh_label_type,
+						   num_labels, labels);
+			}
+		}
 
 		/* Need to compute the new backup index in the new
 		 * backup list, and add to map struct.
@@ -1871,6 +1918,7 @@ static int resolve_backup_nexthops(const struct nexthop *nexthop,
 			}
 
 			nh->next = newnh;
+			j++;
 
 		} else	/* First one */
 			resolve_nhe->backup_info->nhe->nhg.nexthop = newnh;
@@ -1878,6 +1926,8 @@ static int resolve_backup_nexthops(const struct nexthop *nexthop,
 		/* Capture index */
 		resolved->backup_idx[resolved->backup_num] = j;
 		resolved->backup_num++;
+
+		SET_FLAG(resolved->flags, NEXTHOP_FLAG_HAS_BACKUP);
 
 		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
 			zlog_debug("%s: added idx orig %d, new %d",
@@ -2559,7 +2609,7 @@ int nexthop_active_update(struct route_node *rn, struct route_entry *re)
 	struct nhg_hash_entry *curr_nhe;
 	uint32_t curr_active = 0, backup_active = 0;
 
-	if (re->nhe->id >= ZEBRA_NHG_PROTO_LOWER)
+	if (PROTO_OWNED(re->nhe))
 		return proto_nhg_nexthop_active_update(&re->nhe->nhg);
 
 	afi_t rt_afi = family2afi(rn->p.family);
@@ -2861,13 +2911,13 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
 			zebra_nhg_handle_install(nhe);
 
 			/* If daemon nhg, send it an update */
-			if (nhe->id >= ZEBRA_NHG_PROTO_LOWER)
+			if (PROTO_OWNED(nhe))
 				zsend_nhg_notify(nhe->type, nhe->zapi_instance,
 						 nhe->zapi_session, nhe->id,
 						 ZAPI_NHG_INSTALLED);
 		} else {
 			/* If daemon nhg, send it an update */
-			if (nhe->id >= ZEBRA_NHG_PROTO_LOWER)
+			if (PROTO_OWNED(nhe))
 				zsend_nhg_notify(nhe->type, nhe->zapi_instance,
 						 nhe->zapi_session, nhe->id,
 						 ZAPI_NHG_FAIL_INSTALL);
@@ -2915,6 +2965,7 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
 	case DPLANE_OP_IPSET_ENTRY_ADD:
 	case DPLANE_OP_IPSET_ENTRY_DELETE:
 	case DPLANE_OP_NEIGH_TABLE_UPDATE:
+	case DPLANE_OP_GRE_SET:
 		break;
 	}
 
@@ -2927,7 +2978,31 @@ static void zebra_nhg_sweep_entry(struct hash_bucket *bucket, void *arg)
 
 	nhe = (struct nhg_hash_entry *)bucket->data;
 
-	/* If its being ref'd, just let it be uninstalled via a route removal */
+	/*
+	 * same logic as with routes.
+	 *
+	 * If older than startup time, we know we read them in from the
+	 * kernel and have not gotten and update for them since startup
+	 * from an upper level proto.
+	 */
+	if (zrouter.startup_time < nhe->uptime)
+		return;
+
+	/*
+	 * If it's proto-owned and not being used by a route, remove it since
+	 * we haven't gotten an update about it from the proto since startup.
+	 * This means that either the config for it was removed or the daemon
+	 * didn't get started. This handles graceful restart & retain scenario.
+	 */
+	if (PROTO_OWNED(nhe) && nhe->refcnt == 1) {
+		zebra_nhg_decrement_ref(nhe);
+		return;
+	}
+
+	/*
+	 * If its being ref'd by routes, just let it be uninstalled via a route
+	 * removal.
+	 */
 	if (ZEBRA_NHG_CREATED(nhe) && nhe->refcnt <= 0)
 		zebra_nhg_uninstall_kernel(nhe);
 }
@@ -3201,7 +3276,7 @@ static void zebra_nhg_score_proto_entry(struct hash_bucket *bucket, void *arg)
 	iter = arg;
 
 	/* Needs to match type and outside zebra ID space */
-	if (nhe->type == iter->type && nhe->id >= ZEBRA_NHG_PROTO_LOWER) {
+	if (nhe->type == iter->type && PROTO_OWNED(nhe)) {
 		if (IS_ZEBRA_DEBUG_NHG_DETAIL)
 			zlog_debug(
 				"%s: found nhe %p (%u), vrf %d, type %s after client disconnect",

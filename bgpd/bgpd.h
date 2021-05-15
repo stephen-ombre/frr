@@ -44,6 +44,7 @@
 #include "bgp_addpath_types.h"
 #include "bgp_nexthop.h"
 #include "bgp_damp.h"
+#include "bgp_io.h"
 
 #include "lib/bfd.h"
 
@@ -865,8 +866,9 @@ typedef enum {
 /* BGP message header and packet size.  */
 #define BGP_MARKER_SIZE		                16
 #define BGP_HEADER_SIZE		                19
-#define BGP_MAX_PACKET_SIZE                   4096
-#define BGP_MAX_EXTENDED_MESSAGE_PACKET_SIZE 65535
+#define BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE 4096
+#define BGP_EXTENDED_MESSAGE_MAX_PACKET_SIZE 65535
+#define BGP_MAX_PACKET_SIZE BGP_EXTENDED_MESSAGE_MAX_PACKET_SIZE
 #define BGP_MAX_PACKET_SIZE_OVERFLOW          1024
 
 /*
@@ -1047,6 +1049,9 @@ struct peer {
 	struct stream_fifo *ibuf; // packets waiting to be processed
 	struct stream_fifo *obuf; // packets waiting to be written
 
+	/* used as a block to deposit raw wire data to */
+	uint8_t ibuf_scratch[BGP_EXTENDED_MESSAGE_MAX_PACKET_SIZE
+			     * BGP_READ_PACKET_MAX];
 	struct ringbuf *ibuf_work; // WiP buffer used by bgp_read() only
 	struct stream *obuf_work;  // WiP buffer used to construct packets
 
@@ -1237,14 +1242,14 @@ struct peer {
 #define PEER_FLAG_GRACEFUL_RESTART          (1U << 24) /* Graceful Restart */
 #define PEER_FLAG_GRACEFUL_RESTART_GLOBAL_INHERIT (1U << 25) /* Global-Inherit */
 #define PEER_FLAG_RTT_SHUTDOWN (1U << 26) /* shutdown rtt */
+#define PEER_FLAG_TIMER_DELAYOPEN (1U << 27) /* delayopen timer */
+#define PEER_FLAG_TCP_MSS (1U << 28)	 /* tcp-mss */
 
 	/*
 	 *GR-Disabled mode means unset PEER_FLAG_GRACEFUL_RESTART
 	 *& PEER_FLAG_GRACEFUL_RESTART_HELPER
 	 *and PEER_FLAG_GRACEFUL_RESTART_GLOBAL_INHERIT
 	 */
-
-#define PEER_FLAG_TIMER_DELAYOPEN (1 << 27) /* delayopen timer */
 
 	struct bgp_peer_gr PEER_GR_FSM[BGP_PEER_GR_MODE][BGP_PEER_GR_EVENT_CMD];
 	enum peer_mode peer_gr_present_state;
@@ -1602,6 +1607,9 @@ struct peer {
 	bool advmap_config_change[AFI_MAX][SAFI_MAX];
 	bool advmap_table_change;
 
+	/* set TCP max segment size */
+	uint32_t tcp_mss;
+
 	QOBJ_FIELDS;
 };
 DECLARE_QOBJ_TYPE(peer);
@@ -1844,7 +1852,6 @@ enum bgp_clear_type {
 /* BGP error codes.  */
 #define BGP_SUCCESS                               0
 #define BGP_CREATED                               1
-#define BGP_INSTANCE_EXISTS                       2
 #define BGP_ERR_INVALID_VALUE                    -1
 #define BGP_ERR_INVALID_FLAG                     -2
 #define BGP_ERR_INVALID_AS                       -3
@@ -2379,8 +2386,6 @@ static inline bool bgp_in_graceful_shutdown(struct bgp *bgp)
 	        !!CHECK_FLAG(bm->flags, BM_FLAG_GRACEFUL_SHUTDOWN));
 }
 
-extern void bgp_unset_redist_vrf_bitmaps(struct bgp *, vrf_id_t);
-
 /* For benefit of rfapi */
 extern struct peer *peer_new(struct bgp *bgp);
 
@@ -2406,4 +2411,6 @@ DECLARE_HOOK(bgp_rpki_prefix_status,
 
 void peer_nsf_stop(struct peer *peer);
 
+void peer_tcp_mss_set(struct peer *peer, uint32_t tcp_mss);
+void peer_tcp_mss_unset(struct peer *peer);
 #endif /* _QUAGGA_BGPD_H */

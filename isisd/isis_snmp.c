@@ -629,6 +629,54 @@ static uint8_t isis_null_sysid[ISIS_SYS_ID_LEN];
 /* Protocols supported value */
 static uint8_t isis_snmp_protocols_supported = 0x7; /* All: iso, ipv4, ipv6 */
 
+#define SNMP_CIRCUITS_MAX (512)
+
+static struct isis_circuit *snmp_circuits[SNMP_CIRCUITS_MAX];
+static uint32_t snmp_circuit_id_last;
+
+static int isis_circuit_snmp_id_gen(struct isis_circuit *circuit)
+{
+	uint32_t id;
+	uint32_t i;
+
+	id = snmp_circuit_id_last;
+	id++;
+
+	/* find next unused entry */
+	for (i = 0; i < SNMP_CIRCUITS_MAX; i++) {
+		if (id >= SNMP_CIRCUITS_MAX) {
+			id = 0;
+			continue;
+		}
+
+		if (id == 0)
+			continue;
+
+		if (snmp_circuits[id] == NULL)
+			break;
+
+		id++;
+	}
+
+	if (i == SNMP_CIRCUITS_MAX) {
+		zlog_warn("Could not allocate a smmp-circuit-id");
+		return 0;
+	}
+
+	snmp_circuits[id] = circuit;
+	snmp_circuit_id_last = id;
+	circuit->snmp_id = id;
+
+	return 0;
+}
+
+static int isis_circuit_snmp_id_free(struct isis_circuit *circuit)
+{
+	snmp_circuits[circuit->snmp_id] = NULL;
+	circuit->snmp_id = 0;
+	return 0;
+}
+
 /*
  * Convenience function to move to the next circuit,
  */
@@ -636,10 +684,6 @@ static struct isis_circuit *isis_snmp_circuit_next(struct isis_circuit *circuit)
 {
 	uint32_t start;
 	uint32_t off;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
-
-	if (isis == NULL)
-		return NULL;
 
 	start = 1;
 
@@ -647,7 +691,7 @@ static struct isis_circuit *isis_snmp_circuit_next(struct isis_circuit *circuit)
 		start = circuit->snmp_id + 1;
 
 	for (off = start; off < SNMP_CIRCUITS_MAX; off++) {
-		circuit = isis->snmp_circuits[off];
+		circuit = snmp_circuits[off];
 
 		if (circuit != NULL)
 			return circuit;
@@ -912,16 +956,12 @@ static int isis_snmp_circuit_lookup_exact(oid *oid_idx, size_t oid_idx_len,
 					  struct isis_circuit **ret_circuit)
 {
 	struct isis_circuit *circuit;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
-
-	if (isis == NULL)
-		return 0;
 
 	if (oid_idx == NULL || oid_idx_len < 1
 	    || oid_idx[0] > SNMP_CIRCUITS_MAX)
 		return 0;
 
-	circuit = isis->snmp_circuits[oid_idx[0]];
+	circuit = snmp_circuits[oid_idx[0]];
 	if (circuit == NULL)
 		return 0;
 
@@ -937,10 +977,6 @@ static int isis_snmp_circuit_lookup_next(oid *oid_idx, size_t oid_idx_len,
 	oid off;
 	oid start;
 	struct isis_circuit *circuit;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
-
-	if (isis == NULL)
-		return 0;
 
 	start = 0;
 
@@ -952,7 +988,7 @@ static int isis_snmp_circuit_lookup_next(oid *oid_idx, size_t oid_idx_len,
 	}
 
 	for (off = start; off < SNMP_CIRCUITS_MAX; ++off) {
-		circuit = isis->snmp_circuits[off];
+		circuit = snmp_circuits[off];
 
 		if (circuit != NULL && off > start) {
 			if (ret_circuit != NULL)
@@ -1009,12 +1045,8 @@ static int isis_snmp_circuit_level_lookup_next(
 {
 	oid off;
 	oid start;
-	struct isis_circuit *circuit;
+	struct isis_circuit *circuit = NULL;
 	int level;
-	struct isis *isis = isis_lookup_by_vrfid(VRF_DEFAULT);
-
-	if (isis == NULL)
-		return 0;
 
 	start = 0;
 
@@ -1026,7 +1058,7 @@ static int isis_snmp_circuit_level_lookup_next(
 	}
 
 	for (off = start; off < SNMP_CIRCUITS_MAX; off++) {
-		circuit = isis->snmp_circuits[off];
+		circuit = snmp_circuits[off];
 
 		if (circuit == NULL)
 			continue;
@@ -1919,8 +1951,6 @@ static uint8_t *isis_snmp_find_system_counter(struct variable *v, oid *name,
 		/* If level does not match all counters are zeros */
 		return SNMP_INTEGER(0);
 
-	val = 0;
-
 	switch (v->magic) {
 	case ISIS_SYSSTAT_CORRLSPS:
 		val = 0;
@@ -2480,7 +2510,6 @@ static uint8_t *isis_snmp_find_isadj(struct variable *v, oid *name,
 
 	switch (v->magic) {
 	case ISIS_ISADJ_STATE:
-		val = ISIS_SNMP_ADJ_STATE_DOWN;
 
 		switch (adj->adj_state) {
 		case ISIS_ADJ_UNKNOWN:
@@ -2509,7 +2538,6 @@ static uint8_t *isis_snmp_find_isadj(struct variable *v, oid *name,
 	}
 
 	case ISIS_ISADJ_NEIGHSYSTYPE:
-		val = ISIS_SNMP_ADJ_NEIGHTYPE_UNKNOWN;
 
 		switch (adj->sys_type) {
 		case ISIS_SYSTYPE_UNKNOWN:
@@ -3449,6 +3477,8 @@ static int isis_snmp_module_init(void)
 	hook_register(isis_hook_adj_state_change,
 		      isis_snmp_adj_state_change_update);
 	hook_register(isis_hook_lsp_error, isis_snmp_lsp_error_update);
+	hook_register(isis_circuit_new_hook, isis_circuit_snmp_id_gen);
+	hook_register(isis_circuit_del_hook, isis_circuit_snmp_id_free);
 
 	hook_register(frr_late_init, isis_snmp_init);
 	return 0;
