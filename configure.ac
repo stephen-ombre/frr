@@ -7,7 +7,7 @@
 ##
 AC_PREREQ([2.69])
 
-AC_INIT([frr], [7.7-dev], [https://github.com/frrouting/frr/issues])
+AC_INIT([frr], [8.1-dev], [https://github.com/frrouting/frr/issues])
 PACKAGE_URL="https://frrouting.org/"
 AC_SUBST([PACKAGE_URL])
 PACKAGE_FULLNAME="FRRouting"
@@ -1924,7 +1924,9 @@ dnl ---------------
 dnl gRPC
 dnl ---------------
 if test "$enable_grpc" = "yes"; then
-  PKG_CHECK_MODULES([GRPC], [grpc grpc++ protobuf], [
+  AC_LANG_PUSH([C++])
+  AX_CXX_COMPILE_STDCXX([11], [ext])
+  PKG_CHECK_MODULES([GRPC], [grpc >= 6.0.0 grpc++ >= 1.16.1 protobuf >= 3.6.1 ], [
     AC_CHECK_PROGS([PROTOC], [protoc], [/bin/false])
     if test "$PROTOC" = "/bin/false"; then
       AC_MSG_FAILURE([grpc requested but protoc not found.])
@@ -1936,6 +1938,7 @@ if test "$enable_grpc" = "yes"; then
     GRPC=false
     AC_MSG_ERROR([grpc/grpc++ were not found on your system.])
   ])
+  AC_LANG_POP([C++])
 fi
 
 dnl -----
@@ -2685,7 +2688,7 @@ FRR version             : ${PACKAGE_VERSION}
 host operating system   : ${host_os}
 source code location    : ${srcdir}
 compiler                : ${CC}
-compiler flags          : ${CFLAGS} ${AC_CFLAGS} ${SAN_FLAGS}
+compiler flags          : ${CFLAGS} ${WERROR} ${AC_CFLAGS} ${SAN_FLAGS}
 make                    : ${MAKE-make}
 linker flags            : ${LDFLAGS} ${SAN_FLAGS} ${LIBS} ${LIBCAP} ${LIBREADLINE} ${LIBM}
 state file directory    : ${frr_statedir}

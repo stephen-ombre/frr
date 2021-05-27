@@ -42,6 +42,7 @@
 #include "zebra/redistribute.h"
 #include "zebra/zebra_routemap.h"
 #include "lib/json.h"
+#include "lib/route_opaque.h"
 #include "zebra/zebra_vxlan.h"
 #include "zebra/zebra_evpn_mh.h"
 #ifndef VTYSH_EXTRACT_PL
@@ -421,6 +422,8 @@ static void show_nexthop_detail_helper(struct vty *vty,
 static void zebra_show_ip_route_opaque(struct vty *vty, struct route_entry *re,
 				       struct json_object *json)
 {
+	struct bgp_zebra_opaque bzo = {};
+
 	if (!re->opaque)
 		return;
 
@@ -433,13 +436,27 @@ static void zebra_show_ip_route_opaque(struct vty *vty, struct route_entry *re,
 			vty_out(vty, "    Opaque Data: %s",
 				(char *)re->opaque->data);
 		break;
-	case ZEBRA_ROUTE_BGP:
-		if (json)
-			json_object_string_add(json, "asPath",
-					       (char *)re->opaque->data);
-		else
-			vty_out(vty, "    AS-Path: %s",
-				(char *)re->opaque->data);
+	case ZEBRA_ROUTE_BGP: {
+		memcpy(&bzo, re->opaque->data, re->opaque->length);
+
+		if (json) {
+			json_object_string_add(json, "asPath", bzo.aspath);
+			json_object_string_add(json, "communities",
+					       bzo.community);
+			json_object_string_add(json, "largeCommunities",
+					       bzo.lcommunity);
+		} else {
+			vty_out(vty, "    AS-Path          : %s\n", bzo.aspath);
+
+			if (bzo.community[0] != '\0')
+				vty_out(vty, "    Communities      : %s\n",
+					bzo.community);
+
+			if (bzo.lcommunity[0] != '\0')
+				vty_out(vty, "    Large-Communities: %s\n",
+					bzo.lcommunity);
+		}
+	}
 	default:
 		break;
 	}
@@ -1701,7 +1718,6 @@ DEFUN (no_ipv6_nht_default_route,
        "Filter Next Hop tracking route resolution\n"
        "Resolve via default route\n")
 {
-
 	ZEBRA_DECLVAR_CONTEXT(vrf, zvrf);
 
 	if (!zvrf)
@@ -1712,6 +1728,17 @@ DEFUN (no_ipv6_nht_default_route,
 
 	zvrf->zebra_rnh_ipv6_default_route = 0;
 	zebra_evaluate_rnh(zvrf, AFI_IP6, 0, RNH_NEXTHOP_TYPE, NULL);
+	return CMD_SUCCESS;
+}
+
+DEFPY_HIDDEN(rnh_hide_backups, rnh_hide_backups_cmd,
+	     "[no] ip nht hide-backup-events",
+	     NO_STR
+	     IP_STR
+	     "Nexthop-tracking configuration\n"
+	     "Hide notification about backup nexthops\n")
+{
+	rnh_set_hide_backups(!no);
 	return CMD_SUCCESS;
 }
 
@@ -2530,8 +2557,8 @@ DEFPY (evpn_mh_neigh_holdtime,
        "Duration in seconds\n")
 {
 
-	return zebra_evpn_mh_neigh_holdtime_update(vty, duration, 
-			no ? true : false);
+	return zebra_evpn_mh_neigh_holdtime_update(vty, duration,
+						   no ? true : false);
 }
 
 DEFPY (evpn_mh_startup_delay,
@@ -3661,6 +3688,9 @@ static int config_write_protocol(struct vty *vty)
 	if (!zebra_nhg_recursive_use_backups())
 		vty_out(vty, "no zebra nexthop resolve-via-backup\n");
 
+	if (rnh_get_hide_backups())
+		vty_out(vty, "ip nht hide-backup-events\n");
+
 #ifdef HAVE_NETLINK
 	/* Include netlink info */
 	netlink_config_write_helper(vty);
@@ -4120,6 +4150,8 @@ void zebra_vty_init(void)
 	install_element(VRF_NODE, &no_ip_nht_default_route_cmd);
 	install_element(VRF_NODE, &ipv6_nht_default_route_cmd);
 	install_element(VRF_NODE, &no_ipv6_nht_default_route_cmd);
+	install_element(CONFIG_NODE, &rnh_hide_backups_cmd);
+
 	install_element(VIEW_NODE, &show_ipv6_mroute_cmd);
 
 	/* Commands for VRF */

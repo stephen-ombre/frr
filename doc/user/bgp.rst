@@ -2111,6 +2111,10 @@ things on the wire.
             Large Community: lcommunity-1 65001:123:2
             Last update: Fri Apr 16 12:51:27 2021
 
+.. clicmd:: show bgp [afi] [safi] [all] alias WORD [wide|json]
+
+   Display prefixes with matching BGP community alias.
+
 .. _bgp-using-communities-in-route-map:
 
 Using Communities in Route Maps
@@ -3279,6 +3283,19 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
 
    Show a bgp peer summary for peers that are succesfully exchanging routes
    for the specified address family, and subsequent address-family.
+
+.. clicmd:: show bgp [afi] [safi] [all] summary neighbor [PEER] [json]
+
+   Show a bgp summary for the specified peer, address family, and
+   subsequent address-family. The neighbor filter can be used in combination
+   with the failed, established filters.
+
+.. clicmd:: show bgp [afi] [safi] [all] summary remote-as <internal|external|ASN> [json]
+
+   Show a bgp peer summary for the specified remote-as ASN or type (``internal``
+   for iBGP and ``external`` for eBGP sessions), address family, and subsequent
+   address-family. The remote-as filter can be used in combination with the
+   failed, established filters.
 
 .. clicmd:: show bgp [afi] [safi] [neighbor [PEER] [routes|advertised-routes|received-routes] [json]
 

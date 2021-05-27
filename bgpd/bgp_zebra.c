@@ -33,6 +33,7 @@
 #include "memory.h"
 #include "lib/json.h"
 #include "lib/bfd.h"
+#include "lib/route_opaque.h"
 #include "filter.h"
 #include "mpls.h"
 #include "vxlan.h"
@@ -1400,11 +1401,24 @@ void bgp_zebra_announce(struct bgp_dest *dest, const struct prefix *p,
 	is_add = (valid_nh_count || nhg_id) ? true : false;
 
 	if (is_add && CHECK_FLAG(bm->flags, BM_FLAG_SEND_EXTRA_DATA_TO_ZEBRA)) {
-		struct aspath *aspath = info->attr->aspath;
+		struct bgp_zebra_opaque bzo = {};
+
+		strlcpy(bzo.aspath, info->attr->aspath->str,
+			sizeof(bzo.aspath));
+
+		if (info->attr->flag & ATTR_FLAG_BIT(BGP_ATTR_COMMUNITIES))
+			strlcpy(bzo.community, info->attr->community->str,
+				sizeof(bzo.community));
+
+		if (info->attr->flag
+		    & ATTR_FLAG_BIT(BGP_ATTR_LARGE_COMMUNITIES))
+			strlcpy(bzo.lcommunity, info->attr->lcommunity->str,
+				sizeof(bzo.lcommunity));
 
 		SET_FLAG(api.message, ZAPI_MESSAGE_OPAQUE);
-		api.opaque.length = strlen(aspath->str) + 1;
-		memcpy(api.opaque.data, aspath->str, api.opaque.length);
+		api.opaque.length = MIN(sizeof(struct bgp_zebra_opaque),
+					ZAPI_MESSAGE_OPAQUE_LENGTH);
+		memcpy(api.opaque.data, &bzo, api.opaque.length);
 	}
 
 	if (allow_recursion)
@@ -2609,6 +2623,9 @@ static void bgp_zebra_connected(struct zclient *zclient)
 
 	zclient_num_connects++; /* increment even if not responding */
 
+	/* Send the client registration */
+	bfd_client_sendmsg(zclient, ZEBRA_BFD_CLIENT_REGISTER, VRF_DEFAULT);
+
 	/* At this point, we may or may not have BGP instances configured, but
 	 * we're only interested in the default VRF (others wouldn't have learnt
 	 * the VRF from Zebra yet.)
@@ -2618,9 +2635,6 @@ static void bgp_zebra_connected(struct zclient *zclient)
 		return;
 
 	bgp_zebra_instance_register(bgp);
-
-	/* Send the client registration */
-	bfd_client_sendmsg(zclient, ZEBRA_BFD_CLIENT_REGISTER, bgp->vrf_id);
 
 	/* tell label pool that zebra is connected */
 	bgp_lp_event_zebra_up();
