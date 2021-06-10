@@ -493,6 +493,7 @@ static int vtysh_execute_func(const char *line, int pager)
 	 */
 	while (ret != CMD_SUCCESS && ret != CMD_SUCCESS_DAEMON
 	       && ret != CMD_WARNING && ret != CMD_WARNING_CONFIG_FAILED
+	       && ret != CMD_ERR_AMBIGUOUS && ret != CMD_ERR_INCOMPLETE
 	       && vty->node > CONFIG_NODE) {
 		vty->node = node_parent(vty->node);
 		ret = cmd_execute(vty, line, &cmd, 1);
@@ -794,6 +795,7 @@ int vtysh_mark_file(const char *filename)
 		 */
 		while (ret != CMD_SUCCESS && ret != CMD_SUCCESS_DAEMON
 		       && ret != CMD_WARNING && ret != CMD_WARNING_CONFIG_FAILED
+		       && ret != CMD_ERR_AMBIGUOUS && ret != CMD_ERR_INCOMPLETE
 		       && vty->node > CONFIG_NODE) {
 			vty->node = node_parent(vty->node);
 			ret = cmd_execute_command_strict(vline, vty, &cmd);
@@ -1349,6 +1351,27 @@ static struct cmd_node rmap_node = {
 	.prompt = "%s(config-route-map)# ",
 };
 
+static struct cmd_node srv6_node = {
+	.name = "srv6",
+	.node = SRV6_NODE,
+	.parent_node = SEGMENT_ROUTING_NODE,
+	.prompt = "%s(config-srv6)# ",
+};
+
+static struct cmd_node srv6_locs_node = {
+	.name = "srv6-locators",
+	.node = SRV6_LOCS_NODE,
+	.parent_node = SRV6_NODE,
+	.prompt = "%s(config-srv6-locators)# ",
+};
+
+static struct cmd_node srv6_loc_node = {
+	.name = "srv6-locator",
+	.node = SRV6_LOC_NODE,
+	.parent_node = SRV6_LOCS_NODE,
+	.prompt = "%s(config-srv6-locator)# ",
+};
+
 #ifdef HAVE_PBRD
 static struct cmd_node pbr_map_node = {
 	.name = "pbr-map",
@@ -1485,6 +1508,13 @@ static struct cmd_node bmp_node = {
 	.node = BMP_NODE,
 	.parent_node = BGP_NODE,
 	.prompt = "%s(config-bgp-bmp)# "
+};
+
+static struct cmd_node bgp_srv6_node = {
+	.name = "bgp srv6",
+	.node = BGP_SRV6_NODE,
+	.parent_node = BGP_NODE,
+	.prompt = "%s(config-router-srv6)# ",
 };
 #endif /* HAVE_BGPD */
 
@@ -1659,6 +1689,31 @@ DEFUNSH(VTYSH_REALLYALL, vtysh_end_all, vtysh_end_all_cmd, "end",
 	return vtysh_end();
 }
 
+DEFUNSH(VTYSH_SR, srv6, srv6_cmd,
+	"srv6",
+	"Segment-Routing SRv6 configration\n")
+{
+	vty->node = SRV6_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_SR, srv6_locators, srv6_locators_cmd,
+	"locators",
+	"Segment-Routing SRv6 locators configration\n")
+{
+	vty->node = SRV6_LOCS_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_SR, srv6_locator, srv6_locator_cmd,
+	"locator WORD",
+	"Segment Routing SRv6 locator\n"
+	"Specify locator-name\n")
+{
+	vty->node = SRV6_LOC_NODE;
+	return CMD_SUCCESS;
+}
+
 #ifdef HAVE_BGPD
 DEFUNSH(VTYSH_BGPD, router_bgp, router_bgp_cmd,
 	"router bgp [(1-4294967295) [<view|vrf> WORD]]",
@@ -1813,6 +1868,39 @@ DEFUNSH(VTYSH_BGPD,
 	"Name of the BMP target group\n")
 {
 	vty->node = BMP_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_BGPD,
+        bgp_srv6,
+        bgp_srv6_cmd,
+        "segment-routing srv6",
+        "Segment-Routing configuration\n"
+        "Segment-Routing SRv6 configuration\n")
+{
+	vty->node = BGP_SRV6_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_BGPD,
+        exit_bgp_srv6,
+        exit_bgp_srv6_cmd,
+        "exit",
+        "exit Segment-Routing SRv6 configuration\n")
+{
+	if (vty->node == BGP_SRV6_NODE)
+		vty->node = BGP_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_BGPD,
+        quit_bgp_srv6,
+        quit_bgp_srv6_cmd,
+        "quit",
+        "quit Segment-Routing SRv6 configuration\n")
+{
+	if (vty->node == BGP_SRV6_NODE)
+		vty->node = BGP_NODE;
 	return CMD_SUCCESS;
 }
 
@@ -2084,7 +2172,7 @@ DEFUNSH(VTYSH_FABRICD, router_openfabric, router_openfabric_cmd, "router openfab
 #endif /* HAVE_FABRICD */
 
 #if defined(HAVE_PATHD)
-DEFUNSH(VTYSH_PATHD, segment_routing, segment_routing_cmd,
+DEFUNSH(VTYSH_SR, segment_routing, segment_routing_cmd,
 	"segment-routing",
 	"Configure segment routing\n")
 {
@@ -2363,6 +2451,30 @@ DEFUNSH(VTYSH_VRF, exit_vrf_config, exit_vrf_config_cmd, "exit-vrf",
 {
 	if (vty->node == VRF_NODE)
 		vty->node = CONFIG_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_SR, exit_srv6_config, exit_srv6_config_cmd, "exit",
+	"Exit from SRv6 configuration mode\n")
+{
+	if (vty->node == SRV6_NODE)
+		vty->node = SEGMENT_ROUTING_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_SR, exit_srv6_locs_config, exit_srv6_locs_config_cmd, "exit",
+	"Exit from SRv6-locator configuration mode\n")
+{
+	if (vty->node == SRV6_LOCS_NODE)
+		vty->node = SRV6_NODE;
+	return CMD_SUCCESS;
+}
+
+DEFUNSH(VTYSH_SR, exit_srv6_loc_config, exit_srv6_loc_config_cmd, "exit",
+	"Exit from SRv6-locators configuration mode\n")
+{
+	if (vty->node == SRV6_LOC_NODE)
+		vty->node = SRV6_LOCS_NODE;
 	return CMD_SUCCESS;
 }
 
@@ -3619,79 +3731,7 @@ DEFUN(find,
       "Find CLI command matching a regular expression\n"
       "Search pattern (POSIX regex)\n")
 {
-	const struct cmd_node *node;
-	const struct cmd_element *cli;
-	vector clis;
-	regex_t exp = {};
-	char *pattern = argv_concat(argv, argc, 1);
-	int cr = regcomp(&exp, pattern, REG_NOSUB | REG_EXTENDED);
-
-	XFREE(MTYPE_TMP, pattern);
-
-	if (cr != 0) {
-		switch (cr) {
-		case REG_BADBR:
-			vty_out(vty, "%% Invalid \\{...\\} expression\n");
-			break;
-		case REG_BADRPT:
-			vty_out(vty, "%% Bad repetition operator\n");
-			break;
-		case REG_BADPAT:
-			vty_out(vty, "%% Regex syntax error\n");
-			break;
-		case REG_ECOLLATE:
-			vty_out(vty, "%% Invalid collating element\n");
-			break;
-		case REG_ECTYPE:
-			vty_out(vty, "%% Invalid character class name\n");
-			break;
-		case REG_EESCAPE:
-			vty_out(vty,
-				"%% Regex ended with escape character (\\)\n");
-			break;
-		case REG_ESUBREG:
-			vty_out(vty,
-				"%% Invalid number in \\digit construction\n");
-			break;
-		case REG_EBRACK:
-			vty_out(vty, "%% Unbalanced square brackets\n");
-			break;
-		case REG_EPAREN:
-			vty_out(vty, "%% Unbalanced parentheses\n");
-			break;
-		case REG_EBRACE:
-			vty_out(vty, "%% Unbalanced braces\n");
-			break;
-		case REG_ERANGE:
-			vty_out(vty,
-				"%% Invalid endpoint in range expression\n");
-			break;
-		case REG_ESPACE:
-			vty_out(vty, "%% Failed to compile (out of memory)\n");
-			break;
-		}
-
-		goto done;
-	}
-
-
-	for (unsigned int i = 0; i < vector_active(cmdvec); i++) {
-		node = vector_slot(cmdvec, i);
-		if (!node)
-			continue;
-		clis = node->cmd_vector;
-		for (unsigned int j = 0; j < vector_active(clis); j++) {
-			cli = vector_slot(clis, j);
-
-			if (regexec(&exp, cli->string, 0, NULL, 0) == 0)
-				vty_out(vty, "  (%s)  %s\n",
-					node->name, cli->string);
-		}
-	}
-
-done:
-	regfree(&exp);
-	return CMD_SUCCESS;
+	return cmd_find_cmds(vty, argv, argc);
 }
 
 DEFUN_HIDDEN(show_cli_graph_vtysh,
@@ -4131,6 +4171,12 @@ void vtysh_init_vty(void)
 	install_element(BMP_NODE, &bmp_exit_cmd);
 	install_element(BMP_NODE, &bmp_quit_cmd);
 	install_element(BMP_NODE, &vtysh_end_all_cmd);
+
+	install_node(&bgp_srv6_node);
+	install_element(BGP_NODE, &bgp_srv6_cmd);
+	install_element(BGP_SRV6_NODE, &exit_bgp_srv6_cmd);
+	install_element(BGP_SRV6_NODE, &quit_bgp_srv6_cmd);
+	install_element(BGP_SRV6_NODE, &vtysh_end_all_cmd);
 #endif /* HAVE_BGPD */
 
 	/* ripd */
@@ -4430,6 +4476,22 @@ void vtysh_init_vty(void)
 	/* "end" command. */
 	install_element(CONFIG_NODE, &vtysh_end_all_cmd);
 	install_element(ENABLE_NODE, &vtysh_end_all_cmd);
+
+	/* SRv6 Data-plane */
+	install_node(&srv6_node);
+	install_element(SEGMENT_ROUTING_NODE, &srv6_cmd);
+	install_element(SRV6_NODE, &srv6_locators_cmd);
+	install_element(SRV6_NODE, &exit_srv6_config_cmd);
+	install_element(SRV6_NODE, &vtysh_end_all_cmd);
+
+	install_node(&srv6_locs_node);
+	install_element(SRV6_LOCS_NODE, &srv6_locator_cmd);
+	install_element(SRV6_LOCS_NODE, &exit_srv6_locs_config_cmd);
+	install_element(SRV6_LOCS_NODE, &vtysh_end_all_cmd);
+
+	install_node(&srv6_loc_node);
+	install_element(SRV6_LOC_NODE, &exit_srv6_loc_config_cmd);
+	install_element(SRV6_LOC_NODE, &vtysh_end_all_cmd);
 
 	install_element(ENABLE_NODE, &vtysh_show_running_config_cmd);
 	install_element(ENABLE_NODE, &vtysh_copy_running_config_cmd);

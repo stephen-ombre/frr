@@ -52,6 +52,7 @@
 #include "ospf6_spf.h"
 #include "ospf6d.h"
 #include "lib/json.h"
+#include "ospf6_nssa.h"
 
 DEFINE_MTYPE_STATIC(OSPF6D, OSPF6_TOP, "OSPF6 top");
 
@@ -259,7 +260,22 @@ static void ospf6_top_lsdb_hook_remove(struct ospf6_lsa *lsa)
 
 static void ospf6_top_route_hook_add(struct ospf6_route *route)
 {
-	struct ospf6 *ospf6 = route->table->scope;
+	struct ospf6 *ospf6 = NULL;
+	struct ospf6_area *oa = NULL;
+
+	if (route->table->scope_type == OSPF6_SCOPE_TYPE_GLOBAL)
+		ospf6 = route->table->scope;
+	else if (route->table->scope_type == OSPF6_SCOPE_TYPE_AREA) {
+		oa = (struct ospf6_area *)route->table->scope;
+		ospf6 = oa->ospf6;
+	} else {
+		if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL)
+		    || IS_OSPF6_DEBUG_BROUTER)
+			zlog_debug(
+				"%s: Route is not GLOBAL or scope is not of TYPE_AREA: %pFX",
+				__func__, &route->prefix);
+		return;
+	}
 
 	ospf6_abr_originate_summary(route, ospf6);
 	ospf6_zebra_route_update_add(route, ospf6);
@@ -267,7 +283,22 @@ static void ospf6_top_route_hook_add(struct ospf6_route *route)
 
 static void ospf6_top_route_hook_remove(struct ospf6_route *route)
 {
-	struct ospf6 *ospf6 = route->table->scope;
+	struct ospf6 *ospf6 = NULL;
+	struct ospf6_area *oa = NULL;
+
+	if (route->table->scope_type == OSPF6_SCOPE_TYPE_GLOBAL)
+		ospf6 = route->table->scope;
+	else if (route->table->scope_type == OSPF6_SCOPE_TYPE_AREA) {
+		oa = (struct ospf6_area *)route->table->scope;
+		ospf6 = oa->ospf6;
+	} else {
+		if (IS_OSPF6_DEBUG_EXAMIN(AS_EXTERNAL)
+		    || IS_OSPF6_DEBUG_BROUTER)
+			zlog_debug(
+				"%s: Route is not GLOBAL or scope is not of TYPE_AREA: %pFX",
+				__func__, &route->prefix);
+		return;
+	}
 
 	route->flag |= OSPF6_ROUTE_REMOVE;
 	ospf6_abr_originate_summary(route, ospf6);
@@ -393,6 +424,8 @@ static struct ospf6 *ospf6_create(const char *name)
 struct ospf6 *ospf6_instance_create(const char *name)
 {
 	struct ospf6 *ospf6;
+	struct vrf *vrf;
+	struct interface *ifp;
 
 	ospf6 = ospf6_create(name);
 	if (DFLT_OSPF6_LOG_ADJACENCY_CHANGES)
@@ -400,6 +433,13 @@ struct ospf6 *ospf6_instance_create(const char *name)
 	if (ospf6->router_id == 0)
 		ospf6_router_id_update(ospf6);
 	ospf6_add(ospf6);
+	if (ospf6->vrf_id != VRF_UNKNOWN) {
+		vrf = vrf_lookup_by_id(ospf6->vrf_id);
+		FOR_ALL_INTERFACES (vrf, ifp) {
+			if (ifp->info)
+				ospf6_interface_start(ifp->info);
+		}
+	}
 	if (ospf6->fd < 0)
 		return ospf6;
 
@@ -413,6 +453,7 @@ void ospf6_delete(struct ospf6 *o)
 {
 	struct listnode *node, *nnode;
 	struct ospf6_area *oa;
+	struct vrf *vrf;
 
 	QOBJ_UNREG(o);
 
@@ -441,6 +482,12 @@ void ospf6_delete(struct ospf6 *o)
 
 	ospf6_distance_reset(o);
 	route_table_finish(o->distance_table);
+
+	if (o->vrf_id != VRF_UNKNOWN) {
+		vrf = vrf_lookup_by_id(o->vrf_id);
+		if (vrf)
+			ospf6_vrf_unlink(o, vrf);
+	}
 
 	XFREE(MTYPE_OSPF6_TOP, o->name);
 	XFREE(MTYPE_OSPF6_TOP, o);
@@ -843,7 +890,7 @@ DEFUN (no_ospf6_distance_ospf6,
 	return CMD_SUCCESS;
 }
 
-DEFUN (ospf6_interface_area,
+DEFUN_HIDDEN (ospf6_interface_area,
        ospf6_interface_area_cmd,
        "interface IFNAME area <A.B.C.D|(0-4294967295)>",
        "Enable routing on an IPv6 interface\n"
@@ -861,6 +908,13 @@ DEFUN (ospf6_interface_area,
 	struct interface *ifp;
 	vrf_id_t vrf_id = VRF_DEFAULT;
 	int ipv6_count = 0;
+	uint32_t area_id;
+	int format;
+
+	vty_out(vty,
+		"This command is deprecated, because it is not VRF-aware.\n");
+	vty_out(vty,
+		"Please, use \"ipv6 ospf6 area\" on an interface instead.\n");
 
 	if (ospf6->vrf_id != VRF_UNKNOWN)
 		vrf_id = ospf6->vrf_id;
@@ -893,8 +947,17 @@ DEFUN (ospf6_interface_area,
 		return CMD_WARNING_CONFIG_FAILED;
 	}
 
-	/* parse Area-ID */
-	OSPF6_CMD_AREA_GET(argv[idx_ipv4]->arg, oa, ospf6);
+	if (str2area_id(argv[idx_ipv4]->arg, &area_id, &format)) {
+		vty_out(vty, "Malformed Area-ID: %s\n", argv[idx_ipv4]->arg);
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	oi->area_id = area_id;
+	oi->area_id_format = format;
+
+	oa = ospf6_area_lookup(area_id, ospf6);
+	if (oa == NULL)
+		oa = ospf6_area_create(area_id, ospf6, format);
 
 	/* attach interface to area */
 	listnode_add(oa->if_list, oi); /* sort ?? */
@@ -910,13 +973,15 @@ DEFUN (ospf6_interface_area,
 	ospf6_interface_enable(oi);
 
 	/* If the router is ABR, originate summary routes */
-	if (ospf6_is_router_abr(ospf6))
+	if (ospf6_check_and_set_router_abr(ospf6)) {
 		ospf6_abr_enable_area(oa);
+		ospf6_schedule_abr_task(oa->ospf6);
+	}
 
 	return CMD_SUCCESS;
 }
 
-DEFUN (no_ospf6_interface_area,
+DEFUN_HIDDEN (no_ospf6_interface_area,
        no_ospf6_interface_area_cmd,
        "no interface IFNAME area <A.B.C.D|(0-4294967295)>",
        NO_STR
@@ -935,6 +1000,11 @@ DEFUN (no_ospf6_interface_area,
 	struct interface *ifp;
 	uint32_t area_id;
 	vrf_id_t vrf_id = VRF_DEFAULT;
+
+	vty_out(vty,
+		"This command is deprecated, because it is not VRF-aware.\n");
+	vty_out(vty,
+		"Please, use \"no ipv6 ospf6 area\" on an interface instead.\n");
 
 	if (ospf6->vrf_id != VRF_UNKNOWN)
 		vrf_id = ospf6->vrf_id;
@@ -981,6 +1051,9 @@ DEFUN (no_ospf6_interface_area,
 		UNSET_FLAG(oa->flag, OSPF6_AREA_ENABLE);
 		ospf6_abr_disable_area(oa);
 	}
+
+	oi->area_id = 0;
+	oi->area_id_format = OSPF6_AREA_FMT_UNSET;
 
 	return CMD_SUCCESS;
 }
@@ -1559,9 +1632,6 @@ static int ospf6_distance_config_write(struct vty *vty, struct ospf6 *ospf6)
 /* OSPF configuration write function. */
 static int config_write_ospf6(struct vty *vty)
 {
-	struct listnode *j, *k;
-	struct ospf6_area *oa;
-	struct ospf6_interface *oi;
 	struct ospf6 *ospf6;
 	struct listnode *node, *nnode;
 
@@ -1612,11 +1682,6 @@ static int config_write_ospf6(struct vty *vty)
 		ospf6_distance_config_write(vty, ospf6);
 		ospf6_distribute_config_write(vty, ospf6);
 
-		for (ALL_LIST_ELEMENTS_RO(ospf6->area_list, j, oa)) {
-			for (ALL_LIST_ELEMENTS_RO(oa->if_list, k, oi))
-				vty_out(vty, " interface %s area %s\n",
-					oi->interface->name, oa->name);
-		}
 		vty_out(vty, "!\n");
 	}
 	return 0;

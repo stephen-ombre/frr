@@ -125,6 +125,7 @@ static const struct message bgp_pmsi_tnltype_str[] = {
 };
 
 #define VRFID_NONE_STR "-"
+#define SOFT_RECONFIG_TASK_MAX_PREFIX 25000
 
 DEFINE_HOOK(bgp_process,
 	    (struct bgp * bgp, afi_t afi, safi_t safi, struct bgp_dest *bn,
@@ -2347,7 +2348,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 			if (BGP_PATH_HOLDDOWN(pi1))
 				continue;
 			if (pi1->peer != bgp->peer_self)
-				if (pi1->peer->status != Established)
+				if (!peer_established(pi1->peer))
 					continue;
 
 			new_select = pi1;
@@ -2432,7 +2433,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 
 		if (pi->peer && pi->peer != bgp->peer_self
 		    && !CHECK_FLAG(pi->peer->sflags, PEER_STATUS_NSF_WAIT))
-			if (pi->peer->status != Established) {
+			if (!peer_established(pi->peer)) {
 
 				if (debug)
 					zlog_debug(
@@ -2502,7 +2503,7 @@ void bgp_best_selection(struct bgp *bgp, struct bgp_dest *dest,
 			if (pi->peer && pi->peer != bgp->peer_self
 			    && !CHECK_FLAG(pi->peer->sflags,
 					   PEER_STATUS_NSF_WAIT))
-				if (pi->peer->status != Established)
+				if (!peer_established(pi->peer))
 					continue;
 
 			if (!bgp_path_info_nexthop_cmp(pi, new_select)) {
@@ -3138,6 +3139,14 @@ void bgp_process(struct bgp *bgp, struct bgp_dest *dest, afi_t afi, safi_t safi)
 		if (BGP_DEBUG(update, UPDATE_OUT))
 			zlog_debug("BGP_NODE_SELECT_DEFER set for route %p",
 				   dest);
+		return;
+	}
+
+	if (CHECK_FLAG(dest->flags, BGP_NODE_SOFT_RECONFIG)) {
+		if (BGP_DEBUG(update, UPDATE_OUT))
+			zlog_debug(
+				"Soft reconfigure table in progress for route %p",
+				dest);
 		return;
 	}
 
@@ -4524,7 +4533,7 @@ static int bgp_announce_route_timer_expired(struct thread *t)
 	paf = THREAD_ARG(t);
 	peer = paf->peer;
 
-	if (peer->status != Established)
+	if (!peer_established(peer))
 		return 0;
 
 	if (!peer->afc_nego[paf->afi][paf->safi])
@@ -4591,6 +4600,60 @@ void bgp_announce_route_all(struct peer *peer)
 		bgp_announce_route(peer, afi, safi);
 }
 
+/* Flag or unflag bgp_dest to determine whether it should be treated by
+ * bgp_soft_reconfig_table_task.
+ * Flag if flag is true. Unflag if flag is false.
+ */
+static void bgp_soft_reconfig_table_flag(struct bgp_table *table, bool flag)
+{
+	struct bgp_dest *dest;
+	struct bgp_adj_in *ain;
+
+	if (!table)
+		return;
+
+	for (dest = bgp_table_top(table); dest; dest = bgp_route_next(dest)) {
+		for (ain = dest->adj_in; ain; ain = ain->next) {
+			if (ain->peer != NULL)
+				break;
+		}
+		if (flag && ain != NULL && ain->peer != NULL)
+			SET_FLAG(dest->flags, BGP_NODE_SOFT_RECONFIG);
+		else
+			UNSET_FLAG(dest->flags, BGP_NODE_SOFT_RECONFIG);
+	}
+}
+
+static int bgp_soft_reconfig_table_update(struct peer *peer,
+					  struct bgp_dest *dest,
+					  struct bgp_adj_in *ain, afi_t afi,
+					  safi_t safi, struct prefix_rd *prd)
+{
+	struct bgp_path_info *pi;
+	uint32_t num_labels = 0;
+	mpls_label_t *label_pnt = NULL;
+	struct bgp_route_evpn evpn;
+
+	for (pi = bgp_dest_get_bgp_path_info(dest); pi; pi = pi->next)
+		if (pi->peer == peer)
+			break;
+
+	if (pi && pi->extra)
+		num_labels = pi->extra->num_labels;
+	if (num_labels)
+		label_pnt = &pi->extra->label[0];
+	if (pi)
+		memcpy(&evpn, bgp_attr_get_evpn_overlay(pi->attr),
+		       sizeof(evpn));
+	else
+		memset(&evpn, 0, sizeof(evpn));
+
+	return bgp_update(peer, bgp_dest_get_prefix(dest), ain->addpath_rx_id,
+			  ain->attr, afi, safi, ZEBRA_ROUTE_BGP,
+			  BGP_ROUTE_NORMAL, prd, label_pnt, num_labels, 1,
+			  &evpn);
+}
+
 static void bgp_soft_reconfig_table(struct peer *peer, afi_t afi, safi_t safi,
 				    struct bgp_table *table,
 				    struct prefix_rd *prd)
@@ -4607,32 +4670,8 @@ static void bgp_soft_reconfig_table(struct peer *peer, afi_t afi, safi_t safi,
 			if (ain->peer != peer)
 				continue;
 
-			struct bgp_path_info *pi;
-			uint32_t num_labels = 0;
-			mpls_label_t *label_pnt = NULL;
-			struct bgp_route_evpn evpn;
-
-			for (pi = bgp_dest_get_bgp_path_info(dest); pi;
-			     pi = pi->next)
-				if (pi->peer == peer)
-					break;
-
-			if (pi && pi->extra)
-				num_labels = pi->extra->num_labels;
-			if (num_labels)
-				label_pnt = &pi->extra->label[0];
-			if (pi)
-				memcpy(&evpn,
-				       bgp_attr_get_evpn_overlay(pi->attr),
-				       sizeof(evpn));
-			else
-				memset(&evpn, 0, sizeof(evpn));
-
-			ret = bgp_update(peer, bgp_dest_get_prefix(dest),
-					 ain->addpath_rx_id, ain->attr, afi,
-					 safi, ZEBRA_ROUTE_BGP,
-					 BGP_ROUTE_NORMAL, prd, label_pnt,
-					 num_labels, 1, &evpn);
+			ret = bgp_soft_reconfig_table_update(peer, dest, ain,
+							     afi, safi, prd);
 
 			if (ret < 0) {
 				bgp_dest_unlock_node(dest);
@@ -4641,18 +4680,201 @@ static void bgp_soft_reconfig_table(struct peer *peer, afi_t afi, safi_t safi,
 		}
 }
 
+/* Do soft reconfig table per bgp table.
+ * Walk on SOFT_RECONFIG_TASK_MAX_PREFIX bgp_dest,
+ * when BGP_NODE_SOFT_RECONFIG is set,
+ * reconfig bgp_dest for list of table->soft_reconfig_peers peers.
+ * Schedule a new thread to continue the job.
+ * Without splitting the full job into several part,
+ * vtysh waits for the job to finish before responding to a BGP command
+ */
+static int bgp_soft_reconfig_table_task(struct thread *thread)
+{
+	uint32_t iter, max_iter;
+	int ret;
+	struct bgp_dest *dest;
+	struct bgp_adj_in *ain;
+	struct peer *peer;
+	struct bgp_table *table;
+	struct prefix_rd *prd;
+	struct listnode *node, *nnode;
+
+	table = THREAD_ARG(thread);
+	prd = NULL;
+
+	max_iter = SOFT_RECONFIG_TASK_MAX_PREFIX;
+	if (table->soft_reconfig_init) {
+		/* first call of the function with a new srta structure.
+		 * Don't do any treatment this time on nodes
+		 * in order vtysh to respond quickly
+		 */
+		max_iter = 0;
+	}
+
+	for (iter = 0, dest = bgp_table_top(table); (dest && iter < max_iter);
+	     dest = bgp_route_next(dest)) {
+		if (!CHECK_FLAG(dest->flags, BGP_NODE_SOFT_RECONFIG))
+			continue;
+
+		UNSET_FLAG(dest->flags, BGP_NODE_SOFT_RECONFIG);
+
+		for (ain = dest->adj_in; ain; ain = ain->next) {
+			for (ALL_LIST_ELEMENTS(table->soft_reconfig_peers, node,
+					       nnode, peer)) {
+				if (ain->peer != peer)
+					continue;
+
+				ret = bgp_soft_reconfig_table_update(
+					peer, dest, ain, table->afi,
+					table->safi, prd);
+				iter++;
+
+				if (ret < 0) {
+					bgp_dest_unlock_node(dest);
+					listnode_delete(
+						table->soft_reconfig_peers,
+						peer);
+					bgp_announce_route(peer, table->afi,
+							   table->safi);
+					if (list_isempty(
+						    table->soft_reconfig_peers)) {
+						list_delete(
+							&table->soft_reconfig_peers);
+						bgp_soft_reconfig_table_flag(
+							table, false);
+						return 0;
+					}
+				}
+			}
+		}
+	}
+
+	/* we're either starting the initial iteration,
+	 * or we're going to continue an ongoing iteration
+	 */
+	if (dest || table->soft_reconfig_init) {
+		table->soft_reconfig_init = false;
+		thread_add_event(bm->master, bgp_soft_reconfig_table_task,
+				 table, 0, &table->soft_reconfig_thread);
+		return 0;
+	}
+	/* we're done, clean up the background iteration context info and
+	schedule route annoucement
+	*/
+	for (ALL_LIST_ELEMENTS(table->soft_reconfig_peers, node, nnode, peer)) {
+		listnode_delete(table->soft_reconfig_peers, peer);
+		bgp_announce_route(peer, table->afi, table->safi);
+	}
+
+	list_delete(&table->soft_reconfig_peers);
+
+	return 0;
+}
+
+
+/* Cancel soft_reconfig_table task matching bgp instance, bgp_table
+ * and peer.
+ * - bgp cannot be NULL
+ * - if table and peer are NULL, cancel all threads within the bgp instance
+ * - if table is NULL and peer is not,
+ * remove peer in all threads within the bgp instance
+ * - if peer is NULL, cancel all threads matching table within the bgp instance
+ */
+void bgp_soft_reconfig_table_task_cancel(const struct bgp *bgp,
+					 const struct bgp_table *table,
+					 const struct peer *peer)
+{
+	struct peer *npeer;
+	struct listnode *node, *nnode;
+	int afi, safi;
+	struct bgp_table *ntable;
+
+	if (!bgp)
+		return;
+
+	FOREACH_AFI_SAFI (afi, safi) {
+		ntable = bgp->rib[afi][safi];
+		if (!ntable)
+			continue;
+		if (table && table != ntable)
+			continue;
+
+		for (ALL_LIST_ELEMENTS(ntable->soft_reconfig_peers, node, nnode,
+				       npeer)) {
+			if (peer && peer != npeer)
+				continue;
+			listnode_delete(ntable->soft_reconfig_peers, npeer);
+		}
+
+		if (!ntable->soft_reconfig_peers
+		    || !list_isempty(ntable->soft_reconfig_peers))
+			continue;
+
+		list_delete(&ntable->soft_reconfig_peers);
+		bgp_soft_reconfig_table_flag(ntable, false);
+		BGP_TIMER_OFF(ntable->soft_reconfig_thread);
+	}
+}
+
 void bgp_soft_reconfig_in(struct peer *peer, afi_t afi, safi_t safi)
 {
 	struct bgp_dest *dest;
 	struct bgp_table *table;
+	struct listnode *node, *nnode;
+	struct peer *npeer;
+	struct peer_af *paf;
 
-	if (peer->status != Established)
+	if (!peer_established(peer))
 		return;
 
 	if ((safi != SAFI_MPLS_VPN) && (safi != SAFI_ENCAP)
-	    && (safi != SAFI_EVPN))
-		bgp_soft_reconfig_table(peer, afi, safi, NULL, NULL);
-	else
+	    && (safi != SAFI_EVPN)) {
+		table = peer->bgp->rib[afi][safi];
+		if (!table)
+			return;
+
+		table->soft_reconfig_init = true;
+
+		if (!table->soft_reconfig_peers)
+			table->soft_reconfig_peers = list_new();
+		npeer = NULL;
+		/* add peer to the table soft_reconfig_peers if not already
+		 * there
+		 */
+		for (ALL_LIST_ELEMENTS(table->soft_reconfig_peers, node, nnode,
+				       npeer)) {
+			if (peer == npeer)
+				break;
+		}
+		if (peer != npeer)
+			listnode_add(table->soft_reconfig_peers, peer);
+
+		/* (re)flag all bgp_dest in table. Existing soft_reconfig_in job
+		 * on table would start back at the beginning.
+		 */
+		bgp_soft_reconfig_table_flag(table, true);
+
+		if (!table->soft_reconfig_thread)
+			thread_add_event(bm->master,
+					 bgp_soft_reconfig_table_task, table, 0,
+					 &table->soft_reconfig_thread);
+		/* Cancel bgp_announce_route_timer_expired threads.
+		 * bgp_announce_route_timer_expired threads have been scheduled
+		 * to announce routes as soon as the soft_reconfigure process
+		 * finishes.
+		 * In this case, soft_reconfigure is also scheduled by using
+		 * a thread but is planned after the
+		 * bgp_announce_route_timer_expired threads. It means that,
+		 * without cancelling the threads, the route announcement task
+		 * would run before the soft reconfiguration one. That would
+		 * useless and would block vtysh during several seconds. Route
+		 * announcements are rescheduled as soon as the soft_reconfigure
+		 * process finishes.
+		 */
+		paf = peer_af_find(peer, afi, safi);
+		if (paf)
+			bgp_stop_announce_route_timer(paf);
+	} else
 		for (dest = bgp_table_top(peer->bgp->rib[afi][safi]); dest;
 		     dest = bgp_route_next(dest)) {
 			table = bgp_dest_get_bgp_table_info(dest);
@@ -10569,13 +10791,13 @@ static int bgp_show_regexp(struct vty *vty, struct bgp *bgp, const char *regstr,
 			   bool use_json);
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi, uint8_t show_flags);
+			      safi_t safi, uint16_t show_flags);
 
 static int bgp_show_table(struct vty *vty, struct bgp *bgp, safi_t safi,
 			  struct bgp_table *table, enum bgp_show_type type,
 			  void *output_arg, char *rd, int is_last,
 			  unsigned long *output_cum, unsigned long *total_cum,
-			  unsigned long *json_header_depth, uint8_t show_flags,
+			  unsigned long *json_header_depth, uint16_t show_flags,
 			  enum rpki_states rpki_target_state)
 {
 	struct bgp_path_info *pi;
@@ -10994,7 +11216,7 @@ int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 	unsigned long json_header_depth = 0;
 	struct bgp_table *itable;
 	bool show_msg;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	show_msg = (!use_json && type == bgp_show_type_normal);
 
@@ -11036,7 +11258,7 @@ int bgp_show_table_rd(struct vty *vty, struct bgp *bgp, safi_t safi,
 }
 static int bgp_show(struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
 		    enum bgp_show_type type, void *output_arg,
-		    uint8_t show_flags, enum rpki_states rpki_target_state)
+		    uint16_t show_flags, enum rpki_states rpki_target_state)
 {
 	struct bgp_table *table;
 	unsigned long json_header_depth = 0;
@@ -11076,7 +11298,7 @@ static int bgp_show(struct vty *vty, struct bgp *bgp, afi_t afi, safi_t safi,
 }
 
 static void bgp_show_all_instances_routes_vty(struct vty *vty, afi_t afi,
-					      safi_t safi, uint8_t show_flags)
+					      safi_t safi, uint16_t show_flags)
 {
 	struct listnode *node, *nnode;
 	struct bgp *bgp;
@@ -11582,7 +11804,7 @@ static int bgp_show_lcommunity(struct vty *vty, struct bgp *bgp, int argc,
 	int i;
 	char *str;
 	int first = 0;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 	int ret;
 
 	if (uj)
@@ -11625,7 +11847,7 @@ static int bgp_show_lcommunity_list(struct vty *vty, struct bgp *bgp,
 				    safi_t safi, bool uj)
 {
 	struct community_list *list;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj)
 		SET_FLAG(show_flags, BGP_SHOW_OPT_JSON);
@@ -11705,7 +11927,7 @@ DEFUN (show_ip_bgp_large_community,
 	bool exact_match = 0;
 	struct bgp *bgp = NULL;
 	bool uj = use_json(argc, argv);
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj) {
 		argc--;
@@ -11909,7 +12131,7 @@ DEFPY(show_ip_bgp, show_ip_bgp_cmd,
 	int exact_match = 0;
 	struct bgp *bgp = NULL;
 	int idx = 0;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	/* [<ipv4|ipv6> [all]] */
 	if (all) {
@@ -12022,7 +12244,7 @@ DEFPY(show_ip_bgp_json, show_ip_bgp_json_cmd,
 	char *prefix_version = NULL;
 	char *bgp_community_alias = NULL;
 	bool first = true;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 	enum rpki_states rpki_target_state = RPKI_NOT_BEING_USED;
 
 	if (uj) {
@@ -12343,7 +12565,7 @@ DEFPY (show_ip_bgp_instance_all,
 	safi_t safi = SAFI_UNICAST;
 	struct bgp *bgp = NULL;
 	int idx = 0;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj) {
 		argc--;
@@ -12368,7 +12590,7 @@ static int bgp_show_regexp(struct vty *vty, struct bgp *bgp, const char *regstr,
 {
 	regex_t *regex;
 	int rc;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (use_json)
 		SET_FLAG(show_flags, BGP_SHOW_OPT_JSON);
@@ -12396,7 +12618,7 @@ static int bgp_show_prefix_list(struct vty *vty, struct bgp *bgp,
 				safi_t safi, enum bgp_show_type type)
 {
 	struct prefix_list *plist;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	plist = prefix_list_lookup(afi, prefix_list_str);
 	if (plist == NULL) {
@@ -12414,7 +12636,7 @@ static int bgp_show_filter_list(struct vty *vty, struct bgp *bgp,
 				enum bgp_show_type type)
 {
 	struct as_list *as_list;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	as_list = as_list_lookup(filter);
 	if (as_list == NULL) {
@@ -12432,7 +12654,7 @@ static int bgp_show_route_map(struct vty *vty, struct bgp *bgp,
 			      enum bgp_show_type type)
 {
 	struct route_map *rmap;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	rmap = route_map_lookup_by_name(rmap_str);
 	if (!rmap) {
@@ -12446,7 +12668,7 @@ static int bgp_show_route_map(struct vty *vty, struct bgp *bgp,
 
 static int bgp_show_community(struct vty *vty, struct bgp *bgp,
 			      const char *comstr, int exact, afi_t afi,
-			      safi_t safi, uint8_t show_flags)
+			      safi_t safi, uint16_t show_flags)
 {
 	struct community *com;
 	int ret = 0;
@@ -12471,7 +12693,7 @@ static int bgp_show_community_list(struct vty *vty, struct bgp *bgp,
 				   safi_t safi)
 {
 	struct community_list *list;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	list = community_list_lookup(bgp_clist, com, 0, COMMUNITY_LIST_MASTER);
 	if (list == NULL) {
@@ -12491,7 +12713,7 @@ static int bgp_show_prefix_longer(struct vty *vty, struct bgp *bgp,
 {
 	int ret;
 	struct prefix *p;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	p = prefix_new();
 
@@ -13284,7 +13506,7 @@ show_adj_route(struct vty *vty, struct peer *peer, struct bgp_table *table,
 	       afi_t afi, safi_t safi, enum bgp_show_adj_route_type type,
 	       const char *rmap_name, json_object *json, json_object *json_ar,
 	       json_object *json_scode, json_object *json_ocode,
-	       uint8_t show_flags, int *header1, int *header2, char *rd_str,
+	       uint16_t show_flags, int *header1, int *header2, char *rd_str,
 	       unsigned long *output_count, unsigned long *filtered_count)
 {
 	struct bgp_adj_in *ain;
@@ -13494,7 +13716,7 @@ show_adj_route(struct vty *vty, struct peer *peer, struct bgp_table *table,
 
 static int peer_adj_routes(struct vty *vty, struct peer *peer, afi_t afi,
 			   safi_t safi, enum bgp_show_adj_route_type type,
-			   const char *rmap_name, uint8_t show_flags)
+			   const char *rmap_name, uint16_t show_flags)
 {
 	struct bgp *bgp;
 	struct bgp_table *table;
@@ -13685,7 +13907,7 @@ DEFPY (show_ip_bgp_instance_neighbor_bestpath_route,
 	struct peer *peer;
 	enum bgp_show_adj_route_type type = bgp_show_adj_route_bestpath;
 	int idx = 0;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj)
 		SET_FLAG(show_flags, BGP_SHOW_OPT_JSON);
@@ -13741,7 +13963,7 @@ DEFPY (show_ip_bgp_instance_neighbor_advertised_route,
 	enum bgp_show_adj_route_type type = bgp_show_adj_route_advertised;
 	int idx = 0;
 	bool first = true;
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj) {
 		argc--;
@@ -13923,7 +14145,7 @@ static int bgp_show_neighbor_route(struct vty *vty, struct peer *peer,
 				   afi_t afi, safi_t safi,
 				   enum bgp_show_type type, bool use_json)
 {
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (use_json)
 		SET_FLAG(show_flags, BGP_SHOW_OPT_JSON);
@@ -13968,7 +14190,7 @@ DEFUN (show_ip_bgp_flowspec_routes_detailed,
 	struct bgp *bgp = NULL;
 	int idx = 0;
 	bool uj = use_json(argc, argv);
-	uint8_t show_flags = 0;
+	uint16_t show_flags = 0;
 
 	if (uj) {
 		argc--;

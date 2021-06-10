@@ -18,13 +18,6 @@ OSPF6 router
 
    Set router's Router-ID.
 
-.. clicmd:: interface IFNAME area (0-4294967295)
-
-.. clicmd:: interface IFNAME area A.B.C.D
-
-   Bind interface to specified area, and start sending OSPF packets. `area` can
-   be specified as 0.
-
 .. clicmd:: timers throttle spf (0-600000) (0-600000) (0-600000)
 
    This command sets the initial `delay`, the `initial-holdtime`
@@ -83,12 +76,34 @@ OSPF6 router
 OSPF6 area
 ==========
 
-Area support for OSPFv3 is not yet implemented.
+.. index:: [no] area A.B.C.D nssa
+.. clicmd:: [no] area A.B.C.D nssa
+
+NSSA Support in OSPFv3
+=======================
+
+The configuration of NSSA areas in OSPFv3 is supported using the CLI command
+area A.B.C.D nssa  in ospf6 router configuration mode.
+The following functionalities are implemented as per RFC 3101:
+
+1. Advertising Type-7 LSA into NSSA area when external route is redistributed
+   into OSPFv3
+2. Processing Type-7 LSA received from neighbor and installing route in the
+   route table
+3. Support for NSSA ABR functionality which is generating Type-5 LSA when
+   backbone area is configured. Currently translation od TYpe-7 LSA to Type-5 LSA
+   is enabled by default.
+4. Support for NSSA Translator functionality when there are multiple NSSA ABR
+   in an area
 
 .. _ospf6-interface:
 
 OSPF6 interface
 ===============
+
+.. clicmd:: ipv6 ospf6 area <A.B.C.D|(0-4294967295)>
+
+   Enable OSPFv3 on the interface and add it to the specified area.
 
 .. clicmd:: ipv6 ospf6 cost COST
 
@@ -247,12 +262,12 @@ Example of ospf6d configured on one interface and area:
 .. code-block:: frr
 
    interface eth0
+    ipv6 ospf6 area 0.0.0.0
     ipv6 ospf6 instance-id 0
    !
    router ospf6
     ospf6 router-id 212.17.55.53
     area 0.0.0.0 range 2001:770:105:2::/64
-    interface eth0 area 0.0.0.0
    !
 
 
@@ -264,6 +279,7 @@ Larger example with policy and various options set:
    debug ospf6 neighbor state
    !
    interface fxp0
+    ipv6 ospf6 area 0.0.0.0
     ipv6 ospf6 cost 1
     ipv6 ospf6 hello-interval 10
     ipv6 ospf6 dead-interval 40
@@ -284,7 +300,6 @@ Larger example with policy and various options set:
    router ospf6
     router-id 255.1.1.1
     redistribute static route-map static-ospf6
-    interface fxp0 area 0.0.0.0
    !
    access-list access4 permit 127.0.0.1/32
    !

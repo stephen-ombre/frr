@@ -892,6 +892,8 @@ int peer_af_delete(struct peer *peer, afi_t afi, safi_t safi)
 		return -1;
 
 	bgp = peer->bgp;
+	bgp_soft_reconfig_table_task_cancel(bgp, bgp->rib[afi][safi], peer);
+
 	bgp_stop_announce_route_timer(af);
 
 	if (PAF_SUBGRP(af)) {
@@ -1325,6 +1327,22 @@ int bgp_peer_gr_init(struct peer *peer)
 	bgp_peer_move_to_gr_mode(peer, PEER_GLOBAL_INHERIT);
 
 	return BGP_GR_SUCCESS;
+}
+
+static void bgp_srv6_init(struct bgp *bgp)
+{
+	bgp->srv6_enabled = false;
+	memset(bgp->srv6_locator_name, 0, sizeof(bgp->srv6_locator_name));
+	bgp->srv6_locator_chunks = list_new();
+	bgp->srv6_functions = list_new();
+}
+
+static void bgp_srv6_cleanup(struct bgp *bgp)
+{
+	if (bgp->srv6_locator_chunks)
+		list_delete(&bgp->srv6_locator_chunks);
+	if (bgp->srv6_functions)
+		list_delete(&bgp->srv6_functions);
 }
 
 /* Allocate new peer object, implicitely locked.  */
@@ -2137,7 +2155,7 @@ static int peer_activate_af(struct peer *peer, afi_t afi, safi_t safi)
 	if (!active && peer_active(peer)) {
 		bgp_timer_set(peer);
 	} else {
-		if (peer->status == Established) {
+		if (peer_established(peer)) {
 			if (CHECK_FLAG(peer->cap, PEER_CAP_DYNAMIC_RCV)) {
 				peer->afc_adv[afi][safi] = 1;
 				bgp_capability_send(peer, afi, safi,
@@ -2260,7 +2278,7 @@ static bool non_peergroup_deactivate_af(struct peer *peer, afi_t afi,
 		return true;
 	}
 
-	if (peer->status == Established) {
+	if (peer_established(peer)) {
 		if (CHECK_FLAG(peer->cap, PEER_CAP_DYNAMIC_RCV)) {
 			peer->afc_adv[afi][safi] = 0;
 			peer->afc_nego[afi][safi] = 0;
@@ -2389,6 +2407,8 @@ int peer_delete(struct peer *peer)
 
 	bgp = peer->bgp;
 	accept_peer = CHECK_FLAG(peer->sflags, PEER_STATUS_ACCEPT_PEER);
+
+	bgp_soft_reconfig_table_task_cancel(bgp, NULL, peer);
 
 	bgp_keepalives_off(peer);
 	bgp_reads_off(peer);
@@ -3238,6 +3258,7 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	bgp_evpn_init(bgp);
 	bgp_evpn_vrf_es_init(bgp);
 	bgp_pbr_init(bgp);
+	bgp_srv6_init(bgp);
 
 	/*initilize global GR FSM */
 	bgp_global_gr_init(bgp);
@@ -3555,6 +3576,8 @@ int bgp_delete(struct bgp *bgp)
 
 	assert(bgp);
 
+	bgp_soft_reconfig_table_task_cancel(bgp, NULL, NULL);
+
 	/* make sure we withdraw any exported routes */
 	vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP, bgp_get_default(),
 			   bgp);
@@ -3754,6 +3777,7 @@ void bgp_free(struct bgp *bgp)
 
 	bgp_evpn_cleanup(bgp);
 	bgp_pbr_cleanup(bgp);
+	bgp_srv6_cleanup(bgp);
 	XFREE(MTYPE_BGP_EVPN_INFO, bgp->evpn_info);
 
 	for (afi = AFI_IP; afi < AFI_MAX; afi++) {
@@ -4093,7 +4117,7 @@ void peer_change_action(struct peer *peer, afi_t afi, safi_t safi,
 	if (CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP))
 		return;
 
-	if (peer->status != Established)
+	if (!peer_established(peer))
 		return;
 
 	if (type == peer_change_reset) {
@@ -4585,7 +4609,7 @@ static int peer_af_flag_modify(struct peer *peer, afi_t afi, safi_t safi,
 
 	/* Execute action when peer is established.  */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)
-	    && peer->status == Established) {
+	    && peer_established(peer)) {
 		if (!set && flag == PEER_FLAG_SOFT_RECONFIG)
 			bgp_clear_adj_in(peer, afi, safi);
 		else {
@@ -4638,7 +4662,7 @@ static int peer_af_flag_modify(struct peer *peer, afi_t afi, safi_t safi,
 				  set != member_invert);
 
 			/* Execute flag action on peer-group member. */
-			if (member->status == Established) {
+			if (peer_established(member)) {
 				if (!set && flag == PEER_FLAG_SOFT_RECONFIG)
 					bgp_clear_adj_in(member, afi, safi);
 				else {
@@ -5040,7 +5064,7 @@ int peer_default_originate_set(struct peer *peer, afi_t afi, safi_t safi,
 	/* Check if handling a regular peer. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Update peer route announcements. */
-		if (peer->status == Established && peer->afc_nego[afi][safi]) {
+		if (peer_established(peer) && peer->afc_nego[afi][safi]) {
 			update_group_adjust_peer(peer_af_find(peer, afi, safi));
 			bgp_default_originate(peer, afi, safi, 0);
 			bgp_announce_route(peer, afi, safi);
@@ -5076,8 +5100,7 @@ int peer_default_originate_set(struct peer *peer, afi_t afi, safi_t safi,
 		}
 
 		/* Update peer route announcements. */
-		if (member->status == Established
-		    && member->afc_nego[afi][safi]) {
+		if (peer_established(member) && member->afc_nego[afi][safi]) {
 			update_group_adjust_peer(
 				peer_af_find(member, afi, safi));
 			bgp_default_originate(member, afi, safi, 0);
@@ -5117,7 +5140,7 @@ int peer_default_originate_unset(struct peer *peer, afi_t afi, safi_t safi)
 	/* Check if handling a regular peer. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Update peer route announcements. */
-		if (peer->status == Established && peer->afc_nego[afi][safi]) {
+		if (peer_established(peer) && peer->afc_nego[afi][safi]) {
 			update_group_adjust_peer(peer_af_find(peer, afi, safi));
 			bgp_default_originate(peer, afi, safi, 1);
 			bgp_announce_route(peer, afi, safi);
@@ -5148,7 +5171,7 @@ int peer_default_originate_unset(struct peer *peer, afi_t afi, safi_t safi)
 		member->default_rmap[afi][safi].map = NULL;
 
 		/* Update peer route announcements. */
-		if (member->status == Established && member->afc_nego[afi][safi]) {
+		if (peer_established(member) && member->afc_nego[afi][safi]) {
 			update_group_adjust_peer(peer_af_find(member, afi, safi));
 			bgp_default_originate(member, afi, safi, 1);
 			bgp_announce_route(member, afi, safi);
@@ -5198,10 +5221,10 @@ static void peer_on_policy_change(struct peer *peer, afi_t afi, safi_t safi,
 {
 	if (outbound) {
 		update_group_adjust_peer(peer_af_find(peer, afi, safi));
-		if (peer->status == Established)
+		if (peer_established(peer))
 			bgp_announce_route(peer, afi, safi);
 	} else {
-		if (peer->status != Established)
+		if (!peer_established(peer))
 			return;
 
 		if (CHECK_FLAG(peer->af_flags[afi][safi],
@@ -5397,7 +5420,7 @@ int peer_timers_connect_set(struct peer *peer, uint32_t connect)
 
 	/* Skip peer-group mechanics for regular peers. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
-		if (peer->status != Established) {
+		if (!peer_established(peer)) {
 			if (peer_active(peer))
 				BGP_EVENT_ADD(peer, BGP_Stop);
 			BGP_EVENT_ADD(peer, BGP_Start);
@@ -5418,7 +5441,7 @@ int peer_timers_connect_set(struct peer *peer, uint32_t connect)
 		member->connect = connect;
 		member->v_connect = connect;
 
-		if (member->status != Established) {
+		if (!peer_established(member)) {
 			if (peer_active(member))
 				BGP_EVENT_ADD(member, BGP_Stop);
 			BGP_EVENT_ADD(member, BGP_Start);
@@ -5451,7 +5474,7 @@ int peer_timers_connect_unset(struct peer *peer)
 
 	/* Skip peer-group mechanics for regular peers. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
-		if (peer->status != Established) {
+		if (!peer_established(peer)) {
 			if (peer_active(peer))
 				BGP_EVENT_ADD(peer, BGP_Stop);
 			BGP_EVENT_ADD(peer, BGP_Start);
@@ -5472,7 +5495,7 @@ int peer_timers_connect_unset(struct peer *peer)
 		member->connect = 0;
 		member->v_connect = peer->bgp->default_connect_retry;
 
-		if (member->status != Established) {
+		if (!peer_established(member)) {
 			if (peer_active(member))
 				BGP_EVENT_ADD(member, BGP_Stop);
 			BGP_EVENT_ADD(member, BGP_Start);
@@ -5499,7 +5522,7 @@ int peer_advertise_interval_set(struct peer *peer, uint32_t routeadv)
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Update peer route announcements. */
 		update_group_adjust_peer_afs(peer);
-		if (peer->status == Established)
+		if (peer_established(peer))
 			bgp_announce_route_all(peer);
 
 		/* Skip peer-group mechanics for regular peers. */
@@ -5522,7 +5545,7 @@ int peer_advertise_interval_set(struct peer *peer, uint32_t routeadv)
 
 		/* Update peer route announcements. */
 		update_group_adjust_peer_afs(member);
-		if (member->status == Established)
+		if (peer_established(member))
 			bgp_announce_route_all(member);
 	}
 
@@ -5556,7 +5579,7 @@ int peer_advertise_interval_unset(struct peer *peer)
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Update peer route announcements. */
 		update_group_adjust_peer_afs(peer);
-		if (peer->status == Established)
+		if (peer_established(peer))
 			bgp_announce_route_all(peer);
 
 		/* Skip peer-group mechanics for regular peers. */
@@ -5581,7 +5604,7 @@ int peer_advertise_interval_unset(struct peer *peer)
 
 		/* Update peer route announcements. */
 		update_group_adjust_peer_afs(member);
-		if (member->status == Established)
+		if (peer_established(member))
 			bgp_announce_route_all(member);
 	}
 
@@ -7126,7 +7149,7 @@ int peer_maximum_prefix_set(struct peer *peer, afi_t afi, safi_t safi,
 	/* Check if handling a regular peer. */
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Re-check if peer violates maximum-prefix. */
-		if ((peer->status == Established) && (peer->afc[afi][safi]))
+		if ((peer_established(peer)) && (peer->afc[afi][safi]))
 			bgp_maximum_prefix_overflow(peer, afi, safi, 1);
 
 		/* Skip peer-group mechanics for regular peers. */
@@ -7163,7 +7186,7 @@ int peer_maximum_prefix_set(struct peer *peer, afi_t afi, safi_t safi,
 				   PEER_FLAG_MAX_PREFIX_WARNING);
 
 		/* Re-check if peer violates maximum-prefix. */
-		if ((member->status == Established) && (member->afc[afi][safi]))
+		if ((peer_established(member)) && (member->afc[afi][safi]))
 			bgp_maximum_prefix_overflow(member, afi, safi, 1);
 	}
 
@@ -7448,7 +7471,7 @@ int peer_clear_soft(struct peer *peer, afi_t afi, safi_t safi,
 {
 	struct peer_af *paf;
 
-	if (peer->status != Established)
+	if (!peer_established(peer))
 		return 0;
 
 	if (!peer->afc[afi][safi])
@@ -7807,8 +7830,7 @@ void bgp_terminate(void)
 
 	for (ALL_LIST_ELEMENTS(bm->bgp, mnode, mnnode, bgp))
 		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer))
-			if (peer->status == Established
-			    || peer->status == OpenSent
+			if (peer_established(peer) || peer->status == OpenSent
 			    || peer->status == OpenConfirm)
 				bgp_notify_send(peer, BGP_NOTIFY_CEASE,
 						BGP_NOTIFY_CEASE_PEER_UNCONFIG);
@@ -7869,7 +7891,8 @@ struct peer *peer_lookup_in_view(struct vty *vty, struct bgp *bgp,
 					json_no, JSON_C_TO_STRING_PRETTY));
 			json_object_free(json_no);
 		} else
-			vty_out(vty, "No such neighbor in this view/vrf\n");
+			vty_out(vty, "No such neighbor in %s\n",
+				bgp->name_pretty);
 		return NULL;
 	}
 

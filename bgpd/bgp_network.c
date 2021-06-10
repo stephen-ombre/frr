@@ -581,7 +581,7 @@ static int bgp_accept(struct thread *thread)
 
 	SET_FLAG(peer->sflags, PEER_STATUS_ACCEPT_PEER);
 	/* Make dummy peer until read Open packet. */
-	if (peer1->status == Established
+	if (peer_established(peer1)
 	    && CHECK_FLAG(peer1->sflags, PEER_STATUS_NSF_MODE)) {
 		/* If we have an existing established connection with graceful
 		 * restart
@@ -895,7 +895,10 @@ int bgp_socket(struct bgp *bgp, unsigned short port, const char *address)
 		frr_with_privs(&bgpd_privs) {
 			sock = vrf_socket(ainfo->ai_family,
 					  ainfo->ai_socktype,
-					  ainfo->ai_protocol, bgp->vrf_id,
+					  ainfo->ai_protocol,
+					  (bgp->inst_type
+					   != BGP_INSTANCE_TYPE_VIEW
+					   ? bgp->vrf_id : VRF_DEFAULT),
 					  (bgp->inst_type
 					   == BGP_INSTANCE_TYPE_VRF
 					   ? bgp->name : NULL));

@@ -442,7 +442,7 @@ Require policy on EBGP
 
       exit1# show bgp summary
 
-      IPv4 Unicast Summary:
+      IPv4 Unicast Summary (VRF default):
       BGP router identifier 10.10.10.1, local AS number 65001 vrf-id 0
       BGP table version 4
       RIB entries 7, using 1344 bytes of memory
@@ -2597,6 +2597,19 @@ address-family:
    The CLI will disallow attempts to configure incompatible leaking
    modes.
 
+.. _bgp-l3vpn-srv6:
+
+L3VPN SRv6
+----------
+
+.. clicmd:: segment-routing srv6
+
+   Use SRv6 backend with BGP L3VPN, and go to its configuration node.
+
+.. clicmd:: locator NAME
+
+   Specify the SRv6 locator to be used for SRv6 L3VPN. The Locator name must
+   be set in zebra, but user can set it in any order.
 
 .. _bgp-evpn:
 
@@ -3245,7 +3258,7 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
 
       exit1# show ip bgp summary wide
 
-      IPv4 Unicast Summary:
+      IPv4 Unicast Summary (VRF default):
       BGP router identifier 192.168.100.1, local AS number 65534 vrf-id 0
       BGP table version 3
       RIB entries 5, using 920 bytes of memory
@@ -3296,6 +3309,13 @@ structure is extended with :clicmd:`show bgp [afi] [safi]`.
    for iBGP and ``external`` for eBGP sessions), address family, and subsequent
    address-family. The remote-as filter can be used in combination with the
    failed, established filters.
+
+.. clicmd:: show bgp [afi] [safi] [all] summary terse [json]
+
+   Shorten the output. Do not show the following information about the BGP
+   instances: the number of RIB entries, the table version and the used memory.
+   The ``terse`` option can be used in combination with the remote-as, neighbor,
+   failed and established filters, and with the ``wide`` option as well.
 
 .. clicmd:: show bgp [afi] [safi] [neighbor [PEER] [routes|advertised-routes|received-routes] [json]
 
@@ -3527,6 +3547,40 @@ Displaying Update Group Information
 .. clicmd:: show bgp update-groups statistics
 
    Display Information about update-group events in FRR.
+
+Segment-Routing IPv6
+--------------------
+
+.. clicmd:: show bgp segment-routing srv6
+
+   This command displays information about SRv6 L3VPN in bgpd.  Specifically,
+   what kind of Locator is being used, and its Locator chunk information.
+   And the SID of the SRv6 Function that is actually managed on bgpd.
+   In the following example, bgpd is using a Locator named loc1, and two SRv6
+   Functions are managed to perform VPNv6 VRF redirect for vrf10 and vrf20.
+
+::
+
+   router# show bgp segment-routing srv6
+   locator_name: loc1
+   locator_chunks:
+   - 2001:db8:1:1::/64
+   functions:
+   - sid: 2001:db8:1:1::100
+     locator: loc1
+   - sid: 2001:db8:1:1::200
+     locator: loc1
+   bgps:
+   - name: default
+     vpn_policy[AFI_IP].tovpn_sid: none
+     vpn_policy[AFI_IP6].tovpn_sid: none
+   - name: vrf10
+     vpn_policy[AFI_IP].tovpn_sid: none
+     vpn_policy[AFI_IP6].tovpn_sid: 2001:db8:1:1::100
+   - name: vrf20
+     vpn_policy[AFI_IP].tovpn_sid: none
+     vpn_policy[AFI_IP6].tovpn_sid: 2001:db8:1:1::200
+
 
 .. _bgp-route-reflector:
 
