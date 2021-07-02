@@ -1263,7 +1263,6 @@ static struct cmd_node pw_node = {
 	.prompt = "%s(config-pw)# ",
 };
 
-#if defined(HAVE_PATHD)
 static struct cmd_node segment_routing_node = {
 	.name = "segment-routing",
 	.node = SEGMENT_ROUTING_NODE,
@@ -1271,6 +1270,7 @@ static struct cmd_node segment_routing_node = {
 	.prompt = "%s(config-sr)# ",
 };
 
+#if defined(HAVE_PATHD)
 static struct cmd_node sr_traffic_eng_node = {
 	.name = "sr traffic-eng",
 	.node = SR_TRAFFIC_ENG_NODE,
@@ -2171,7 +2171,6 @@ DEFUNSH(VTYSH_FABRICD, router_openfabric, router_openfabric_cmd, "router openfab
 }
 #endif /* HAVE_FABRICD */
 
-#if defined(HAVE_PATHD)
 DEFUNSH(VTYSH_SR, segment_routing, segment_routing_cmd,
 	"segment-routing",
 	"Configure segment routing\n")
@@ -2180,6 +2179,7 @@ DEFUNSH(VTYSH_SR, segment_routing, segment_routing_cmd,
 	return CMD_SUCCESS;
 }
 
+#if defined (HAVE_PATHD)
 DEFUNSH(VTYSH_PATHD, sr_traffic_eng, sr_traffic_eng_cmd,
 	"traffic-eng",
 	"Configure SR traffic engineering\n")
@@ -2664,6 +2664,18 @@ DEFUNSH(VTYSH_KEYS, vtysh_quit_keys, vtysh_quit_keys_cmd, "quit",
 	return vtysh_exit_keys(self, vty, argc, argv);
 }
 
+DEFUNSH(VTYSH_SR, vtysh_exit_sr, vtysh_exit_sr_cmd, "exit",
+	"Exit current mode and down to previous mode\n")
+{
+	return vtysh_exit(vty);
+}
+
+DEFUNSH(VTYSH_SR, vtysh_quit_sr, vtysh_quit_sr_cmd, "quit",
+	"Exit current mode and down to previous mode\n")
+{
+	return vtysh_exit(vty);
+}
+
 #if defined(HAVE_PATHD)
 DEFUNSH(VTYSH_PATHD, vtysh_exit_pathd, vtysh_exit_pathd_cmd, "exit",
 	"Exit current mode and down to previous mode\n")
@@ -2839,7 +2851,6 @@ DEFUN (vtysh_show_poll,
 	return show_per_daemon(vty, argv, argc, "Thread statistics for %s:\n");
 }
 
-#ifndef EXCLUDE_CPU_TIME
 DEFUN (vtysh_show_thread,
        vtysh_show_thread_cmd,
        "show thread cpu [FILTER]",
@@ -2850,7 +2861,6 @@ DEFUN (vtysh_show_thread,
 {
 	return show_per_daemon(vty, argv, argc, "Thread statistics for %s:\n");
 }
-#endif
 
 DEFUN (vtysh_show_work_queues,
        vtysh_show_work_queues_cmd,
@@ -4329,15 +4339,17 @@ void vtysh_init_vty(void)
 	install_element(BFD_PROFILE_NODE, &vtysh_end_all_cmd);
 #endif /* HAVE_BFDD */
 
-#if defined(HAVE_PATHD)
 	install_node(&segment_routing_node);
+	install_element(SEGMENT_ROUTING_NODE, &vtysh_exit_sr_cmd);
+	install_element(SEGMENT_ROUTING_NODE, &vtysh_quit_sr_cmd);
+	install_element(SEGMENT_ROUTING_NODE, &vtysh_end_all_cmd);
+
+#if defined(HAVE_PATHD)
 	install_node(&sr_traffic_eng_node);
 	install_node(&srte_segment_list_node);
 	install_node(&srte_policy_node);
 	install_node(&srte_candidate_dyn_node);
 
-	install_element(SEGMENT_ROUTING_NODE, &vtysh_exit_pathd_cmd);
-	install_element(SEGMENT_ROUTING_NODE, &vtysh_quit_pathd_cmd);
 	install_element(SR_TRAFFIC_ENG_NODE, &vtysh_exit_pathd_cmd);
 	install_element(SR_TRAFFIC_ENG_NODE, &vtysh_quit_pathd_cmd);
 	install_element(SR_SEGMENT_LIST_NODE, &vtysh_exit_pathd_cmd);
@@ -4347,7 +4359,7 @@ void vtysh_init_vty(void)
 	install_element(SR_CANDIDATE_DYN_NODE, &vtysh_exit_pathd_cmd);
 	install_element(SR_CANDIDATE_DYN_NODE, &vtysh_quit_pathd_cmd);
 
-	install_element(SEGMENT_ROUTING_NODE, &vtysh_end_all_cmd);
+
 	install_element(SR_TRAFFIC_ENG_NODE, &vtysh_end_all_cmd);
 	install_element(SR_SEGMENT_LIST_NODE, &vtysh_end_all_cmd);
 	install_element(SR_POLICY_NODE, &vtysh_end_all_cmd);
@@ -4553,9 +4565,7 @@ void vtysh_init_vty(void)
 	install_element(VIEW_NODE, &vtysh_show_modules_cmd);
 	install_element(VIEW_NODE, &vtysh_show_work_queues_cmd);
 	install_element(VIEW_NODE, &vtysh_show_work_queues_daemon_cmd);
-#ifndef EXCLUDE_CPU_TIME
 	install_element(VIEW_NODE, &vtysh_show_thread_cmd);
-#endif
 	install_element(VIEW_NODE, &vtysh_show_poll_cmd);
 
 	/* Logging */

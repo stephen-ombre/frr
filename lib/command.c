@@ -255,6 +255,9 @@ static bool cmd_hash_cmp(const void *a, const void *b)
 /* Install top node of command vector. */
 void install_node(struct cmd_node *node)
 {
+#define CMD_HASH_STR_SIZE 256
+	char hash_name[CMD_HASH_STR_SIZE];
+
 	vector_set_index(cmdvec, node->node, node);
 	node->cmdgraph = graph_new();
 	node->cmd_vector = vector_init(VECTOR_MIN_SIZE);
@@ -263,8 +266,10 @@ void install_node(struct cmd_node *node)
 		cmd_token_new(START_TKN, CMD_ATTR_NORMAL, NULL, NULL);
 	graph_new_node(node->cmdgraph, token,
 		       (void (*)(void *)) & cmd_token_del);
-	node->cmd_hash = hash_create_size(16, cmd_hash_key, cmd_hash_cmp,
-					  "Command Hash");
+
+	snprintf(hash_name, sizeof(hash_name), "Command Hash: %s", node->name);
+	node->cmd_hash =
+		hash_create_size(16, cmd_hash_key, cmd_hash_cmp, hash_name);
 }
 
 /* Return prompt character of specified node. */
@@ -433,6 +438,36 @@ static int config_write_host(struct vty *vty)
 					host.enable);
 		}
 		log_config_write(vty);
+
+		/* print disable always, but enable only if default is flipped
+		 * => prep for future removal of compile-time knob
+		 */
+		if (!cputime_enabled)
+			vty_out(vty, "no service cputime-stats\n");
+#ifdef EXCLUDE_CPU_TIME
+		else
+			vty_out(vty, "service cputime-stats\n");
+#endif
+
+		if (!cputime_threshold)
+			vty_out(vty, "no service cputime-warning\n");
+#if defined(CONSUMED_TIME_CHECK) && CONSUMED_TIME_CHECK != 5000000
+		else /* again, always print non-default */
+#else
+		else if (cputime_threshold != 5000000)
+#endif
+			vty_out(vty, "service cputime-warning %lu\n",
+				cputime_threshold);
+
+		if (!walltime_threshold)
+			vty_out(vty, "no service walltime-warning\n");
+#if defined(CONSUMED_TIME_CHECK) && CONSUMED_TIME_CHECK != 5000000
+		else /* again, always print non-default */
+#else
+		else if (walltime_threshold != 5000000)
+#endif
+			vty_out(vty, "service walltime-warning %lu\n",
+				walltime_threshold);
 
 		if (host.advanced)
 			vty_out(vty, "service advanced-vty\n");

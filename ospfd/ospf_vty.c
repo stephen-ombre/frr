@@ -6616,7 +6616,7 @@ static void show_lsa_prefix_set(struct vty *vty, struct prefix_ls *lp,
 	if (id == NULL)
 		lp->prefixlen = 0;
 	else if (adv_router == NULL) {
-		lp->prefixlen = 32;
+		lp->prefixlen = IPV4_MAX_BITLEN;
 		lp->id = *id;
 	} else {
 		lp->prefixlen = 64;
@@ -10913,6 +10913,8 @@ static void show_ip_ospf_route_external(struct vty *vty, struct ospf *ospf,
 						       "N E1");
 				json_object_int_add(json_route, "cost",
 						    er->cost);
+				json_object_int_add(json_route, "tag",
+						    er->u.ext.tag);
 			} else {
 				vty_out(vty,
 					"N E1 %-18s    [%d] tag: %" ROUTE_TAG_PRI
@@ -10926,6 +10928,10 @@ static void show_ip_ospf_route_external(struct vty *vty, struct ospf *ospf,
 						       "N E2");
 				json_object_int_add(json_route, "cost",
 						    er->cost);
+				json_object_int_add(json_route, "type2cost",
+						    er->u.ext.type2_cost);
+				json_object_int_add(json_route, "tag",
+						    er->u.ext.tag);
 			} else {
 				vty_out(vty,
 					"N E2 %-18s    [%d/%d] tag: %" ROUTE_TAG_PRI
@@ -12958,6 +12964,8 @@ void ospf_vty_init(void)
 	/* Max path configurations */
 	install_element(OSPF_NODE, &ospf_max_multipath_cmd);
 	install_element(OSPF_NODE, &no_ospf_max_multipath_cmd);
+
+	vrf_cmd_init(NULL, &ospfd_privs);
 
 	/* Init interface related vty commands. */
 	ospf_vty_if_init();

@@ -185,6 +185,8 @@ struct ospf6_interface *ospf6_interface_create(struct interface *ifp)
 
 	oi = XCALLOC(MTYPE_OSPF6_IF, sizeof(struct ospf6_interface));
 
+	oi->obuf = ospf6_fifo_new();
+
 	oi->area = (struct ospf6_area *)NULL;
 	oi->neighbor_list = list_new();
 	oi->neighbor_list->cmp = ospf6_neighbor_cmp;
@@ -242,6 +244,8 @@ void ospf6_interface_delete(struct ospf6_interface *oi)
 	struct ospf6_neighbor *on;
 
 	QOBJ_UNREG(oi);
+
+	ospf6_fifo_free(oi->obuf);
 
 	for (ALL_LIST_ELEMENTS(oi->neighbor_list, node, nnode, on))
 		ospf6_neighbor_delete(on);
@@ -701,20 +705,17 @@ int interface_up(struct thread *thread)
 
 	/* check physical interface is up */
 	if (!if_is_operative(oi->interface)) {
-		if (IS_OSPF6_DEBUG_INTERFACE)
-			zlog_debug(
-				"Interface %s is down, can't execute [InterfaceUp]",
-				oi->interface->name);
+		zlog_warn("Interface %s is down, can't execute [InterfaceUp]",
+			  oi->interface->name);
 		return 0;
 	}
 
 	/* check interface has a link-local address */
 	if (!(ospf6_interface_get_linklocal_address(oi->interface)
 	      || if_is_loopback_or_vrf(oi->interface))) {
-		if (IS_OSPF6_DEBUG_INTERFACE)
-			zlog_debug(
-				"Interface %s has no link local address, can't execute [InterfaceUp]",
-				oi->interface->name);
+		zlog_warn(
+			"Interface %s has no link local address, can't execute [InterfaceUp]",
+			oi->interface->name);
 		return 0;
 	}
 
@@ -731,7 +732,7 @@ int interface_up(struct thread *thread)
 
 	/* If no area assigned, return */
 	if (oi->area == NULL) {
-		zlog_debug(
+		zlog_warn(
 			"%s: Not scheduleing Hello for %s as there is no area assigned yet",
 			__func__, oi->interface->name);
 		return 0;
@@ -887,6 +888,15 @@ int interface_down(struct thread *thread)
 	if (oi->state > OSPF6_INTERFACE_DOWN)
 		ospf6_sso(oi->interface->ifindex, &allspfrouters6,
 			  IPV6_LEAVE_GROUP, ospf6->fd);
+
+	/* deal with write fifo */
+	ospf6_fifo_flush(oi->obuf);
+	if (oi->on_write_q) {
+		listnode_delete(ospf6->oi_write_q, oi);
+		if (list_isempty(ospf6->oi_write_q))
+			thread_cancel(&ospf6->t_write);
+		oi->on_write_q = 0;
+	}
 
 	ospf6_interface_state_change(OSPF6_INTERFACE_DOWN, oi);
 
@@ -1622,6 +1632,9 @@ void ospf6_interface_start(struct ospf6_interface *oi)
 	if (oi->area_id_format == OSPF6_AREA_FMT_UNSET)
 		return;
 
+	if (oi->area)
+		return;
+
 	ospf6 = ospf6_lookup_by_vrf_id(oi->interface->vrf_id);
 	if (!ospf6)
 		return;
@@ -1971,6 +1984,38 @@ DEFUN (no_auto_cost_reference_bandwidth,
 	return CMD_SUCCESS;
 }
 
+
+DEFUN (ospf6_write_multiplier,
+       ospf6_write_multiplier_cmd,
+       "write-multiplier (1-100)",
+       "Write multiplier\n"
+       "Maximum number of interface serviced per write\n")
+{
+	VTY_DECLVAR_CONTEXT(ospf6, o);
+	uint32_t write_oi_count;
+
+	write_oi_count = strtol(argv[1]->arg, NULL, 10);
+	if (write_oi_count < 1 || write_oi_count > 100) {
+		vty_out(vty, "write-multiplier value is invalid\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	o->write_oi_count = write_oi_count;
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_ospf6_write_multiplier,
+       no_ospf6_write_multiplier_cmd,
+       "no write-multiplier (1-100)",
+       NO_STR
+       "Write multiplier\n"
+       "Maximum number of interface serviced per write\n")
+{
+	VTY_DECLVAR_CONTEXT(ospf6, o);
+
+	o->write_oi_count = OSPF6_WRITE_INTERFACE_COUNT_DEFAULT;
+	return CMD_SUCCESS;
+}
 
 DEFUN (ipv6_ospf6_hellointerval,
        ipv6_ospf6_hellointerval_cmd,
@@ -2644,10 +2689,13 @@ void ospf6_interface_init(void)
 	/* reference bandwidth commands */
 	install_element(OSPF6_NODE, &auto_cost_reference_bandwidth_cmd);
 	install_element(OSPF6_NODE, &no_auto_cost_reference_bandwidth_cmd);
+	/* write-multiplier commands */
+	install_element(OSPF6_NODE, &ospf6_write_multiplier_cmd);
+	install_element(OSPF6_NODE, &no_ospf6_write_multiplier_cmd);
 }
 
 /* Clear the specified interface structure */
-static void ospf6_interface_clear(struct vty *vty, struct interface *ifp)
+void ospf6_interface_clear(struct interface *ifp)
 {
 	struct ospf6_interface *oi;
 
@@ -2685,7 +2733,7 @@ DEFUN (clear_ipv6_ospf6_interface,
 	if (argc == 4) /* Clear all the ospfv3 interfaces. */
 	{
 		FOR_ALL_INTERFACES (vrf, ifp)
-			ospf6_interface_clear(vty, ifp);
+			ospf6_interface_clear(ifp);
 	} else /* Interface name is specified. */
 	{
 		if ((ifp = if_lookup_by_name(argv[idx_ifname]->arg,
@@ -2695,7 +2743,7 @@ DEFUN (clear_ipv6_ospf6_interface,
 				argv[idx_ifname]->arg);
 			return CMD_WARNING;
 		}
-		ospf6_interface_clear(vty, ifp);
+		ospf6_interface_clear(ifp);
 	}
 
 	return CMD_SUCCESS;

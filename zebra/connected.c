@@ -75,7 +75,7 @@ static void connected_announce(struct interface *ifp, struct connected *ifc)
 
 	if (!if_is_loopback(ifp) && ifc->address->family == AF_INET &&
 	    !IS_ZEBRA_IF_VRF(ifp)) {
-		if (ifc->address->prefixlen == 32)
+		if (ifc->address->prefixlen == IPV4_MAX_BITLEN)
 			SET_FLAG(ifc->flags, ZEBRA_IFA_UNNUMBERED);
 		else
 			UNSET_FLAG(ifc->flags, ZEBRA_IFA_UNNUMBERED);
@@ -198,7 +198,7 @@ static void connected_update(struct interface *ifp, struct connected *ifc)
 void connected_up(struct interface *ifp, struct connected *ifc)
 {
 	afi_t afi;
-	struct prefix p = {0};
+	struct prefix p;
 	struct nexthop nh = {
 		.type = NEXTHOP_TYPE_IFINDEX,
 		.ifindex = ifp->ifindex,
@@ -225,7 +225,7 @@ void connected_up(struct interface *ifp, struct connected *ifc)
 	/* Ensure 'down' flag is cleared */
 	UNSET_FLAG(ifc->conf, ZEBRA_IFC_DOWN);
 
-	PREFIX_COPY(&p, CONNECTED_PREFIX(ifc));
+	prefix_copy(&p, CONNECTED_PREFIX(ifc));
 
 	/* Apply mask to the network. */
 	apply_mask(&p);
@@ -277,9 +277,9 @@ void connected_up(struct interface *ifp, struct connected *ifc)
 	 * resolve to the same network and mask
 	 */
 	for (ALL_LIST_ELEMENTS_RO(ifp->connected, cnode, c)) {
-		struct prefix cp = {0};
+		struct prefix cp;
 
-		PREFIX_COPY(&cp, CONNECTED_PREFIX(c));
+		prefix_copy(&cp, CONNECTED_PREFIX(c));
 		apply_mask(&cp);
 
 		if (prefix_same(&cp, &p) &&
@@ -330,8 +330,8 @@ void connected_add_ipv4(struct interface *ifp, int flags, struct in_addr *addr,
 	p = prefix_ipv4_new();
 	p->family = AF_INET;
 	p->prefix = *addr;
-	p->prefixlen = CHECK_FLAG(flags, ZEBRA_IFA_PEER) ? IPV4_MAX_PREFIXLEN
-							 : prefixlen;
+	p->prefixlen =
+		CHECK_FLAG(flags, ZEBRA_IFA_PEER) ? IPV4_MAX_BITLEN : prefixlen;
 	ifc->address = (struct prefix *)p;
 
 	/* If there is a peer address. */
@@ -358,8 +358,7 @@ void connected_add_ipv4(struct interface *ifp, int flags, struct in_addr *addr,
 	}
 
 	/* no destination address was supplied */
-	if (!dest && (prefixlen == IPV4_MAX_PREFIXLEN)
-		&& if_is_pointopoint(ifp))
+	if (!dest && (prefixlen == IPV4_MAX_BITLEN) && if_is_pointopoint(ifp))
 		zlog_debug(
 			"PtP interface %s with addr %pI4/%d needs a peer address",
 			ifp->name, addr, prefixlen);
@@ -412,7 +411,7 @@ void connected_down(struct interface *ifp, struct connected *ifc)
 		return;
 	}
 
-	PREFIX_COPY(&p, CONNECTED_PREFIX(ifc));
+	prefix_copy(&p, CONNECTED_PREFIX(ifc));
 
 	/* Apply mask to the network. */
 	apply_mask(&p);
@@ -450,7 +449,7 @@ void connected_down(struct interface *ifp, struct connected *ifc)
 	for (ALL_LIST_ELEMENTS_RO(ifp->connected, cnode, c)) {
 		struct prefix cp;
 
-		PREFIX_COPY(&cp, CONNECTED_PREFIX(c));
+		prefix_copy(&cp, CONNECTED_PREFIX(c));
 		apply_mask(&cp);
 
 		if (prefix_same(&p, &cp) &&
@@ -512,8 +511,8 @@ void connected_delete_ipv4(struct interface *ifp, int flags,
 	memset(&p, 0, sizeof(struct prefix));
 	p.family = AF_INET;
 	p.u.prefix4 = *addr;
-	p.prefixlen = CHECK_FLAG(flags, ZEBRA_IFA_PEER) ? IPV4_MAX_PREFIXLEN
-							: prefixlen;
+	p.prefixlen =
+		CHECK_FLAG(flags, ZEBRA_IFA_PEER) ? IPV4_MAX_BITLEN : prefixlen;
 
 	if (dest) {
 		memset(&d, 0, sizeof(struct prefix));

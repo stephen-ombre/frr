@@ -123,15 +123,6 @@ extern "C" {
 #define assume(x)
 #endif
 
-/* pure = function does not modify memory & return value is the same if
- * memory hasn't changed (=> allows compiler to optimize)
- *
- * Mostly autodetected by the compiler if function body is available (i.e.
- * static inline functions in headers).  Since that implies it should only be
- * used in headers for non-inline functions, the "extern" is included here.
- */
-#define ext_pure	extern __attribute__((pure))
-
 /* for helper functions defined inside macros */
 #define macro_inline	static inline __attribute__((unused))
 #define macro_pure	static inline __attribute__((unused, pure))
@@ -356,7 +347,11 @@ extern "C" {
 #define PRIx64 "Lx"
 
 #else /* !_FRR_ATTRIBUTE_PRINTFRR */
+#ifdef __NetBSD__
+#define PRINTFRR(a, b) __attribute__((format(gnu_syslog, a, b)))
+#else
 #define PRINTFRR(a, b) __attribute__((format(printf, a, b)))
+#endif
 
 /* frr-format plugin is C-only for now, so no point in doing these shenanigans
  * for C++...  (also they can break some C++ stuff...)

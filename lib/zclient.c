@@ -446,7 +446,7 @@ enum zclient_send_status zclient_send_localsid(struct zclient *zclient,
 	struct nexthop nh = {};
 
 	p.family = AF_INET6;
-	p.prefixlen = 128;
+	p.prefixlen = IPV6_MAX_BITLEN;
 	p.prefix = *sid;
 
 	api.vrf_id = VRF_DEFAULT;
@@ -1432,7 +1432,7 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 	STREAM_GETC(s, api->prefix.prefixlen);
 	switch (api->prefix.family) {
 	case AF_INET:
-		if (api->prefix.prefixlen > IPV4_MAX_PREFIXLEN) {
+		if (api->prefix.prefixlen > IPV4_MAX_BITLEN) {
 			flog_err(
 				EC_LIB_ZAPI_ENCODE,
 				"%s: V4 prefixlen is %d which should not be more than 32",
@@ -1441,7 +1441,7 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 		}
 		break;
 	case AF_INET6:
-		if (api->prefix.prefixlen > IPV6_MAX_PREFIXLEN) {
+		if (api->prefix.prefixlen > IPV6_MAX_BITLEN) {
 			flog_err(
 				EC_LIB_ZAPI_ENCODE,
 				"%s: v6 prefixlen is %d which should not be more than 128",
@@ -1460,7 +1460,7 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_SRCPFX)) {
 		api->src_prefix.family = AF_INET6;
 		STREAM_GETC(s, api->src_prefix.prefixlen);
-		if (api->src_prefix.prefixlen > IPV6_MAX_PREFIXLEN) {
+		if (api->src_prefix.prefixlen > IPV6_MAX_BITLEN) {
 			flog_err(
 				EC_LIB_ZAPI_ENCODE,
 				"%s: SRC Prefix prefixlen received: %d is too large",
@@ -2269,10 +2269,13 @@ stream_failure:
 }
 
 struct interface *zebra_interface_link_params_read(struct stream *s,
-						   vrf_id_t vrf_id)
+						   vrf_id_t vrf_id,
+						   bool *changed)
 {
 	struct if_link_params *iflp;
+	struct if_link_params iflp_copy;
 	ifindex_t ifindex;
+	bool params_changed = false;
 
 	STREAM_GETL(s, ifindex);
 
@@ -2285,11 +2288,22 @@ struct interface *zebra_interface_link_params_read(struct stream *s,
 		return NULL;
 	}
 
+	if (ifp->link_params == NULL)
+		params_changed = true;
+
 	if ((iflp = if_link_params_get(ifp)) == NULL)
 		return NULL;
 
+	memcpy(&iflp_copy, iflp, sizeof(iflp_copy));
+
 	if (link_params_set_value(s, iflp) != 0)
 		goto stream_failure;
+
+	if (memcmp(&iflp_copy, iflp, sizeof(iflp_copy)))
+		params_changed = true;
+
+	if (changed)
+		*changed = params_changed;
 
 	return ifp;
 

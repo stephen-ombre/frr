@@ -221,7 +221,6 @@ for ``master`` branch:
        --prefix=/usr/lib/frr --sysconfdir=/etc/frr \
        --localstatedir=/var/run/frr \
        --sbindir=/usr/lib/frr --bindir=/usr/lib/frr \
-       --enable-exampledir=/usr/lib/frr/examples \
        --with-moduledir=/usr/lib/frr/modules \
        --enable-multipath=0 --enable-rtadv \
        --enable-tcp-zebra --enable-fpm --enable-pimd \
@@ -311,6 +310,20 @@ Here's an example of launching ``zebra`` and ``bgpd`` inside ``gdb`` on router
           --gdb-daemons=bgpd,zebra \
           --gdb-breakpoints=nb_config_diff \
           all-protocol-startup
+
+Detecting Memleaks with Valgrind
+""""""""""""""""""""""""""""""""
+
+Topotest can automatically launch all daemons with ``valgrind`` to check for
+memleaks. This is enabled by specifying 1 or 2 CLI arguments.
+``--valgrind-memleaks`` will enable general memleak detection, and
+``--valgrind-extra`` enables extra functionality including generating a
+suppression file. The suppression file ``tools/valgrind.supp`` is used when
+memleak detection is enabled.
+
+.. code:: shell
+
+   pytest --valgrind-memleaks all-protocol-startup
 
 .. _topotests_docker:
 

@@ -80,10 +80,12 @@ Routers
 
 To start OSPF process you have to specify the OSPF router.
 
-.. clicmd:: router ospf [(1-65535)] vrf NAME
+.. clicmd:: router ospf [{(1-65535)|vrf NAME}]
 
 
    Enable or disable the OSPF process.
+
+   Multiple instances don't support `vrf NAME`.
 
 .. clicmd:: ospf router-id A.B.C.D
 
@@ -298,6 +300,13 @@ To start OSPF process you have to specify the OSPF router.
    Use this command to control the maximum number of equal cost paths to reach
    a specific destination. The upper limit may differ if you change the value
    of MULTIPATH_NUM during compilation. The default is MULTIPATH_NUM (64).
+
+.. clicmd:: write-multiplier (1-100)
+
+   Use this command to tune the amount of work done in the packet read and
+   write threads before relinquishing control. The parameter is the number
+   of packets to process before returning. The defult value of this parameter
+   is 20.
 
 .. _ospf-area:
 

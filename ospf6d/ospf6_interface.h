@@ -56,6 +56,9 @@ struct ospf6_interface {
 	/* I/F transmission delay */
 	uint32_t transdelay;
 
+	/* Packet send buffer. */
+	struct ospf6_fifo *obuf; /* Output queue */
+
 	/* Network Type */
 	uint8_t type;
 	bool type_cfg;
@@ -118,6 +121,9 @@ struct ospf6_interface {
 
 	struct ospf6_route_table *route_connected;
 
+	/* last hello sent */
+	struct timeval last_hello;
+
 	/* prefix-list name to filter connected prefix */
 	char *plist_name;
 
@@ -129,6 +135,8 @@ struct ospf6_interface {
 		uint32_t min_tx;
 		char *profile;
 	} bfd_config;
+
+	int on_write_q;
 
 	/* Statistics Fields */
 	uint32_t hello_in;
@@ -205,6 +213,7 @@ extern int backup_seen(struct thread *);
 extern int neighbor_change(struct thread *);
 
 extern void ospf6_interface_init(void);
+extern void ospf6_interface_clear(struct interface *ifp);
 
 extern void install_element_ospf6_clear_interface(void);
 

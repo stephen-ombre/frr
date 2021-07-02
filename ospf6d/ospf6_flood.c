@@ -811,6 +811,18 @@ void ospf6_receive_lsa(struct ospf6_neighbor *from,
 	ismore_recent = 1;
 	assert(from);
 
+	/* if we receive a LSA with invalid seqnum drop it */
+	if (ntohl(lsa_header->seqnum) - 1 == OSPF_MAX_SEQUENCE_NUMBER) {
+		if (IS_OSPF6_DEBUG_EXAMIN_TYPE(lsa_header->type)) {
+			zlog_debug(
+				"received lsa [%s Id:%pI4 Adv:%pI4] with invalid seqnum 0x%x, ignore",
+				ospf6_lstype_name(lsa_header->type),
+				&lsa_header->id, &lsa_header->adv_router,
+				ntohl(lsa_header->seqnum));
+		}
+		return;
+	}
+
 	/* make lsa structure for received lsa */
 	new = ospf6_lsa_create(lsa_header);
 
@@ -974,11 +986,12 @@ void ospf6_receive_lsa(struct ospf6_neighbor *from,
 		/* if no database copy, should go above state (5) */
 		assert(old);
 
-		if (is_debug) {
-			zlog_debug(
-				"Received is not newer, on the neighbor's request-list");
-			zlog_debug("BadLSReq, discard the received LSA");
-		}
+		zlog_warn(
+			"Received is not newer, on the neighbor %s request-list",
+			from->name);
+		zlog_warn(
+			"BadLSReq, discard the received LSA lsa %s send badLSReq",
+			new->name);
 
 		/* BadLSReq */
 		thread_add_event(master, bad_lsreq, from, 0, NULL);

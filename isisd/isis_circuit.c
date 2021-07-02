@@ -78,12 +78,14 @@ DEFINE_HOOK(isis_circuit_del_hook, (struct isis_circuit *circuit), (circuit));
 
 static void isis_circuit_enable(struct isis_circuit *circuit)
 {
-	struct isis_area *area;
+	struct isis_area *area = circuit->area;
 	struct interface *ifp = circuit->interface;
 
-	area = isis_area_lookup(circuit->tag, ifp->vrf_id);
-	if (area)
-		isis_area_add_circuit(area, circuit);
+	if (!area) {
+		area = isis_area_lookup(circuit->tag, ifp->vrf_id);
+		if (area)
+			isis_area_add_circuit(area, circuit);
+	}
 
 	if (if_is_operative(ifp))
 		isis_csm_state_change(IF_UP_FROM_Z, circuit, ifp);
@@ -1074,10 +1076,8 @@ static int isis_interface_config_write(struct vty *vty)
 
 	isis = isis_lookup_by_vrfid(vrf->vrf_id);
 
-	if (isis == NULL) {
-		vty_out(vty, "ISIS routing instance not found");
+	if (isis == NULL)
 		return 0;
-	}
 
 	FOR_ALL_INTERFACES (vrf, ifp) {
 		/* IF name */

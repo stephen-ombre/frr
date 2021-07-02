@@ -63,11 +63,17 @@ FRR_CFG_DEFAULT_BOOL(OSPF6_LOG_ADJACENCY_CHANGES,
 	{ .val_bool = false },
 );
 
+#ifndef VTYSH_EXTRACT_PL
+#include "ospf6d/ospf6_top_clippy.c"
+#endif
+
 /* global ospf6d variable */
 static struct ospf6_master ospf6_master;
 struct ospf6_master *om6;
 
 static void ospf6_disable(struct ospf6 *o);
+
+static void ospf6_process_reset(struct ospf6 *ospf6);
 
 static void ospf6_add(struct ospf6 *ospf6)
 {
@@ -221,7 +227,7 @@ static int ospf6_vrf_enable(struct vrf *vrf)
 			thread_add_read(master, ospf6_receive, ospf6, ospf6->fd,
 					&ospf6->t_ospf6_receive);
 
-			ospf6_router_id_update(ospf6);
+			ospf6_router_id_update(ospf6, true, NULL);
 		}
 	}
 
@@ -232,6 +238,8 @@ void ospf6_vrf_init(void)
 {
 	vrf_init(ospf6_vrf_new, ospf6_vrf_enable, ospf6_vrf_disable,
 		 ospf6_vrf_delete, ospf6_vrf_enable);
+
+	vrf_cmd_init(NULL, &ospf6d_privs);
 }
 
 static void ospf6_top_lsdb_hook_add(struct ospf6_lsa *lsa)
@@ -406,12 +414,15 @@ static struct ospf6 *ospf6_create(const char *name)
 
 	o->external_id_table = route_table_init();
 
+	o->write_oi_count = OSPF6_WRITE_INTERFACE_COUNT_DEFAULT;
 	o->ref_bandwidth = OSPF6_REFERENCE_BANDWIDTH;
 
 	o->distance_table = route_table_init();
 	o->fd = -1;
 
 	o->max_multipath = MULTIPATH_NUM;
+
+	o->oi_write_q = list_new();
 
 	QOBJ_REG(o, ospf6);
 
@@ -431,7 +442,7 @@ struct ospf6 *ospf6_instance_create(const char *name)
 	if (DFLT_OSPF6_LOG_ADJACENCY_CHANGES)
 		SET_FLAG(ospf6->config_flags, OSPF6_LOG_ADJACENCY_CHANGES);
 	if (ospf6->router_id == 0)
-		ospf6_router_id_update(ospf6);
+		ospf6_router_id_update(ospf6, true, NULL);
 	ospf6_add(ospf6);
 	if (ospf6->vrf_id != VRF_UNKNOWN) {
 		vrf = vrf_lookup_by_id(ospf6->vrf_id);
@@ -482,6 +493,7 @@ void ospf6_delete(struct ospf6 *o)
 
 	ospf6_distance_reset(o);
 	route_table_finish(o->distance_table);
+	list_delete(&o->oi_write_q);
 
 	if (o->vrf_id != VRF_UNKNOWN) {
 		vrf = vrf_lookup_by_id(o->vrf_id);
@@ -506,7 +518,7 @@ static void ospf6_disable(struct ospf6 *o)
 
 		/* XXX: This also changes persistent settings */
 		/* Unregister redistribution */
-		ospf6_asbr_redistribute_reset(o);
+		ospf6_asbr_redistribute_disable(o);
 
 		ospf6_lsdb_remove_all(o->lsdb);
 		ospf6_route_remove_all(o->route_table);
@@ -584,15 +596,43 @@ void ospf6_maxage_remove(struct ospf6 *o)
 				 &o->maxage_remover);
 }
 
-void ospf6_router_id_update(struct ospf6 *ospf6)
+void ospf6_router_id_update(struct ospf6 *ospf6, bool init, struct vty *vty)
 {
+	in_addr_t new_router_id;
+	struct listnode *node;
+	struct ospf6_area *oa;
+
 	if (!ospf6)
 		return;
 
 	if (ospf6->router_id_static != 0)
-		ospf6->router_id = ospf6->router_id_static;
+		new_router_id = ospf6->router_id_static;
 	else
-		ospf6->router_id = om6->zebra_router_id;
+		new_router_id = ospf6->router_id_zebra;
+
+	if (ospf6->router_id == new_router_id)
+		return;
+
+	if (!init)
+		for (ALL_LIST_ELEMENTS_RO(ospf6->area_list, node, oa)) {
+			if (oa->full_nbrs) {
+				if (vty)
+					vty_out(vty,
+						"For this router-id change to take effect,"
+						" run the \"clear ipv6 ospf6 process\" command\n");
+				else
+					zlog_err(
+						"%s: cannot update router-id."
+						" Run the \"clear ipv6 ospf6 process\" command\n",
+						__func__);
+				return;
+			}
+		}
+
+	ospf6->router_id = new_router_id;
+
+	if (!init)
+		ospf6_process_reset(ospf6);
 }
 
 /* start ospf6 */
@@ -643,6 +683,78 @@ DEFUN(no_router_ospf6, no_router_ospf6_cmd, "no router ospf6 [vrf NAME]",
 	return CMD_SUCCESS;
 }
 
+static void ospf6_db_clear(struct ospf6 *ospf6)
+{
+	struct ospf6_interface *oi;
+	struct interface *ifp;
+	struct vrf *vrf = vrf_lookup_by_id(ospf6->vrf_id);
+	struct listnode *node, *nnode;
+	struct ospf6_area *oa;
+
+	FOR_ALL_INTERFACES (vrf, ifp) {
+		if (if_is_operative(ifp) && ifp->info != NULL) {
+			oi = (struct ospf6_interface *)ifp->info;
+			ospf6_lsdb_remove_all(oi->lsdb);
+			ospf6_lsdb_remove_all(oi->lsdb_self);
+			ospf6_lsdb_remove_all(oi->lsupdate_list);
+			ospf6_lsdb_remove_all(oi->lsack_list);
+		}
+	}
+
+	for (ALL_LIST_ELEMENTS(ospf6->area_list, node, nnode, oa)) {
+		ospf6_lsdb_remove_all(oa->lsdb);
+		ospf6_lsdb_remove_all(oa->lsdb_self);
+
+		ospf6_spf_table_finish(oa->spf_table);
+		ospf6_route_remove_all(oa->route_table);
+	}
+
+	ospf6_lsdb_remove_all(ospf6->lsdb);
+	ospf6_lsdb_remove_all(ospf6->lsdb_self);
+	ospf6_route_remove_all(ospf6->route_table);
+	ospf6_route_remove_all(ospf6->brouter_table);
+}
+
+static void ospf6_process_reset(struct ospf6 *ospf6)
+{
+	struct interface *ifp;
+	struct vrf *vrf = vrf_lookup_by_id(ospf6->vrf_id);
+
+	ospf6_flush_self_originated_lsas_now(ospf6);
+	ospf6->inst_shutdown = 0;
+	ospf6_db_clear(ospf6);
+
+	ospf6_router_id_update(ospf6, true, NULL);
+
+	ospf6_asbr_redistribute_reset(ospf6);
+	FOR_ALL_INTERFACES (vrf, ifp)
+		ospf6_interface_clear(ifp);
+}
+
+DEFPY (clear_router_ospf6,
+       clear_router_ospf6_cmd,
+       "clear ipv6 ospf6 process [vrf NAME$name]",
+       CLEAR_STR
+       IP6_STR
+       OSPF6_STR
+       "Reset OSPF Process\n"
+       VRF_CMD_HELP_STR)
+{
+	struct ospf6 *ospf6;
+	const char *vrf_name = VRF_DEFAULT_NAME;
+
+	if (name != NULL)
+		vrf_name = name;
+
+	ospf6 = ospf6_lookup_by_vrf_name(vrf_name);
+	if (ospf6 == NULL)
+		vty_out(vty, "OSPFv3 is not configured\n");
+	else
+		ospf6_process_reset(ospf6);
+
+	return CMD_SUCCESS;
+}
+
 /* change Router_ID commands. */
 DEFUN(ospf6_router_id,
       ospf6_router_id_cmd,
@@ -656,8 +768,6 @@ DEFUN(ospf6_router_id,
 	int ret;
 	const char *router_id_str;
 	uint32_t router_id;
-	struct ospf6_area *oa;
-	struct listnode *node;
 
 	argv_find(argv, argc, "A.B.C.D", &idx);
 	router_id_str = argv[idx]->arg;
@@ -670,15 +780,7 @@ DEFUN(ospf6_router_id,
 
 	o->router_id_static = router_id;
 
-	for (ALL_LIST_ELEMENTS_RO(o->area_list, node, oa)) {
-		if (oa->full_nbrs) {
-			vty_out(vty,
-				"For this router-id change to take effect, save config and restart ospf6d\n");
-			return CMD_SUCCESS;
-		}
-	}
-
-	o->router_id = router_id;
+	ospf6_router_id_update(o, false, vty);
 
 	return CMD_SUCCESS;
 }
@@ -691,21 +793,10 @@ DEFUN(no_ospf6_router_id,
       V4NOTATION_STR)
 {
 	VTY_DECLVAR_CONTEXT(ospf6, o);
-	struct ospf6_area *oa;
-	struct listnode *node;
 
 	o->router_id_static = 0;
 
-	for (ALL_LIST_ELEMENTS_RO(o->area_list, node, oa)) {
-		if (oa->full_nbrs) {
-			vty_out(vty,
-				"For this router-id change to take effect, save config and restart ospf6d\n");
-			return CMD_SUCCESS;
-		}
-	}
-	o->router_id = 0;
-	if (o->router_id_zebra.s_addr)
-		o->router_id = (uint32_t)o->router_id_zebra.s_addr;
+	ospf6_router_id_update(o, false, vty);
 
 	return CMD_SUCCESS;
 }
@@ -1665,6 +1756,11 @@ static int config_write_ospf6(struct vty *vty)
 			vty_out(vty, " auto-cost reference-bandwidth %d\n",
 				ospf6->ref_bandwidth);
 
+		if (ospf6->write_oi_count
+		    != OSPF6_WRITE_INTERFACE_COUNT_DEFAULT)
+			vty_out(vty, " write-multiplier %d\n",
+				ospf6->write_oi_count);
+
 		/* LSA timers print. */
 		if (ospf6->lsa_minarrival != OSPF_MIN_LS_ARRIVAL)
 			vty_out(vty, " timers lsa min-arrival %d\n",
@@ -1696,6 +1792,11 @@ static struct cmd_node ospf6_node = {
 	.prompt = "%s(config-ospf6)# ",
 	.config_write = config_write_ospf6,
 };
+
+void install_element_ospf6_clear_process(void)
+{
+	install_element(ENABLE_NODE, &clear_router_ospf6_cmd);
+}
 
 /* Install ospf related commands. */
 void ospf6_top_init(void)

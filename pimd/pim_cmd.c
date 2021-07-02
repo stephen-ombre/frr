@@ -6323,7 +6323,7 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 
 		if (!uj && !found_oif) {
 			vty_out(vty,
-				"%-15s %-15s %-15s %-6s %-16s %-16s %-3d  %8s\n",
+				"%-15s %-15s %-8s %-6s %-16s %-16s %-3d  %8s\n",
 				src_str, grp_str, state_str, "none", in_ifname,
 				"none", 0, "--:--:--");
 		}
@@ -6430,10 +6430,9 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 						       json_ifp_out);
 			} else {
 				vty_out(vty,
-					"%-15s %-15s %-6s %-16s %-16s %-3d  %8s %s\n",
-					src_str, grp_str, proto, in_ifname,
-					out_ifname, ttl, oif_uptime,
-					pim->vrf->name);
+					"%-15s %-15s %-8s %-6s %-16s %-16s %-3d  %8s\n",
+					src_str, grp_str, "-", proto, in_ifname,
+					out_ifname, ttl, oif_uptime);
 				if (first && !fill) {
 					src_str[0] = '\0';
 					grp_str[0] = '\0';
@@ -6445,9 +6444,9 @@ static void show_mroute(struct pim_instance *pim, struct vty *vty,
 
 		if (!uj && !found_oif) {
 			vty_out(vty,
-				"%-15s %-15s %-6s %-16s %-16s %-3d  %8s %s\n",
-				src_str, grp_str, proto, in_ifname, "none", 0,
-				"--:--:--", pim->vrf->name);
+				"%-15s %-15s %-8s %-6s %-16s %-16s %-3d  %8s\n",
+				src_str, grp_str, "-", proto, in_ifname, "none",
+				0, "--:--:--");
 		}
 	}
 
@@ -9669,15 +9668,14 @@ ALIAS(no_ip_pim_bfd, no_ip_pim_bfd_param_cmd,
       "Desired min transmit interval\n")
 #endif /* !HAVE_BFDD */
 
-	DEFUN (ip_msdp_peer,
-	       ip_msdp_peer_cmd,
-	       "ip msdp peer A.B.C.D source A.B.C.D",
-	       IP_STR
-	       CFG_MSDP_STR
-	       "Configure MSDP peer\n"
-	       "peer ip address\n"
-	       "Source address for TCP connection\n"
-	       "local ip address\n")
+DEFPY(ip_msdp_peer, ip_msdp_peer_cmd,
+      "ip msdp peer A.B.C.D$peer source A.B.C.D$source",
+      IP_STR
+      CFG_MSDP_STR
+      "Configure MSDP peer\n"
+      "Peer IP address\n"
+      "Source address for TCP connection\n"
+      "Local IP address\n")
 {
 	const char *vrfname;
 	char temp_xpath[XPATH_MAXLEN];
@@ -9688,18 +9686,49 @@ ALIAS(no_ip_pim_bfd, no_ip_pim_bfd_param_cmd,
 		return CMD_WARNING_CONFIG_FAILED;
 
 	snprintf(msdp_peer_source_xpath, sizeof(msdp_peer_source_xpath),
-		 FRR_PIM_AF_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, "frr-routing:ipv4");
+		 FRR_PIM_AF_XPATH, "frr-pim:pimd", "pim", vrfname,
+		 "frr-routing:ipv4");
 	snprintf(temp_xpath, sizeof(temp_xpath),
-		 "/msdp-peer[peer-ip='%s']/source-ip",
-		 argv[3]->arg);
+		 "/msdp-peer[peer-ip='%s']/source-ip", peer_str);
 	strlcat(msdp_peer_source_xpath, temp_xpath,
 		sizeof(msdp_peer_source_xpath));
 
 	nb_cli_enqueue_change(vty, msdp_peer_source_xpath, NB_OP_MODIFY,
-			      argv[5]->arg);
+			      source_str);
 
 	return nb_cli_apply_changes(vty, NULL);
+}
+
+DEFPY(ip_msdp_timers, ip_msdp_timers_cmd,
+      "ip msdp timers (2-600)$keepalive (3-600)$holdtime [(1-600)$connretry]",
+      IP_STR
+      CFG_MSDP_STR
+      "MSDP timers configuration\n"
+      "Keep alive period (in seconds)\n"
+      "Hold time period (in seconds)\n"
+      "Connection retry period (in seconds)\n")
+{
+	const char *vrfname;
+	char xpath[XPATH_MAXLEN];
+
+	vrfname = pim_cli_get_vrf_name(vty);
+	if (vrfname == NULL)
+		return CMD_WARNING_CONFIG_FAILED;
+
+	snprintf(xpath, sizeof(xpath), FRR_PIM_MSDP_XPATH, "frr-pim:pimd",
+		 "pim", vrfname, "frr-routing:ipv4");
+	nb_cli_enqueue_change(vty, "./hold-time", NB_OP_MODIFY, holdtime_str);
+	nb_cli_enqueue_change(vty, "./keep-alive", NB_OP_MODIFY, keepalive_str);
+	if (connretry_str)
+		nb_cli_enqueue_change(vty, "./connection-retry", NB_OP_MODIFY,
+				      connretry_str);
+	else
+		nb_cli_enqueue_change(vty, "./connection-retry", NB_OP_DESTROY,
+				      NULL);
+
+	nb_cli_apply_changes(vty, xpath);
+
+	return CMD_SUCCESS;
 }
 
 DEFUN (no_ip_msdp_peer,
@@ -10151,8 +10180,10 @@ static void ip_msdp_show_peers_detail(struct pim_instance *pim, struct vty *vty,
 			json_row = json_object_new_object();
 			json_object_string_add(json_row, "peer", peer_str);
 			json_object_string_add(json_row, "local", local_str);
-			json_object_string_add(json_row, "meshGroupName",
-					       mp->mesh_group_name);
+			if (mp->flags & PIM_MSDP_PEERF_IN_GROUP)
+				json_object_string_add(json_row,
+						       "meshGroupName",
+						       mp->mesh_group_name);
 			json_object_string_add(json_row, "state", state_str);
 			json_object_string_add(json_row, "upTime", timebuf);
 			json_object_string_add(json_row, "keepAliveTimer",
@@ -10176,8 +10207,9 @@ static void ip_msdp_show_peers_detail(struct pim_instance *pim, struct vty *vty,
 		} else {
 			vty_out(vty, "Peer : %s\n", peer_str);
 			vty_out(vty, "  Local               : %s\n", local_str);
-			vty_out(vty, "  Mesh Group          : %s\n",
-				mp->mesh_group_name);
+			if (mp->flags & PIM_MSDP_PEERF_IN_GROUP)
+				vty_out(vty, "  Mesh Group          : %s\n",
+					mp->mesh_group_name);
 			vty_out(vty, "  State               : %s\n", state_str);
 			vty_out(vty, "  Uptime              : %s\n", timebuf);
 
@@ -11322,6 +11354,8 @@ void pim_cmd_init(void)
 	install_element(CONFIG_NODE, &debug_bsm_cmd);
 	install_element(CONFIG_NODE, &no_debug_bsm_cmd);
 
+	install_element(CONFIG_NODE, &ip_msdp_timers_cmd);
+	install_element(VRF_NODE, &ip_msdp_timers_cmd);
 	install_element(CONFIG_NODE, &ip_msdp_mesh_group_member_cmd);
 	install_element(VRF_NODE, &ip_msdp_mesh_group_member_cmd);
 	install_element(CONFIG_NODE, &no_ip_msdp_mesh_group_member_cmd);
