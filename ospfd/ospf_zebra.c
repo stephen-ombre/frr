@@ -264,6 +264,14 @@ void ospf_zebra_add(struct ospf *ospf, struct prefix_ipv4 *p,
 	struct ospf_path *path;
 	struct listnode *node;
 
+	if (ospf->gr_info.restart_in_progress) {
+		if (IS_DEBUG_OSPF_GR)
+			zlog_debug(
+				"Zebra: Graceful Restart in progress -- not installing %pFX",
+				p);
+		return;
+	}
+
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = ospf->vrf_id;
 	api.type = ZEBRA_ROUTE_OSPF;
@@ -323,6 +331,14 @@ void ospf_zebra_delete(struct ospf *ospf, struct prefix_ipv4 *p,
 {
 	struct zapi_route api;
 
+	if (ospf->gr_info.restart_in_progress) {
+		if (IS_DEBUG_OSPF_GR)
+			zlog_debug(
+				"Zebra: Graceful Restart in progress -- not uninstalling %pFX",
+				p);
+		return;
+	}
+
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = ospf->vrf_id;
 	api.type = ZEBRA_ROUTE_OSPF;
@@ -339,6 +355,14 @@ void ospf_zebra_delete(struct ospf *ospf, struct prefix_ipv4 *p,
 void ospf_zebra_add_discard(struct ospf *ospf, struct prefix_ipv4 *p)
 {
 	struct zapi_route api;
+
+	if (ospf->gr_info.restart_in_progress) {
+		if (IS_DEBUG_OSPF_GR)
+			zlog_debug(
+				"Zebra: Graceful Restart in progress -- not installing %pFX",
+				p);
+		return;
+	}
 
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = ospf->vrf_id;
@@ -357,6 +381,14 @@ void ospf_zebra_add_discard(struct ospf *ospf, struct prefix_ipv4 *p)
 void ospf_zebra_delete_discard(struct ospf *ospf, struct prefix_ipv4 *p)
 {
 	struct zapi_route api;
+
+	if (ospf->gr_info.restart_in_progress) {
+		if (IS_DEBUG_OSPF_GR)
+			zlog_debug(
+				"Zebra: Graceful Restart in progress -- not uninstalling %pFX",
+				p);
+		return;
+	}
 
 	memset(&api, 0, sizeof(api));
 	api.vrf_id = ospf->vrf_id;
@@ -933,7 +965,7 @@ static int ospf_external_lsa_originate_check(struct ospf *ospf,
 	}
 
 	/* Take care of default-originate. */
-	if (is_prefix_default(&ei->p))
+	if (is_default_prefix4(&ei->p))
 		if (ospf->default_originate == DEFAULT_ORIGINATE_NONE) {
 			zlog_info(
 				"LSA[Type5:0.0.0.0]: Not originate AS-external-LSA for default");
@@ -1089,8 +1121,8 @@ int ospf_redistribute_check(struct ospf *ospf, struct external_info *ei,
 	struct route_map_set_values save_values;
 	struct prefix_ipv4 *p = &ei->p;
 	struct ospf_redist *red;
-	uint8_t type = is_prefix_default(&ei->p) ? DEFAULT_ROUTE : ei->type;
-	unsigned short instance = is_prefix_default(&ei->p) ? 0 : ei->instance;
+	uint8_t type = is_default_prefix4(&ei->p) ? DEFAULT_ROUTE : ei->type;
+	unsigned short instance = is_default_prefix4(&ei->p) ? 0 : ei->instance;
 	route_tag_t saved_tag = 0;
 
 	/* Default is handled differently. */
@@ -1180,6 +1212,36 @@ void ospf_routemap_unset(struct ospf_redist *red)
 	ROUTEMAP(red) = NULL;
 }
 
+static int ospf_zebra_gr_update(struct ospf *ospf, int command,
+				uint32_t stale_time)
+{
+	struct zapi_cap api;
+
+	if (!zclient || zclient->sock < 0 || !ospf)
+		return 1;
+
+	memset(&api, 0, sizeof(struct zapi_cap));
+	api.cap = command;
+	api.stale_removal_time = stale_time;
+	api.vrf_id = ospf->vrf_id;
+
+	(void)zclient_capabilities_send(ZEBRA_CLIENT_CAPABILITIES, zclient,
+					&api);
+
+	return 0;
+}
+
+int ospf_zebra_gr_enable(struct ospf *ospf, uint32_t stale_time)
+{
+	return ospf_zebra_gr_update(ospf, ZEBRA_CLIENT_GR_CAPABILITIES,
+				    stale_time);
+}
+
+int ospf_zebra_gr_disable(struct ospf *ospf)
+{
+	return ospf_zebra_gr_update(ospf, ZEBRA_CLIENT_GR_DISABLE, 0);
+}
+
 /* Zebra route add and delete treatment. */
 static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 {
@@ -1213,7 +1275,7 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 	 * originate)ZEBRA_ROUTE_MAX is used to delete the ex-info.
 	 * Resolved this inconsistency by maintaining same route type.
 	 */
-	if (is_prefix_default(&p))
+	if (is_default_prefix4(&p))
 		rt_type = DEFAULT_ROUTE;
 
 	if (IS_DEBUG_OSPF(zebra, ZEBRA_REDISTRIBUTE))
@@ -1252,7 +1314,7 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 			return 0;
 		}
 		if (ospf->router_id.s_addr != INADDR_ANY) {
-			if (is_prefix_default(&p))
+			if (is_default_prefix4(&p))
 				ospf_external_lsa_refresh_default(ospf);
 			else {
 				struct ospf_external_aggr_rt *aggr;
@@ -1374,7 +1436,7 @@ static int ospf_zebra_read_route(ZAPI_CALLBACK_ARGS)
 			ospf_external_info_delete(ospf, rt_type, api.instance,
 						  p);
 
-			if (is_prefix_default(&p))
+			if (is_default_prefix4(&p))
 				ospf_external_lsa_refresh_default(ospf);
 			else
 				ospf_external_lsa_flush(ospf, rt_type, &p,
@@ -1471,7 +1533,7 @@ static int ospf_distribute_list_update_timer(struct thread *thread)
 				if (!ei)
 					continue;
 
-				if (is_prefix_default(&ei->p))
+				if (is_default_prefix4(&ei->p))
 					default_refresh = 1;
 				else {
 					struct ospf_external_aggr_rt *aggr;

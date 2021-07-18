@@ -656,14 +656,9 @@ int bgp_confederation_peers_add(struct bgp *bgp, as_t as)
 	if (bgp_confederation_peers_check(bgp, as))
 		return -1;
 
-	if (bgp->confed_peers)
-		bgp->confed_peers =
-			XREALLOC(MTYPE_BGP_CONFED_LIST, bgp->confed_peers,
-				 (bgp->confed_peers_cnt + 1) * sizeof(as_t));
-	else
-		bgp->confed_peers =
-			XMALLOC(MTYPE_BGP_CONFED_LIST,
-				(bgp->confed_peers_cnt + 1) * sizeof(as_t));
+	bgp->confed_peers =
+		XREALLOC(MTYPE_BGP_CONFED_LIST, bgp->confed_peers,
+			 (bgp->confed_peers_cnt + 1) * sizeof(as_t));
 
 	bgp->confed_peers[bgp->confed_peers_cnt] = as;
 	bgp->confed_peers_cnt++;
@@ -1369,7 +1364,7 @@ struct peer *peer_new(struct bgp *bgp)
 	peer->bgp = bgp_lock(bgp);
 	peer = peer_lock(peer); /* initial reference */
 	peer->password = NULL;
-	peer->max_packet_size = BGP_MAX_PACKET_SIZE;
+	peer->max_packet_size = BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE;
 
 	/* Set default flags. */
 	FOREACH_AFI_SAFI (afi, safi) {
@@ -1465,6 +1460,8 @@ void peer_xfer_config(struct peer *peer_dst, struct peer *peer_src)
 	peer_dst->tcp_mss = peer_src->tcp_mss;
 	(void)peer_sort(peer_dst);
 	peer_dst->rmap_type = peer_src->rmap_type;
+
+	peer_dst->max_packet_size = peer_src->max_packet_size;
 
 	/* Timers */
 	peer_dst->holdtime = peer_src->holdtime;
@@ -2315,13 +2312,6 @@ int peer_deactivate(struct peer *peer, afi_t afi, safi_t safi)
 		peer->afc[afi][safi] = 0;
 		group = peer->group;
 
-		if (peer_af_delete(peer, afi, safi) != 0) {
-			flog_err(
-				EC_BGP_PEER_DELETE,
-				"couldn't delete af structure for peer %s(%s, %s)",
-				peer->host, afi2str(afi), safi2str(safi));
-		}
-
 		for (ALL_LIST_ELEMENTS(group->peer, node, nnode, tmp_peer)) {
 			ret |= non_peergroup_deactivate_af(tmp_peer, afi, safi);
 		}
@@ -3097,8 +3087,7 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	afi_t afi;
 	safi_t safi;
 
-	if ((bgp = XCALLOC(MTYPE_BGP, sizeof(struct bgp))) == NULL)
-		return NULL;
+	bgp = XCALLOC(MTYPE_BGP, sizeof(struct bgp));
 
 	if (BGP_DEBUG(zebra, ZEBRA)) {
 		if (inst_type == BGP_INSTANCE_TYPE_DEFAULT)
@@ -3179,6 +3168,7 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	bgp->lb_ref_bw = BGP_LINK_BW_REF_BW;
 	bgp->lb_handling = BGP_LINK_BW_ECMP;
 	bgp->reject_as_sets = false;
+	bgp->condition_check_period = DEFAULT_CONDITIONAL_ROUTES_POLL_TIME;
 	bgp_addpath_init_bgp_data(&bgp->tx_addpath);
 
 	bgp->as = *as;

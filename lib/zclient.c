@@ -1537,7 +1537,7 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_OPAQUE)) {
 		STREAM_GETW(s, api->opaque.length);
-		assert(api->opaque.length < ZAPI_MESSAGE_OPAQUE_LENGTH);
+		assert(api->opaque.length <= ZAPI_MESSAGE_OPAQUE_LENGTH);
 
 		STREAM_GET(api->opaque.data, s, api->opaque.length);
 	}
@@ -3812,7 +3812,8 @@ static int zclient_read(struct thread *thread)
 	zclient->t_read = NULL;
 
 	/* Read zebra header (if we don't have it already). */
-	if ((already = stream_get_endp(zclient->ibuf)) < ZEBRA_HEADER_SIZE) {
+	already = stream_get_endp(zclient->ibuf);
+	if (already < ZEBRA_HEADER_SIZE) {
 		ssize_t nbyte;
 		if (((nbyte = stream_read_try(zclient->ibuf, zclient->sock,
 					      ZEBRA_HEADER_SIZE - already))
@@ -3825,7 +3826,6 @@ static int zclient_read(struct thread *thread)
 			return zclient_failed(zclient);
 		}
 		if (nbyte != (ssize_t)(ZEBRA_HEADER_SIZE - already)) {
-			/* Try again later. */
 			zclient_event(ZCLIENT_READ, zclient);
 			return 0;
 		}

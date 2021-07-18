@@ -365,7 +365,7 @@ def create_common_configuration(
     return True
 
 
-def kill_router_daemons(tgen, router, daemons):
+def kill_router_daemons(tgen, router, daemons, save_config=True):
     """
     Router's current config would be saved to /etc/frr/ for each daemon
     and daemon would be killed forcefully using SIGKILL.
@@ -379,9 +379,10 @@ def kill_router_daemons(tgen, router, daemons):
     try:
         router_list = tgen.routers()
 
-        # Saving router config to /etc/frr, which will be loaded to router
-        # when it starts
-        router_list[router].vtysh_cmd("write memory")
+        if save_config:
+            # Saving router config to /etc/frr, which will be loaded to router
+            # when it starts
+            router_list[router].vtysh_cmd("write memory")
 
         # Kill Daemons
         result = router_list[router].killDaemons(daemons)
@@ -496,7 +497,7 @@ def reset_config_on_routers(tgen, routerName=None):
         f.close()
         run_cfg_file = "{}/{}/frr.sav".format(TMPDIR, rname)
         init_cfg_file = "{}/{}/frr_json_initial.conf".format(TMPDIR, rname)
-        command = "/usr/lib/frr/frr-reload.py  --input {} --test {} > {}".format(
+        command = "/usr/lib/frr/frr-reload.py --test --test-reset --input {} {} > {}".format(
             run_cfg_file, init_cfg_file, dname
         )
         result = call(command, shell=True, stderr=SUB_STDOUT, stdout=SUB_PIPE)
@@ -526,37 +527,9 @@ def reset_config_on_routers(tgen, routerName=None):
                         raise InvalidCLIError(out_data)
             raise InvalidCLIError("Unknown error in %s", output)
 
-        f = open(dname, "r")
         delta = StringIO()
-        delta.write("configure terminal\n")
-        t_delta = f.read()
-
-        # Don't disable debugs
-        check_debug = True
-
-        for line in t_delta.split("\n"):
-            line = line.strip()
-            if line == "Lines To Delete" or line == "===============" or not line:
-                continue
-
-            if line == "Lines To Add":
-                check_debug = False
-                continue
-
-            if line == "============" or not line:
-                continue
-
-            # Leave debugs and log output alone
-            if check_debug:
-                if "debug" in line or "log file" in line:
-                    continue
-
-            delta.write(line)
-            delta.write("\n")
-
-        f.close()
-
-        delta.write("end\n")
+        with open(dname, "r") as f:
+            delta.write(f.read())
 
         output = router.vtysh_multicmd(delta.getvalue(), pretty_output=False)
 
@@ -636,6 +609,7 @@ def load_config_to_router(tgen, routerName, save_bkup=False):
     return True
 
 
+
 def get_frr_ipv6_linklocal(tgen, router, intf=None, vrf=None):
     """
     API to get the link local ipv6 address of a particular interface using
@@ -668,38 +642,48 @@ def get_frr_ipv6_linklocal(tgen, router, intf=None, vrf=None):
         else:
             cmd = "show interface"
 
-        ifaces = router_list[router].run('vtysh -c "{}"'.format(cmd))
+        linklocal = []
+        if vrf:
+            cmd = "show interface vrf {}".format(vrf)
+        else:
+            cmd = "show interface"
+        for chk_ll in range(0, 60):
+            sleep(1/4)
+            ifaces = router_list[router].run('vtysh -c "{}"'.format(cmd))
+            # Fix newlines (make them all the same)
+            ifaces = ('\n'.join(ifaces.splitlines()) + '\n').splitlines()
 
-        # Fix newlines (make them all the same)
-        ifaces = ("\n".join(ifaces.splitlines()) + "\n").splitlines()
+            interface = None
+            ll_per_if_count = 0
+            for line in ifaces:
+                # Interface name
+                m = re_search('Interface ([a-zA-Z0-9-]+) is', line)
+                if m:
+                    interface = m.group(1).split(" ")[0]
+                    ll_per_if_count = 0
 
-        interface = None
-        ll_per_if_count = 0
-        for line in ifaces:
-            # Interface name
-            m = re_search("Interface ([a-zA-Z0-9-]+) is", line)
-            if m:
-                interface = m.group(1).split(" ")[0]
-                ll_per_if_count = 0
+                # Interface ip
+                m1 = re_search('inet6 (fe80[:a-fA-F0-9]+[\/0-9]+)',
+                              line)
+                if m1:
+                    local = m1.group(1)
+                    ll_per_if_count += 1
+                    if ll_per_if_count > 1:
+                        linklocal += [["%s-%s" %
+                                       (interface, ll_per_if_count), local]]
+                    else:
+                        linklocal += [[interface, local]]
 
-            # Interface ip
-            m1 = re_search("inet6 (fe80[:a-fA-F0-9]+[/0-9]+)", line)
-            if m1:
-                local = m1.group(1)
-                ll_per_if_count += 1
-                if ll_per_if_count > 1:
-                    linklocal += [["%s-%s" % (interface, ll_per_if_count), local]]
-                else:
-                    linklocal += [[interface, local]]
+            try:
+                if linklocal:
+                    if intf:
+                        return [_linklocal[1] for _linklocal in linklocal if _linklocal[0]==intf][0].\
+                            split("/")[0]
+                    return linklocal
+            except IndexError:
+                continue
 
-    if linklocal:
-        if intf:
-            return [_linklocal[1] for _linklocal in linklocal if _linklocal[0] == intf][
-                0
-            ].split("/")[0]
-        return linklocal
-    else:
-        errormsg = "Link local ip missing on router {}"
+        errormsg = "Link local ip missing on router {}".format(router)
         return errormsg
 
 
@@ -712,20 +696,36 @@ def generate_support_bundle():
 
     tgen = get_topogen()
     router_list = tgen.routers()
-    test_name = sys._getframe(2).f_code.co_name
+    test_name = os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0]
+
     TMPDIR = os.path.join(LOGDIR, tgen.modname)
 
+    bundle_procs = {}
     for rname, rnode in router_list.items():
-        logger.info("Generating support bundle for {}".format(rname))
+        logger.info("Spawn collection of support bundle for %s", rname)
         rnode.run("mkdir -p /var/log/frr")
+        bundle_procs[rname] = tgen.net[rname].popen(
+            "/usr/lib/frr/generate_support_bundle.py",
+            stdin=None,
+            stdout=SUB_PIPE,
+            stderr=SUB_PIPE,
+        )
 
-        # Support only python3 going forward
-        bundle_log = rnode.run("env python3 /usr/lib/frr/generate_support_bundle.py")
-
-        logger.info(bundle_log)
-
+    for rname, rnode in router_list.items():
         dst_bundle = "{}/{}/support_bundles/{}".format(TMPDIR, rname, test_name)
         src_bundle = "/var/log/frr"
+
+        output, error = bundle_procs[rname].communicate()
+
+        logger.info("Saving support bundle for %s", rname)
+        if output:
+            logger.info(
+                "Output from collecting support bundle for %s:\n%s", rname, output
+            )
+        if error:
+            logger.warning(
+                "Error from collecting support bundle for %s:\n%s", rname, error
+            )
         rnode.run("rm -rf {}".format(dst_bundle))
         rnode.run("mkdir -p {}".format(dst_bundle))
         rnode.run("mv -f {}/* {}".format(src_bundle, dst_bundle))
@@ -1828,6 +1828,14 @@ def create_interfaces_cfg(tgen, topo, build=False):
                         interface_data.append("no ipv6 address {}".format(intf_addr))
                     else:
                         interface_data.append("ipv6 address {}".format(intf_addr))
+
+                # Wait for vrf interfaces to get link local address once they are up
+                if not destRouterLink == 'lo' and 'vrf' in topo[c_router][
+                    'links'][destRouterLink]:
+                    vrf = topo[c_router]['links'][destRouterLink]['vrf']
+                    intf = topo[c_router]['links'][destRouterLink]['interface']
+                    ll = get_frr_ipv6_linklocal(tgen, c_router, intf=intf,
+                                vrf = vrf)
 
                 if "ipv6-link-local" in data:
                     intf_addr = c_data["links"][destRouterLink]["ipv6-link-local"]

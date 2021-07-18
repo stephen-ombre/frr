@@ -793,7 +793,18 @@ static int make_prefix(int afi, struct bgp_path_info *pi, struct prefix *p)
 				|| IN6_IS_ADDR_LINKLOCAL(
 					&pi->attr->mp_nexthop_global)))
 				p->u.prefix6 = pi->attr->mp_nexthop_local;
-			else
+			/* If we receive MR_REACH with (GA)::(LL)
+			 * then check for route-map to choose GA or LL
+			 */
+			else if (pi->attr->mp_nexthop_len
+				 == BGP_ATTR_NHLEN_IPV6_GLOBAL_AND_LL) {
+				if (pi->attr->mp_nexthop_prefer_global)
+					p->u.prefix6 =
+						pi->attr->mp_nexthop_global;
+				else
+					p->u.prefix6 =
+						pi->attr->mp_nexthop_local;
+			} else
 				p->u.prefix6 = pi->attr->mp_nexthop_global;
 			p->prefixlen = IPV6_MAX_BITLEN;
 		}
@@ -1042,7 +1053,7 @@ void evaluate_paths(struct bgp_nexthop_cache *bnc)
 		    || path->attr->srte_color != 0)
 			SET_FLAG(path->flags, BGP_PATH_IGP_CHANGED);
 
-		path_valid = !!CHECK_FLAG(path->flags, BGP_PATH_VALID);
+		path_valid = CHECK_FLAG(path->flags, BGP_PATH_VALID);
 		if (path_valid != bnc_is_valid_nexthop) {
 			if (path_valid) {
 				/* No longer valid, clear flag; also for EVPN

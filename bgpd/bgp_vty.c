@@ -72,6 +72,7 @@
 #include "bgpd/bgp_addpath.h"
 #include "bgpd/bgp_mac.h"
 #include "bgpd/bgp_flowspec.h"
+#include "bgpd/bgp_conditional_adv.h"
 #ifdef ENABLE_BGP_VNC
 #include "bgpd/rfapi/bgp_rfapi_cfg.h"
 #endif
@@ -1564,7 +1565,7 @@ void cli_show_router_bgp_router_id(struct vty *vty, struct lyd_node *dnode,
 }
 
 DEFPY(bgp_community_alias, bgp_community_alias_cmd,
-      "[no$no] bgp community alias WORD$community WORD$alias",
+      "[no$no] bgp community alias WORD$community ALIAS_NAME$alias_name",
       NO_STR BGP_STR
       "Add community specific parameters\n"
       "Create an alias for a community\n"
@@ -1584,7 +1585,7 @@ DEFPY(bgp_community_alias, bgp_community_alias_cmd,
 	memset(&ca1, 0, sizeof(ca1));
 	memset(&ca2, 0, sizeof(ca2));
 	strlcpy(ca1.community, community, sizeof(ca1.community));
-	strlcpy(ca1.alias, alias, sizeof(ca1.alias));
+	strlcpy(ca1.alias, alias_name, sizeof(ca1.alias));
 
 	lookup_community = bgp_ca_community_lookup(&ca1);
 	lookup_alias = bgp_ca_alias_lookup(&ca1);
@@ -1857,9 +1858,8 @@ void cli_show_router_bgp_med_config(struct vty *vty, struct lyd_node *dnode,
 		uint32_t med_admin_val;
 
 		vty_out(vty, " bgp max-med administrative");
-		if ((med_admin_val =
-			     yang_dnode_get_uint32(dnode, "./max-med-admin"))
-		    != BGP_MAXMED_VALUE_DEFAULT)
+		med_admin_val = yang_dnode_get_uint32(dnode, "./max-med-admin");
+		if (med_admin_val != BGP_MAXMED_VALUE_DEFAULT)
 			vty_out(vty, " %u", med_admin_val);
 		vty_out(vty, "\n");
 	}
@@ -8117,6 +8117,23 @@ static int peer_advertise_map_set_vty(struct vty *vty, const char *ip_str,
 	return bgp_vty_return(vty, ret);
 }
 
+DEFPY (bgp_condadv_period,
+       bgp_condadv_period_cmd,
+       "[no$no] bgp conditional-advertisement timer (5-240)$period",
+       NO_STR
+       BGP_STR
+       "Conditional advertisement settings\n"
+       "Set period to rescan BGP table to check if condition is met\n"
+       "Period between BGP table scans, in seconds; default 60\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+
+	bgp->condition_check_period =
+		no ? DEFAULT_CONDITIONAL_ROUTES_POLL_TIME : period;
+
+	return CMD_SUCCESS;
+}
+
 DEFPY (neighbor_advertise_map,
        neighbor_advertise_map_cmd,
        "[no$no] neighbor <A.B.C.D|X:X::X:X|WORD>$neighbor advertise-map WORD$advertise_str <exist-map|non-exist-map>$exist WORD$condition_str",
@@ -10196,7 +10213,8 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 			if (table == NULL)
 				continue;
 
-			if ((rm = bgp_node_match(table, &match)) != NULL) {
+			rm = bgp_node_match(table, &match);
+			if (rm != NULL) {
 				const struct prefix *rm_p =
 					bgp_dest_get_prefix(rm);
 
@@ -10209,7 +10227,8 @@ static int bgp_clear_prefix(struct vty *vty, const char *view_name,
 			}
 		}
 	} else {
-		if ((dest = bgp_node_match(rib, &match)) != NULL) {
+		dest = bgp_node_match(rib, &match);
+		if (dest != NULL) {
 			const struct prefix *dest_p = bgp_dest_get_prefix(dest);
 
 			if (dest_p->prefixlen == match.prefixlen) {
@@ -18145,6 +18164,13 @@ int bgp_config_write(struct vty *vty)
 			vty_out(vty, " timers bgp %u %u\n",
 				bgp->default_keepalive, bgp->default_holdtime);
 
+		/* Conditional advertisement timer configuration */
+		if (bgp->condition_check_period
+		    != DEFAULT_CONDITIONAL_ROUTES_POLL_TIME)
+			vty_out(vty,
+				" bgp conditional-advertisement timer %u\n",
+				bgp->condition_check_period);
+
 		/* peer-group */
 		for (ALL_LIST_ELEMENTS(bgp->group, node, nnode, group)) {
 			bgp_config_write_peer_global(vty, bgp, group->conf);
@@ -19433,6 +19459,7 @@ void bgp_vty_init(void)
 	install_element(BGP_VPNV6_NODE, &no_neighbor_unsuppress_map_cmd);
 
 	/* "neighbor advertise-map" commands. */
+	install_element(BGP_NODE, &bgp_condadv_period_cmd);
 	install_element(BGP_NODE, &neighbor_advertise_map_hidden_cmd);
 	install_element(BGP_IPV4_NODE, &neighbor_advertise_map_cmd);
 	install_element(BGP_IPV4M_NODE, &neighbor_advertise_map_cmd);
@@ -20943,4 +20970,6 @@ void community_alias_vty(void)
 
 	/* Community-list.  */
 	install_element(CONFIG_NODE, &bgp_community_alias_cmd);
+
+	bgp_community_alias_command_completion_setup();
 }

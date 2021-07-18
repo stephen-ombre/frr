@@ -690,7 +690,7 @@ void ospf6_asbr_lsa_remove(struct ospf6_lsa *lsa,
 		if (ospf6_check_and_set_router_abr(ospf6))
 			oa = ospf6->backbone;
 		else
-			oa = listgetdata(listhead(ospf6->area_list));
+			oa = listnode_head(ospf6->area_list);
 	}
 
 	if (oa == NULL) {
@@ -2484,22 +2484,20 @@ void ospf6_asbr_redistribute_disable(struct ospf6 *ospf6)
 	int type;
 	struct ospf6_redist *red;
 
-	for (type = 0; type <= ZEBRA_ROUTE_MAX; type++) {
-		if (type == ZEBRA_ROUTE_OSPF6)
-			continue;
+	for (type = 0; type < ZEBRA_ROUTE_MAX; type++) {
 		red = ospf6_redist_lookup(ospf6, type, 0);
 		if (!red)
 			continue;
-
-		if (type == DEFAULT_ROUTE) {
-			ospf6_asbr_routemap_unset(red);
-			ospf6_redist_del(ospf6, red, type);
-			ospf6_redistribute_default_set(ospf6,
-						       DEFAULT_ORIGINATE_NONE);
+		if (type == ZEBRA_ROUTE_OSPF6)
 			continue;
-		}
 		ospf6_asbr_redistribute_unset(ospf6, red, type);
 		ospf6_redist_del(ospf6, red, type);
+	}
+	red = ospf6_redist_lookup(ospf6, DEFAULT_ROUTE, 0);
+	if (red) {
+		ospf6_asbr_routemap_unset(red);
+		ospf6_redist_del(ospf6, red, type);
+		ospf6_redistribute_default_set(ospf6, DEFAULT_ORIGINATE_NONE);
 	}
 }
 
@@ -2570,36 +2568,41 @@ int config_write_ospf6_debug_asbr(struct vty *vty)
 	return 0;
 }
 
-int ospf6_distribute_config_write(struct vty *vty, struct ospf6 *ospf6)
+static void ospf6_default_originate_write(struct vty *vty, struct ospf6 *o)
 {
 	struct ospf6_redist *red;
 
-	if (ospf6) {
-		/* default-route print. */
-		if (ospf6->default_originate != DEFAULT_ORIGINATE_NONE) {
-			vty_out(vty, " default-information originate");
-			if (ospf6->default_originate
-			    == DEFAULT_ORIGINATE_ALWAYS)
-				vty_out(vty, " always");
+	vty_out(vty, " default-information originate");
+	if (o->default_originate == DEFAULT_ORIGINATE_ALWAYS)
+		vty_out(vty, " always");
 
-			red = ospf6_redist_lookup(ospf6, DEFAULT_ROUTE, 0);
-			if (red) {
-				if (red->dmetric.value >= 0)
-					vty_out(vty, " metric %d",
-						red->dmetric.value);
-
-				if (red->dmetric.type >= 0)
-					vty_out(vty, " metric-type %d",
-						red->dmetric.type);
-
-				if (ROUTEMAP_NAME(red))
-					vty_out(vty, " route-map %s",
-						ROUTEMAP_NAME(red));
-			}
-
-			vty_out(vty, "\n");
-		}
+	red = ospf6_redist_lookup(o, DEFAULT_ROUTE, 0);
+	if (red == NULL) {
+		vty_out(vty, "\n");
+		return;
 	}
+
+	if (red->dmetric.value >= 0)
+		vty_out(vty, " metric %d", red->dmetric.value);
+
+	if (red->dmetric.type >= 0)
+		vty_out(vty, " metric-type %d", red->dmetric.type);
+
+	if (ROUTEMAP_NAME(red))
+		vty_out(vty, " route-map %s", ROUTEMAP_NAME(red));
+
+	vty_out(vty, "\n");
+}
+
+int ospf6_distribute_config_write(struct vty *vty, struct ospf6 *o)
+{
+	if (o == NULL)
+		return 0;
+
+	/* Print default originate configuration. */
+	if (o->default_originate != DEFAULT_ORIGINATE_NONE)
+		ospf6_default_originate_write(vty, o);
+
 	return 0;
 }
 
